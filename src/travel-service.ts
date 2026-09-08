@@ -1,0 +1,149 @@
+import { randomUUID } from "node:crypto";
+import { TravelDatabase } from "./database.ts";
+import type { ExtractedTripItem, MemberRole, Proposal, ReviewIssue, TripItem, TripItemStatus, TripReview } from "./domain.ts";
+
+const now = () => new Date().toISOString();
+
+export class PermissionError extends Error {}
+export class NotFoundError extends Error {}
+export class ConflictError extends Error {}
+
+export class TravelService {
+  private readonly db: TravelDatabase;
+
+  constructor(db: TravelDatabase) {
+    this.db = db;
+  }
+
+  addMember(tripId: string, lineUserId: string, displayName: string, role: MemberRole): void {
+    this.db.connection.prepare(`INSERT OR REPLACE INTO members (trip_id, line_user_id, display_name, role) VALUES (?, ?, ?, ?)`)
+      .run(tripId, lineUserId, displayName, role);
+  }
+
+  importMarkdown(tripId: string, markdown: string, sourceTime = now()): { sourceId: string; proposalIds: string[] } {
+    const sourceId = randomUUID();
+    this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, content, source_time, created_at) VALUES (?, ?, 'markdown', ?, ?, ?)`)
+      .run(sourceId, tripId, markdown, sourceTime, now());
+
+    const proposalIds = this.extractMarkdown(markdown).map((item) => this.createProposal(tripId, sourceId, item));
+    return { sourceId, proposalIds };
+  }
+
+  createProposal(tripId: string, sourceId: string, item: ExtractedTripItem): string {
+    const id = `P-${randomUUID().slice(0, 8).toUpperCase()}`;
+    this.db.connection.prepare(`
+      INSERT INTO proposals (id, trip_id, source_id, kind, title, item_status, proposal_status, starts_at, ends_at, timezone, location, notes, deadline_at, source_line, source_excerpt, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, tripId, sourceId, item.kind, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null,
+      item.timezone ?? null, item.location ?? null, item.notes ?? null, item.deadlineAt ?? null, item.sourceLine ?? null, item.sourceExcerpt ?? null, now());
+    return id;
+  }
+
+  confirmProposal(tripId: string, ownerId: string, proposalId: string): TripItem {
+    const member = this.db.connection.prepare(`SELECT role FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole } | undefined;
+    if (member?.role !== "owner") throw new PermissionError("Only a decision owner can confirm a proposal.");
+
+    const proposal = this.db.connection.prepare(`SELECT * FROM proposals WHERE id = ? AND trip_id = ? AND proposal_status = 'pending'`).get(proposalId, tripId) as ProposalRow | undefined;
+    if (!proposal) throw new NotFoundError(`Pending proposal ${proposalId} was not found.`);
+    if (proposal.item_status === "conflicted") {
+      throw new ConflictError("A conflicted proposal must be resolved before it can be confirmed.");
+    }
+
+    const item: TripItem = {
+      id: `T-${randomUUID().slice(0, 8).toUpperCase()}`,
+      sourceId: proposal.source_id,
+      kind: proposal.kind as TripItem["kind"], title: proposal.title,
+      status: "confirmed", startsAt: proposal.starts_at ?? undefined, endsAt: proposal.ends_at ?? undefined,
+      timezone: proposal.timezone ?? undefined, location: proposal.location ?? undefined, notes: proposal.notes ?? undefined,
+      confirmedBy: ownerId,
+    };
+    this.db.connection.exec("BEGIN");
+    try {
+      this.db.connection.prepare(`INSERT INTO trip_items (id, trip_id, source_id, kind, title, status, starts_at, ends_at, timezone, location, notes, confirmed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(item.id, tripId, item.sourceId, item.kind, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null, item.timezone ?? null, item.location ?? null, item.notes ?? null, ownerId, now());
+      this.db.connection.prepare(`UPDATE proposals SET proposal_status = 'confirmed' WHERE id = ?`).run(proposalId);
+      this.db.connection.exec("COMMIT");
+      return item;
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  reviewTrip(tripId: string): TripReview {
+    const confirmed = this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'confirmed' ORDER BY starts_at, title`).all(tripId).map(toTripItem) as TripItem[];
+    const pending = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' ORDER BY deadline_at, title`).all(tripId) as ProposalRow[];
+    const proposals = pending.map(toProposal);
+    return {
+      confirmed,
+      provisional: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "provisional"),
+      openDecisions: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "open_decision"),
+      conflicts: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "conflicted"),
+      issues: buildReviewIssues(proposals, confirmed),
+    };
+  }
+
+  private extractMarkdown(markdown: string): ExtractedTripItem[] {
+    return markdown.split(/\r?\n/).flatMap((line, index) => {
+      const match = line.match(/^\s*-\s*\[(confirmed|provisional|open_decision|conflicted)\]\s*(.+)$/i);
+      if (!match) return [];
+      const [, status, body] = match;
+      const parts = body.split("|").map((part) => part.trim());
+      const [title, startsAt, location, notes, ...metadata] = parts;
+      const fields = Object.fromEntries(metadata.flatMap((field) => {
+        const separator = field.indexOf("=");
+        return separator === -1 ? [] : [[field.slice(0, separator).trim().toLowerCase(), field.slice(separator + 1).trim()]];
+      }));
+      return [{
+        kind: inferKind(title), title, status: status as TripItemStatus,
+        startsAt: startsAt || undefined, location: location || undefined, notes: notes || undefined,
+        timezone: fields.timezone || undefined, deadlineAt: fields.deadline || undefined,
+        sourceLine: index + 1, sourceExcerpt: line.trim(),
+      }];
+    });
+  }
+}
+
+interface ProposalRow {
+  id: string; source_id: string; kind: string; title: string; item_status: TripItemStatus;
+  starts_at: string | null; ends_at: string | null; timezone: string | null; location: string | null; notes: string | null; deadline_at: string | null; source_line: number | null; source_excerpt: string | null;
+}
+
+function toProposal(row: ProposalRow): Proposal {
+  return { id: row.id, sourceId: row.source_id, kind: row.kind as Proposal["kind"], title: row.title, itemStatus: row.item_status, status: "pending", startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, timezone: row.timezone ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
+}
+
+function toTripItem(row: Record<string, unknown>): TripItem {
+  return { id: row.id as string, sourceId: row.source_id as string, kind: row.kind as TripItem["kind"], title: row.title as string, status: row.status as TripItemStatus, startsAt: (row.starts_at as string) ?? undefined, endsAt: (row.ends_at as string) ?? undefined, timezone: (row.timezone as string) ?? undefined, location: (row.location as string) ?? undefined, notes: (row.notes as string) ?? undefined, confirmedBy: (row.confirmed_by as string) ?? null };
+}
+
+function inferKind(title: string): TripItem["kind"] {
+  const lower = title.toLowerCase();
+  if (/flight|航班|飛機/.test(lower)) return "flight";
+  if (/hotel|住宿|飯店|住 /.test(lower)) return "lodging";
+  if (/car|租車|還車/.test(lower)) return "rental_car";
+  if (/tour|ticket|活動|門票|預約/.test(lower)) return "activity";
+  if (/train|bus|交通|接駁/.test(lower)) return "transport";
+  if (/meet|集合/.test(lower)) return "meeting";
+  return "other";
+}
+
+function buildReviewIssues(proposals: Proposal[], confirmed: TripItem[]): ReviewIssue[] {
+  const issues: ReviewIssue[] = [];
+  for (const proposal of proposals) {
+    if (!proposal.startsAt) issues.push({ code: "missing_start_time", message: `「${proposal.title}」缺少開始時間。`, proposalIds: [proposal.id] });
+    if (proposal.startsAt && !proposal.timezone) issues.push({ code: "missing_timezone", message: `「${proposal.title}」有時間但缺少 IANA timezone。`, proposalIds: [proposal.id] });
+    if (!proposal.location) issues.push({ code: "missing_location", message: `「${proposal.title}」缺少地點。`, proposalIds: [proposal.id] });
+  }
+  const scheduled = [...proposals.filter((proposal) => proposal.startsAt), ...confirmed];
+  for (let i = 0; i < scheduled.length; i += 1) {
+    for (let j = i + 1; j < scheduled.length; j += 1) {
+      const left = scheduled[i];
+      const right = scheduled[j];
+      if (left.kind === right.kind && left.startsAt === right.startsAt && left.location !== right.location) {
+        issues.push({ code: "schedule_collision", message: `「${left.title}」與「${right.title}」在同一時間有互斥安排。`, proposalIds: [left.id, right.id] });
+      }
+    }
+  }
+  return issues;
+}
