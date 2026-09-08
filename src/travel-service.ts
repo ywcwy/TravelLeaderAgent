@@ -1,35 +1,84 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
-import type { ExtractedTripItem, MemberRole, Proposal, ReviewIssue, TripItem, TripItemStatus, TripReview } from "./domain.ts";
+import type { ExtractedTripItem, MemberRole, Proposal, ReviewIssue, TravelGroup, Trip, TripItem, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
 export class PermissionError extends Error {}
 export class NotFoundError extends Error {}
 export class ConflictError extends Error {}
+export class TripNotActiveError extends Error {}
+export class InvalidTimezoneError extends Error {}
 
 export class TravelService {
   private readonly db: TravelDatabase;
+  private readonly systemAdministratorId: string;
 
-  constructor(db: TravelDatabase) {
+  constructor(db: TravelDatabase, systemAdministratorId: string) {
     this.db = db;
+    this.systemAdministratorId = systemAdministratorId;
   }
 
-  addMember(tripId: string, lineUserId: string, displayName: string, role: MemberRole): void {
+  createTravelGroup(administratorId: string, lineGroupId: string, displayName: string): TravelGroup {
+    this.requireSystemAdministrator(administratorId);
+    const existing = this.db.connection.prepare(`SELECT * FROM travel_groups WHERE line_group_id = ?`).get(lineGroupId) as TravelGroupRow | undefined;
+    if (existing) return toTravelGroup(existing);
+
+    const travelGroup: TravelGroup = { id: randomUUID(), lineGroupId, displayName };
+    this.db.connection.prepare(`INSERT INTO travel_groups (id, line_group_id, display_name, created_at) VALUES (?, ?, ?, ?)`)
+      .run(travelGroup.id, travelGroup.lineGroupId, travelGroup.displayName, now());
+    return travelGroup;
+  }
+
+  createActiveTrip(administratorId: string, travelGroupId: string, title: string, timezone: string): Trip {
+    this.requireSystemAdministrator(administratorId);
+    if (!isIanaTimezone(timezone)) throw new InvalidTimezoneError(`Trip Timezone ${timezone} is not a valid IANA timezone.`);
+    const travelGroup = this.db.connection.prepare(`SELECT id FROM travel_groups WHERE id = ?`).get(travelGroupId);
+    if (!travelGroup) throw new NotFoundError(`Travel Group ${travelGroupId} was not found.`);
+    const activeTrip = this.db.connection.prepare(`SELECT id FROM trips WHERE travel_group_id = ? AND status = 'active'`).get(travelGroupId);
+    if (activeTrip) throw new ConflictError("A Travel Group can have only one Active Trip.");
+
+    const trip: Trip = { id: randomUUID(), travelGroupId, title, timezone, status: "active" };
+    this.db.connection.prepare(`INSERT INTO trips (id, travel_group_id, title, timezone, status, created_at) VALUES (?, ?, ?, ?, 'active', ?)`)
+      .run(trip.id, trip.travelGroupId, trip.title, trip.timezone, now());
+    return trip;
+  }
+
+  archiveTrip(administratorId: string, tripId: string): void {
+    this.requireSystemAdministrator(administratorId);
+    const updated = this.db.connection.prepare(`UPDATE trips SET status = 'archived', archived_at = ? WHERE id = ? AND status = 'active'`)
+      .run(now(), tripId);
+    if (updated.changes === 0) this.requireTrip(tripId);
+  }
+
+  reactivateTrip(administratorId: string, tripId: string): void {
+    this.requireSystemAdministrator(administratorId);
+    const trip = this.requireTrip(tripId);
+    if (trip.status === "active") return;
+    const activeTrip = this.db.connection.prepare(`SELECT id FROM trips WHERE travel_group_id = ? AND status = 'active'`).get(trip.travel_group_id);
+    if (activeTrip) throw new ConflictError("A Travel Group can have only one Active Trip.");
+    this.db.connection.prepare(`UPDATE trips SET status = 'active', archived_at = NULL WHERE id = ?`).run(tripId);
+  }
+
+  addMember(administratorId: string, tripId: string, lineUserId: string, displayName: string, role: MemberRole): void {
+    this.requireSystemAdministrator(administratorId);
+    this.requireTrip(tripId);
     this.db.connection.prepare(`INSERT OR REPLACE INTO members (trip_id, line_user_id, display_name, role) VALUES (?, ?, ?, ?)`)
       .run(tripId, lineUserId, displayName, role);
   }
 
   importMarkdown(tripId: string, markdown: string, sourceTime = now()): { sourceId: string; proposalIds: string[] } {
+    this.requireActiveTrip(tripId);
     const sourceId = randomUUID();
-    this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, content, source_time, created_at) VALUES (?, ?, 'markdown', ?, ?, ?)`)
-      .run(sourceId, tripId, markdown, sourceTime, now());
+    this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, idempotency_key, content, source_time, created_at) VALUES (?, ?, 'markdown', ?, ?, ?, ?)`)
+      .run(sourceId, tripId, `legacy-import:${randomUUID()}`, markdown, sourceTime, now());
 
     const proposalIds = this.extractMarkdown(markdown).map((item) => this.createProposal(tripId, sourceId, item));
     return { sourceId, proposalIds };
   }
 
   createProposal(tripId: string, sourceId: string, item: ExtractedTripItem): string {
+    this.requireActiveTrip(tripId);
     const id = `P-${randomUUID().slice(0, 8).toUpperCase()}`;
     this.db.connection.prepare(`
       INSERT INTO proposals (id, trip_id, source_id, kind, title, item_status, proposal_status, starts_at, ends_at, timezone, location, notes, deadline_at, source_line, source_excerpt, created_at)
@@ -40,6 +89,7 @@ export class TravelService {
   }
 
   confirmProposal(tripId: string, ownerId: string, proposalId: string): TripItem {
+    this.requireActiveTrip(tripId);
     const member = this.db.connection.prepare(`SELECT role FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole } | undefined;
     if (member?.role !== "owner") throw new PermissionError("Only a decision owner can confirm a proposal.");
 
@@ -72,7 +122,7 @@ export class TravelService {
 
   reviewTrip(tripId: string): TripReview {
     const confirmed = this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'confirmed' ORDER BY starts_at, title`).all(tripId).map(toTripItem) as TripItem[];
-    const pending = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' ORDER BY deadline_at, title`).all(tripId) as ProposalRow[];
+    const pending = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' ORDER BY deadline_at, title`).all(tripId) as unknown as ProposalRow[];
     const proposals = pending.map(toProposal);
     return {
       confirmed,
@@ -102,6 +152,32 @@ export class TravelService {
       }];
     });
   }
+
+  private requireTrip(tripId: string): TripRow {
+    const trip = this.db.connection.prepare(`SELECT * FROM trips WHERE id = ?`).get(tripId) as TripRow | undefined;
+    if (!trip) throw new NotFoundError(`Trip ${tripId} was not found.`);
+    return trip;
+  }
+
+  private requireActiveTrip(tripId: string): TripRow {
+    const trip = this.requireTrip(tripId);
+    if (trip.status !== "active") throw new TripNotActiveError(`Trip ${tripId} is not active.`);
+    return trip;
+  }
+
+  private requireSystemAdministrator(administratorId: string): void {
+    if (administratorId !== this.systemAdministratorId) {
+      throw new PermissionError("Only the System Administrator can change the Trip lifecycle.");
+    }
+  }
+}
+
+interface TravelGroupRow {
+  id: string; line_group_id: string; display_name: string;
+}
+
+interface TripRow {
+  id: string; travel_group_id: string; title: string; timezone: string; status: "active" | "archived";
 }
 
 interface ProposalRow {
@@ -111,6 +187,10 @@ interface ProposalRow {
 
 function toProposal(row: ProposalRow): Proposal {
   return { id: row.id, sourceId: row.source_id, kind: row.kind as Proposal["kind"], title: row.title, itemStatus: row.item_status, status: "pending", startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, timezone: row.timezone ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
+}
+
+function toTravelGroup(row: TravelGroupRow): TravelGroup {
+  return { id: row.id, lineGroupId: row.line_group_id, displayName: row.display_name };
 }
 
 function toTripItem(row: Record<string, unknown>): TripItem {
@@ -126,6 +206,15 @@ function inferKind(title: string): TripItem["kind"] {
   if (/train|bus|交通|接駁/.test(lower)) return "transport";
   if (/meet|集合/.test(lower)) return "meeting";
   return "other";
+}
+
+function isIanaTimezone(timezone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function buildReviewIssues(proposals: Proposal[], confirmed: TripItem[]): ReviewIssue[] {

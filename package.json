@@ -5,6 +5,11 @@
   "type": "module",
   "scripts": {
     "test": "node --experimental-strip-types --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit",
     "demo": "node --experimental-strip-types src/demo.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "typescript": "^7.0.2"
   }
 }

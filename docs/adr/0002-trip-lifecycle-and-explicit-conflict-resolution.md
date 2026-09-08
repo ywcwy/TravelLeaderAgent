@@ -1,7 +1,7 @@
 # Trips have one active lifecycle and conflicts require explicit resolution
 
-A Travel Group has at most one Active Trip; only Decision Owners can create,
-activate, archive, or reactivate it. Replacing a confirmed Trip Item uses a
+A Travel Group has at most one Active Trip; only the System Administrator can
+create, activate, archive, or reactivate it. Replacing a confirmed Trip Item uses a
 Replacement Proposal, and inconsistent Sources produce a Resolution Proposal
 rather than silently selecting a candidate. This preserves history while keeping
 the MVA operational with one-owner approval.
