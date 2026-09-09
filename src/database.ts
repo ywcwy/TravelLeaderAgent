@@ -108,6 +108,26 @@ export class TravelDatabase {
         content TEXT NOT NULL,
         sent_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS webhook_inbox_events (
+        event_id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        group_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        trip_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        raw_payload TEXT,
+        reply_token TEXT,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+        outcome TEXT NOT NULL CHECK (outcome IN ('accepted', 'processed', 'retryable_failure', 'dead_letter')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        lease_until TEXT,
+        completed_at TEXT,
+        duplicate_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
     `);
     const tripItemColumns = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
     if (!tripItemColumns.some((column) => column.name === "replacement_for_item_id")) {
