@@ -47,6 +47,7 @@ export class TravelDatabase {
         line_user_id TEXT NOT NULL,
         display_name TEXT NOT NULL,
         role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+        revoked_at TEXT,
         PRIMARY KEY (trip_id, line_user_id)
       );
 
@@ -111,6 +112,10 @@ export class TravelDatabase {
     const tripItemColumns = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
     if (!tripItemColumns.some((column) => column.name === "replacement_for_item_id")) {
       this.connection.exec(`ALTER TABLE trip_items ADD COLUMN replacement_for_item_id TEXT REFERENCES trip_items(id)`);
+    }
+    const memberColumns = this.connection.prepare(`PRAGMA table_info(members)`).all() as Array<{ name: string }>;
+    if (!memberColumns.some((column) => column.name === "revoked_at")) {
+      this.connection.exec(`ALTER TABLE members ADD COLUMN revoked_at TEXT`);
     }
   }
 

@@ -7,12 +7,14 @@ events become Sources only when native Mention metadata addresses
 Sources. Direct conversations with the LINE Official Account do not create
 Sources in this phase. Phase 2 sends only a short acknowledgement through the
 webhook reply token; it does not send asynchronous Push results. Unknown LINE
-identities cannot create Sources unless they are already members of the Active
-Trip.
+identities are auto-added as `member` only after a valid mentioned group
+message; revoked identities remain unable to submit until an explicit admin
+action restores them.
 
 The LINE event ID is the Source Idempotency Key. The LINE message ID and delivery
-metadata are retained as provenance. The adapter acknowledges the webhook before
-Source extraction so delivery retries do not depend on domain processing time.
+metadata are retained as provenance. The Inbox integration acknowledges the
+webhook before Source extraction so delivery retries do not depend on domain
+processing time.
 The adapter uses the event's one-time reply token for a short acknowledgement;
 later asynchronous results require a separate push message.
 
@@ -34,8 +36,9 @@ later asynchronous results require a separate push message.
 - Source creation remains inside the public Travel Service boundary.
 - The adapter is exposed as a framework-independent webhook handler; an HTTP
   route only supplies the raw request and returns its response intent.
-- Accepted webhook events are written to a durable inbox before the handler
-  acknowledges HTTP 200. A worker owns subsequent Source processing.
+- The #9 Inbox integration writes accepted webhook events to a durable inbox
+  before acknowledging HTTP 200. The #8 handler only validates and normalizes
+  events; a worker owns subsequent Source processing.
 - The LINE Channel Secret is supplied by deployment configuration, never by
   repository or database state.
 - Adapter tests use signed synthetic payloads and assert event routing,
