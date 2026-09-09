@@ -35,12 +35,14 @@ export interface SourceImportOptions {
 export interface TripItem extends ExtractedTripItem {
   id: string;
   sourceId: string;
+  replacementForItemId: string | null;
   confirmedBy: string | null;
 }
 
 export interface Proposal extends Omit<ExtractedTripItem, "status" | "deadlineAt"> {
   id: string;
   sourceId: string;
+  replacementForItemId: string | null;
   itemStatus: TripItemStatus;
   status: ProposalStatus;
   deadlineAt: string | null;
@@ -79,6 +81,7 @@ export interface Decision {
 
 export interface TripReview {
   confirmed: TripItem[];
+  cancelled: TripItem[];
   provisional: Proposal[];
   openDecisions: Proposal[];
   conflicts: Proposal[];

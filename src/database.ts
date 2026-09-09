@@ -54,6 +54,7 @@ export class TravelDatabase {
         id TEXT PRIMARY KEY,
         trip_id TEXT NOT NULL REFERENCES trips(id),
         source_id TEXT NOT NULL REFERENCES sources(id),
+        replacement_for_item_id TEXT REFERENCES trip_items(id),
         kind TEXT NOT NULL,
         title TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('confirmed', 'provisional', 'open_decision', 'conflicted', 'cancelled')),
@@ -107,6 +108,10 @@ export class TravelDatabase {
         sent_at TEXT
       );
     `);
+    const tripItemColumns = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
+    if (!tripItemColumns.some((column) => column.name === "replacement_for_item_id")) {
+      this.connection.exec(`ALTER TABLE trip_items ADD COLUMN replacement_for_item_id TEXT REFERENCES trip_items(id)`);
+    }
   }
 
   close(): void {
