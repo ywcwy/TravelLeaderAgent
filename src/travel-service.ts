@@ -64,8 +64,28 @@ export class TravelService {
   addMember(administratorId: string, tripId: string, lineUserId: string, displayName: string, role: MemberRole): void {
     this.requireSystemAdministrator(administratorId);
     this.requireTrip(tripId);
-    this.db.connection.prepare(`INSERT OR REPLACE INTO members (trip_id, line_user_id, display_name, role) VALUES (?, ?, ?, ?)`)
+    this.db.connection.prepare(`INSERT OR REPLACE INTO members (trip_id, line_user_id, display_name, role, revoked_at) VALUES (?, ?, ?, ?, NULL)`)
       .run(tripId, lineUserId, displayName, role);
+  }
+
+  getActiveTripForLineGroup(lineGroupId: string): Trip | null {
+    const row = this.db.connection.prepare(`SELECT trips.* FROM trips JOIN travel_groups ON travel_groups.id = trips.travel_group_id WHERE travel_groups.line_group_id = ? AND trips.status = 'active'`).get(lineGroupId) as TripRow | undefined;
+    return row ? toTrip(row) : null;
+  }
+
+  ensureGroupMember(tripId: string, lineUserId: string, displayName: string): void {
+    this.requireActiveTrip(tripId);
+    this.db.connection.prepare(`INSERT INTO members (trip_id, line_user_id, display_name, role, revoked_at) VALUES (?, ?, ?, 'member', NULL) ON CONFLICT(trip_id, line_user_id) DO UPDATE SET display_name = excluded.display_name, revoked_at = NULL`)
+      .run(tripId, lineUserId, displayName);
+  }
+
+  revokeGroupMember(tripId: string, lineUserId: string): void {
+    this.requireTrip(tripId);
+    this.db.connection.prepare(`UPDATE members SET revoked_at = ? WHERE trip_id = ? AND line_user_id = ?`).run(now(), tripId, lineUserId);
+  }
+
+  isActiveTripMember(tripId: string, lineUserId: string): boolean {
+    return Boolean(this.db.connection.prepare(`SELECT 1 FROM members WHERE trip_id = ? AND line_user_id = ? AND revoked_at IS NULL`).get(tripId, lineUserId));
   }
 
   importMarkdown(tripId: string, markdown: string, options: SourceImportOptions): { sourceId: string; proposalIds: string[] } {
@@ -182,8 +202,8 @@ export class TravelService {
 
   confirmProposal(tripId: string, ownerId: string, proposalId: string): TripItem {
     this.requireActiveTrip(tripId);
-    const member = this.db.connection.prepare(`SELECT role FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole } | undefined;
-    if (member?.role !== "owner") throw new PermissionError("Only a decision owner can confirm a proposal.");
+    const member = this.db.connection.prepare(`SELECT role, revoked_at FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole; revoked_at: string | null } | undefined;
+    if (member?.role !== "owner" || member.revoked_at) throw new PermissionError("Only a decision owner can confirm a proposal.");
 
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
@@ -290,8 +310,8 @@ export class TravelService {
   }
 
   private requireDecisionOwner(tripId: string, ownerId: string): void {
-    const member = this.db.connection.prepare(`SELECT role FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole } | undefined;
-    if (member?.role !== "owner") throw new PermissionError("Only a Decision Owner can manage a Decision.");
+    const member = this.db.connection.prepare(`SELECT role, revoked_at FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole; revoked_at: string | null } | undefined;
+    if (member?.role !== "owner" || member.revoked_at) throw new PermissionError("Only a Decision Owner can manage a Decision.");
   }
 }
 
@@ -301,6 +321,10 @@ interface TravelGroupRow {
 
 interface TripRow {
   id: string; travel_group_id: string; title: string; timezone: string; status: "active" | "archived";
+}
+
+function toTrip(row: TripRow): Trip {
+  return { id: row.id, travelGroupId: row.travel_group_id, title: row.title, timezone: row.timezone, status: row.status };
 }
 
 interface ProposalRow {
