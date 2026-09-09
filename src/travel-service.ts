@@ -72,17 +72,16 @@ export class TravelService {
     this.requireActiveTrip(tripId);
     if (!options.idempotencyKey.trim()) throw new InvalidSourceError("A Source Idempotency Key is required.");
 
-    const existing = this.db.connection.prepare(`SELECT id FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, options.idempotencyKey) as { id: string } | undefined;
-    if (existing) {
-      const proposalIds = (this.db.connection.prepare(`SELECT id FROM proposals WHERE source_id = ? ORDER BY created_at, id`).all(existing.id) as unknown as Array<{ id: string }>).map((proposal) => proposal.id);
-      return { sourceId: existing.id, proposalIds };
-    }
-
     const sourceId = randomUUID();
-    this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, idempotency_key, content, source_time, created_at) VALUES (?, ?, 'markdown', ?, ?, ?, ?)`)
+    const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO sources (id, trip_id, type, idempotency_key, content, source_time, created_at) VALUES (?, ?, 'markdown', ?, ?, ?, ?)`)
       .run(sourceId, tripId, options.idempotencyKey, markdown, options.sourceTime ?? now(), now());
+    const persistedSource = insert.changes === 1
+      ? { id: sourceId }
+      : this.db.connection.prepare(`SELECT id FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, options.idempotencyKey) as { id: string } | undefined;
+    if (!persistedSource) throw new InvalidSourceError("The Source could not be persisted.");
+    if (insert.changes === 0) return this.getSourceImportResult(persistedSource.id);
 
-    const proposalIds = this.extractMarkdown(markdown).map((item) => this.createProposal(tripId, sourceId, item));
+    const proposalIds = this.extractMarkdown(markdown).map((item) => this.createProposal(tripId, persistedSource.id, item));
     return { sourceId, proposalIds };
   }
 
@@ -133,13 +132,26 @@ export class TravelService {
     const confirmed = this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'confirmed' ORDER BY starts_at, title`).all(tripId).map(toTripItem) as TripItem[];
     const pending = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' ORDER BY deadline_at, title`).all(tripId) as unknown as ProposalRow[];
     const proposals = pending.map(toProposal);
+    const sourceIds = (this.db.connection.prepare(`SELECT id FROM sources WHERE trip_id = ?`).all(tripId) as unknown as Array<{ id: string }>).map((source) => source.id);
+    const proposalSourceIds = new Set(proposals.map((proposal) => proposal.sourceId));
+    const issues = buildReviewIssues(proposals, confirmed);
+    for (const sourceId of sourceIds) {
+      if (!proposalSourceIds.has(sourceId)) {
+        issues.push({ code: "source_unparsed", message: "Source has no parseable itinerary candidates.", sourceId, proposalIds: [] });
+      }
+    }
     return {
       confirmed,
       provisional: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "provisional"),
       openDecisions: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "open_decision"),
       conflicts: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "conflicted"),
-      issues: buildReviewIssues(proposals, confirmed),
+      issues,
     };
+  }
+
+  private getSourceImportResult(sourceId: string): { sourceId: string; proposalIds: string[] } {
+    const proposalIds = (this.db.connection.prepare(`SELECT id FROM proposals WHERE source_id = ? ORDER BY created_at, id`).all(sourceId) as unknown as Array<{ id: string }>).map((proposal) => proposal.id);
+    return { sourceId, proposalIds };
   }
 
   private extractMarkdown(markdown: string): ExtractedTripItem[] {

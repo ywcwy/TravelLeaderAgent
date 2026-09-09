@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
+import { tmpdir } from "node:os";
 import { TravelDatabase } from "../src/database.ts";
 import { ConflictError, InvalidTimezoneError, PermissionError, TravelService, TripNotActiveError } from "../src/travel-service.ts";
 
@@ -65,12 +68,41 @@ test("importing the same Source Idempotency Key reuses its Source and Proposals"
   const independent = service.importMarkdown(tripId, markdown, {
     idempotencyKey: "line:event:def456",
   });
+  const unparseable = service.importMarkdown(tripId, "This source has no itinerary candidate line.", {
+    idempotencyKey: "line:event:unparseable",
+  });
 
   assert.deepEqual(replay, first);
   assert.notEqual(independent.sourceId, first.sourceId);
   assert.notDeepEqual(independent.proposalIds, first.proposalIds);
-  assert.equal(service.reviewTrip(tripId).issues.filter((issue) => issue.code === "missing_start_time").length, 2);
+  const review = service.reviewTrip(tripId);
+  assert.equal(review.issues.filter((issue) => issue.code === "missing_start_time").length, 2);
+  assert.deepEqual(review.issues.find((issue) => issue.code === "source_unparsed"), {
+    code: "source_unparsed",
+    message: "Source has no parseable itinerary candidates.",
+    sourceId: unparseable.sourceId,
+    proposalIds: [],
+  });
   db.close();
+});
+
+test("the Source Idempotency Key is stable across database connections", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const firstDatabase = new TravelDatabase(databasePath);
+  const firstService = new TravelService(firstDatabase, "system-admin");
+  const travelGroup = firstService.createTravelGroup("system-admin", "C-cross-connection", "測試旅遊群");
+  const trip = firstService.createActiveTrip("system-admin", travelGroup.id, "測試旅程", "America/Los_Angeles");
+  const first = firstService.importMarkdown(trip.id, "- [provisional] 住宿 | 2026-10-16 | Monterey", { idempotencyKey: "line:event:cross-connection" });
+
+  const secondDatabase = new TravelDatabase(databasePath);
+  const secondService = new TravelService(secondDatabase, "system-admin");
+  const replay = secondService.importMarkdown(trip.id, "- [provisional] 住宿 | 2026-10-16 | Monterey", { idempotencyKey: "line:event:cross-connection" });
+
+  assert.deepEqual(replay, first);
+  secondDatabase.close();
+  firstDatabase.close();
+  rmSync(directory, { recursive: true, force: true });
 });
 
 test("markdown creates proposals and only an owner can confirm one", () => {

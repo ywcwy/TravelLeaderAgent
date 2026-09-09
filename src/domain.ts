@@ -47,8 +47,9 @@ export interface Proposal extends Omit<ExtractedTripItem, "status" | "deadlineAt
 }
 
 export interface ReviewIssue {
-  code: "missing_start_time" | "missing_timezone" | "missing_location" | "schedule_collision";
+  code: "missing_start_time" | "missing_timezone" | "missing_location" | "schedule_collision" | "source_unparsed";
   message: string;
+  sourceId?: string;
   proposalIds: string[];
 }
 
