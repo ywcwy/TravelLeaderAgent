@@ -8,6 +8,7 @@ export class TravelDatabase {
   constructor(path = ":memory:") {
     this.connection = new DatabaseSync(path);
     this.connection.exec(`
+      PRAGMA busy_timeout = 5000;
       PRAGMA foreign_keys = ON;
 
       CREATE TABLE IF NOT EXISTS travel_groups (
