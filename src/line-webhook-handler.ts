@@ -88,7 +88,9 @@ export class LineWebhookHandler {
     const userId = event.source.userId;
     if (!event.webhookEventId || !event.message.id || !userId) return {};
 
-    this.service.ensureGroupMember(trip.id, userId, userId);
+    if (!this.service.ensureGroupMember(trip.id, userId, userId)) {
+      return this.policyReply(event, "你目前無法提交此旅程資料。");
+    }
     const accepted: AcceptedLineEvent = {
       eventId: event.webhookEventId,
       messageId: event.message.id,

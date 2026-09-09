@@ -27,9 +27,10 @@ Active Trip do not create Sources.
 
 ## Processing model
 
-The framework-independent `LineWebhookHandler` validates the raw request,
-deduplicates by `webhookEventId`, and writes a durable Webhook Inbox Event before
-acknowledging HTTP 200. A worker claims pending events with a processing lease.
+The framework-independent `LineWebhookHandler` validates the raw request and
+produces a normalized event intent. The Inbox integration writes that intent as
+a durable Webhook Inbox Event before acknowledging HTTP 200. A worker claims
+pending events with a processing lease.
 Events move through `pending`, `processing`, `completed`, and `failed`; failed
 events retry at most three times before dead-lettering. A temporary Inbox write
 failure returns HTTP 5xx so LINE may redeliver the event.

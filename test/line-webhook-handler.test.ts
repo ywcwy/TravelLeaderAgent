@@ -102,3 +102,22 @@ test("revokes future Source access when a group member leaves", () => {
   assert.deepEqual(response.replies, [{ replyToken: "reply-token", text: "已更新群組成員狀態。" }]);
   db.close();
 });
+
+test("does not re-enroll a revoked member on a later message", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-line-group-revoked", "測試群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "測試旅程", "Asia/Taipei");
+  service.ensureGroupMember(trip.id, "U-member", "U-member");
+  service.revokeGroupMember(trip.id, "U-member");
+  const handler = new LineWebhookHandler(service, { channelSecret: "test-secret", officialAccountUserId: "U-bot" });
+  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JREVOKED00000000000000000", replyToken: "reply-token", source: { type: "group", groupId: "C-line-group-revoked", userId: "U-member" }, message: { type: "text", id: "message-revoked", text: "@leaderAgent 新資料", mention: { mentionees: [{ type: "user", userId: "U-bot" }] } } }] });
+  const signature = createHmac("sha256", "test-secret").update(rawBody).digest("base64");
+
+  const response = handler.handle({ rawBody, signature });
+
+  assert.equal(response.acceptedEvents.length, 0);
+  assert.equal(response.replies[0].text, "你目前無法提交此旅程資料。");
+  assert.equal(service.isActiveTripMember(trip.id, "U-member"), false);
+  db.close();
+});

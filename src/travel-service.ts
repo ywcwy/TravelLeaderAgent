@@ -73,10 +73,13 @@ export class TravelService {
     return row ? toTrip(row) : null;
   }
 
-  ensureGroupMember(tripId: string, lineUserId: string, displayName: string): void {
+  ensureGroupMember(tripId: string, lineUserId: string, displayName: string): boolean {
     this.requireActiveTrip(tripId);
-    this.db.connection.prepare(`INSERT INTO members (trip_id, line_user_id, display_name, role, revoked_at) VALUES (?, ?, ?, 'member', NULL) ON CONFLICT(trip_id, line_user_id) DO UPDATE SET display_name = excluded.display_name, revoked_at = NULL`)
+    const existing = this.db.connection.prepare(`SELECT revoked_at FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, lineUserId) as { revoked_at: string | null } | undefined;
+    if (existing?.revoked_at) return false;
+    this.db.connection.prepare(`INSERT INTO members (trip_id, line_user_id, display_name, role, revoked_at) VALUES (?, ?, ?, 'member', NULL) ON CONFLICT(trip_id, line_user_id) DO UPDATE SET display_name = excluded.display_name`)
       .run(tripId, lineUserId, displayName);
+    return true;
   }
 
   revokeGroupMember(tripId: string, lineUserId: string): void {
@@ -203,7 +206,7 @@ export class TravelService {
   confirmProposal(tripId: string, ownerId: string, proposalId: string): TripItem {
     this.requireActiveTrip(tripId);
     const member = this.db.connection.prepare(`SELECT role, revoked_at FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole; revoked_at: string | null } | undefined;
-    if (member?.role !== "owner" || member.revoked_at) throw new PermissionError("Only a decision owner can confirm a proposal.");
+    if (member?.role !== "owner") throw new PermissionError("Only a decision owner can confirm a proposal.");
 
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
@@ -311,7 +314,7 @@ export class TravelService {
 
   private requireDecisionOwner(tripId: string, ownerId: string): void {
     const member = this.db.connection.prepare(`SELECT role, revoked_at FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole; revoked_at: string | null } | undefined;
-    if (member?.role !== "owner" || member.revoked_at) throw new PermissionError("Only a Decision Owner can manage a Decision.");
+    if (member?.role !== "owner") throw new PermissionError("Only a Decision Owner can manage a Decision.");
   }
 }
 
