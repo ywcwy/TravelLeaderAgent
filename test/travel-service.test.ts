@@ -229,3 +229,17 @@ test("an owner confirms a Replacement Proposal without losing itinerary history"
   assert.equal(review.cancelled[0].status, "cancelled");
   db.close();
 });
+
+test("an existing SQLite database gains the replacement relationship column", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-migration-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  initial.connection.exec(`ALTER TABLE trip_items DROP COLUMN replacement_for_item_id`);
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const columns = upgraded.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
+  assert.equal(columns.some((column) => column.name === "replacement_for_item_id"), true);
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});

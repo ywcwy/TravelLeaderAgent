@@ -130,8 +130,8 @@ export class TravelService {
     const decision: Decision = { id: `D-${randomUUID().slice(0, 8).toUpperCase()}`, tripId, title, status: "open", selectedProposalId: null, resolvedBy: null, resolvedAt: null };
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
-      const proposals = this.db.connection.prepare(`SELECT id, trip_id, proposal_status, decision_id FROM proposals WHERE id IN (${placeholders})`).all(...uniqueProposalIds) as unknown as ProposalMembershipRow[];
-      if (proposals.length !== uniqueProposalIds.length || proposals.some((proposal) => proposal.trip_id !== tripId || proposal.proposal_status !== "pending" || proposal.decision_id !== null)) {
+      const proposals = this.db.connection.prepare(`SELECT id, trip_id, proposal_status, decision_id, replacement_for_item_id FROM proposals WHERE id IN (${placeholders})`).all(...uniqueProposalIds) as unknown as ProposalMembershipRow[];
+      if (proposals.length !== uniqueProposalIds.length || proposals.some((proposal) => proposal.trip_id !== tripId || proposal.proposal_status !== "pending" || proposal.decision_id !== null || proposal.replacement_for_item_id !== null)) {
         throw new ConflictError("A Decision can group only unassigned pending Proposals from the same Active Trip.");
       }
       this.db.connection.prepare(`INSERT INTO decisions (id, trip_id, title, status, selected_proposal_id, created_at) VALUES (?, ?, ?, 'open', NULL, ?)`)
@@ -309,7 +309,7 @@ interface ProposalRow {
 }
 
 interface ProposalMembershipRow {
-  id: string; trip_id: string; proposal_status: "pending" | "confirmed" | "rejected"; decision_id: string | null;
+  id: string; trip_id: string; proposal_status: "pending" | "confirmed" | "rejected"; decision_id: string | null; replacement_for_item_id: string | null;
 }
 
 interface DecisionRow {
