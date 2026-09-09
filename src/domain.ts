@@ -73,6 +73,8 @@ export interface Decision {
   title: string;
   status: DecisionStatus;
   selectedProposalId: string | null;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
 }
 
 export interface TripReview {

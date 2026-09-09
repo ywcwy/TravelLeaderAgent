@@ -151,3 +151,42 @@ test("review preserves source evidence, identifies missing fields and blocks unr
   assert.throws(() => service.confirmProposal(tripId, "owner", result.proposalIds[2]), ConflictError);
   db.close();
 });
+
+test("an owner resolves mutually exclusive proposals through a Decision", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-decision-1");
+  service.addMember("system-admin", tripId, "owner", "Owner", "owner");
+  service.addMember("system-admin", tripId, "member", "Member", "member");
+  const imported = service.importMarkdown(tripId, `
+- [provisional] Carmel 住宿 | 2026-10-16T15:00:00-07:00 | Carmel
+- [provisional] Monterey 住宿 | 2026-10-16T15:00:00-07:00 | Monterey
+`, { idempotencyKey: "test:decision:1" });
+  const otherTripId = bootstrapActiveTrip(service, "C-decision-2");
+  const otherTripProposal = service.importMarkdown(otherTripId, "- [conflicted] 其他旅程住宿 | 2026-10-16T15:00:00-07:00 | Oakland", { idempotencyKey: "test:decision:other-trip" });
+  assert.throws(
+    () => service.createDecision(tripId, "owner", "跨旅程決策", [imported.proposalIds[0], otherTripProposal.proposalIds[0]]),
+    ConflictError,
+  );
+
+  const decision = service.createDecision(tripId, "owner", "10/16 住宿地點", imported.proposalIds);
+  assert.equal(decision.status, "open");
+  assert.throws(() => service.createDecision(tripId, "owner", "重複決策", imported.proposalIds), ConflictError);
+  assert.throws(
+    () => service.resolveDecision(tripId, "member", decision.id, imported.proposalIds[0]),
+    PermissionError,
+  );
+  assert.throws(() => service.confirmProposal(tripId, "owner", imported.proposalIds[0]), ConflictError);
+
+  const resolved = service.resolveDecision(tripId, "owner", decision.id, imported.proposalIds[0]);
+  assert.equal(resolved.decision.status, "resolved");
+  assert.equal(resolved.decision.selectedProposalId, imported.proposalIds[0]);
+  assert.equal(resolved.decision.resolvedBy, "owner");
+  assert.ok(resolved.decision.resolvedAt);
+  assert.equal(resolved.item.title, "Carmel 住宿");
+
+  const review = service.reviewTrip(tripId);
+  assert.deepEqual(review.confirmed.map((item) => item.title), ["Carmel 住宿"]);
+  assert.equal(review.conflicts.length, 0);
+  db.close();
+});
