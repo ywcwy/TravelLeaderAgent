@@ -131,6 +131,32 @@ An explicit request addressed to `@leaderAgent`. Native LINE mention metadata is
 authoritative; exact-text matching is only a compatibility fallback.
 _Avoid_: ordinary group chat, ambient message
 
+**LINE Official Account**:
+The LINE channel identity through which the Travel Leader receives direct and
+group messages. In the current inbound phase, only group conversations can
+create Sources; a group conversation requires an explicit native Mention.
+Direct-conversation Source ingestion is a future extension with its own Trip
+routing rules.
+_Avoid_: Decision Owner, Travel Group
+
+**LINE Webhook Event**:
+A signed delivery event from the LINE Official Account. Its stable event ID is
+the Source Idempotency Key for retry-safe ingestion; the message ID remains
+provenance rather than the deduplication key.
+_Avoid_: chat message, Source
+
+**Webhook Inbox Event**:
+A short-lived, durable record of a LINE Webhook Event before domain processing.
+It tracks acknowledgement, processing attempts, rejection or completion, and
+may retain the raw payload only during its retention window.
+_Avoid_: Source, message queue
+
+**Processing Lease**:
+A bounded claim held by one worker while processing a Webhook Inbox Event. An
+expired lease allows another worker to recover the event without creating a
+second Source.
+_Avoid_: permanent lock, Decision
+
 **Group Reminder**:
 A non-sensitive, action-oriented notice sent to the Travel Group about an Active
 Trip.
