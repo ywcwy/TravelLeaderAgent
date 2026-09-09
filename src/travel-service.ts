@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
-import type { ExtractedTripItem, MemberRole, Proposal, ReviewIssue, SourceImportOptions, TravelGroup, Trip, TripItem, TripItemStatus, TripReview } from "./domain.ts";
+import type { Decision, ExtractedTripItem, MemberRole, Proposal, ReviewIssue, SourceImportOptions, TravelGroup, Trip, TripItem, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -106,6 +106,65 @@ export class TravelService {
     return id;
   }
 
+  createDecision(tripId: string, ownerId: string, title: string, proposalIds: string[]): Decision {
+    this.requireActiveTrip(tripId);
+    this.requireDecisionOwner(tripId, ownerId);
+    const uniqueProposalIds = [...new Set(proposalIds)];
+    if (!title.trim() || uniqueProposalIds.length < 2) throw new ConflictError("A Decision requires a title and at least two distinct Proposals.");
+
+    const placeholders = uniqueProposalIds.map(() => "?").join(", ");
+    const proposals = this.db.connection.prepare(`SELECT id, trip_id, proposal_status FROM proposals WHERE id IN (${placeholders})`).all(...uniqueProposalIds) as unknown as ProposalMembershipRow[];
+    if (proposals.length !== uniqueProposalIds.length || proposals.some((proposal) => proposal.trip_id !== tripId || proposal.proposal_status !== "pending")) {
+      throw new ConflictError("A Decision can group only pending Proposals from the same Active Trip.");
+    }
+
+    const decision: Decision = { id: `D-${randomUUID().slice(0, 8).toUpperCase()}`, tripId, title, status: "open", selectedProposalId: null, resolvedBy: null, resolvedAt: null };
+    this.db.connection.exec("BEGIN");
+    try {
+      this.db.connection.prepare(`INSERT INTO decisions (id, trip_id, title, status, selected_proposal_id, created_at) VALUES (?, ?, ?, 'open', NULL, ?)`)
+        .run(decision.id, tripId, title, now());
+      this.db.connection.prepare(`UPDATE proposals SET decision_id = ? WHERE id IN (${placeholders})`).run(decision.id, ...uniqueProposalIds);
+      this.db.connection.exec("COMMIT");
+      return decision;
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  resolveDecision(tripId: string, ownerId: string, decisionId: string, selectedProposalId: string): { decision: Decision; item: TripItem } {
+    this.requireActiveTrip(tripId);
+    this.requireDecisionOwner(tripId, ownerId);
+    const decision = this.db.connection.prepare(`SELECT * FROM decisions WHERE id = ? AND trip_id = ? AND status = 'open'`).get(decisionId, tripId) as DecisionRow | undefined;
+    if (!decision) throw new NotFoundError(`Open Decision ${decisionId} was not found.`);
+    const proposal = this.db.connection.prepare(`SELECT * FROM proposals WHERE id = ? AND trip_id = ? AND decision_id = ? AND proposal_status = 'pending'`).get(selectedProposalId, tripId, decisionId) as ProposalRow | undefined;
+    if (!proposal) throw new ConflictError("The selected Proposal is not an open option for this Decision.");
+
+    const item: TripItem = {
+      id: `T-${randomUUID().slice(0, 8).toUpperCase()}`,
+      sourceId: proposal.source_id,
+      kind: proposal.kind as TripItem["kind"], title: proposal.title,
+      status: "confirmed", startsAt: proposal.starts_at ?? undefined, endsAt: proposal.ends_at ?? undefined,
+      timezone: proposal.timezone ?? undefined, location: proposal.location ?? undefined, notes: proposal.notes ?? undefined,
+      confirmedBy: ownerId,
+    };
+    const resolvedAt = now();
+    this.db.connection.exec("BEGIN");
+    try {
+      this.db.connection.prepare(`INSERT INTO trip_items (id, trip_id, source_id, kind, title, status, starts_at, ends_at, timezone, location, notes, confirmed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(item.id, tripId, item.sourceId, item.kind, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null, item.timezone ?? null, item.location ?? null, item.notes ?? null, ownerId, resolvedAt);
+      this.db.connection.prepare(`UPDATE proposals SET proposal_status = CASE WHEN id = ? THEN 'confirmed' ELSE 'rejected' END WHERE decision_id = ? AND proposal_status = 'pending'`)
+        .run(selectedProposalId, decisionId);
+      this.db.connection.prepare(`UPDATE decisions SET status = 'resolved', selected_proposal_id = ?, resolved_by = ?, resolved_at = ? WHERE id = ?`)
+        .run(selectedProposalId, ownerId, resolvedAt, decisionId);
+      this.db.connection.exec("COMMIT");
+      return { decision: { id: decision.id, tripId: decision.trip_id, title: decision.title, status: "resolved", selectedProposalId, resolvedBy: ownerId, resolvedAt }, item };
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   confirmProposal(tripId: string, ownerId: string, proposalId: string): TripItem {
     this.requireActiveTrip(tripId);
     const member = this.db.connection.prepare(`SELECT role FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole } | undefined;
@@ -204,6 +263,11 @@ export class TravelService {
       throw new PermissionError("Only the System Administrator can change the Trip lifecycle.");
     }
   }
+
+  private requireDecisionOwner(tripId: string, ownerId: string): void {
+    const member = this.db.connection.prepare(`SELECT role FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole } | undefined;
+    if (member?.role !== "owner") throw new PermissionError("Only a Decision Owner can manage a Decision.");
+  }
 }
 
 interface TravelGroupRow {
@@ -217,6 +281,14 @@ interface TripRow {
 interface ProposalRow {
   id: string; source_id: string; kind: string; title: string; item_status: TripItemStatus;
   starts_at: string | null; ends_at: string | null; timezone: string | null; location: string | null; notes: string | null; deadline_at: string | null; source_line: number | null; source_excerpt: string | null;
+}
+
+interface ProposalMembershipRow {
+  id: string; trip_id: string; proposal_status: "pending" | "confirmed" | "rejected";
+}
+
+interface DecisionRow {
+  id: string; trip_id: string; title: string; status: "open" | "resolved"; selected_proposal_id: string | null;
 }
 
 function toProposal(row: ProposalRow): Proposal {
