@@ -71,6 +71,18 @@ test("retries failed processing three times before dead-lettering", async () => 
   db.close();
 });
 
+test("does not expose a consumed reply token to a retry", async () => {
+  const db = new TravelDatabase();
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-09T00:00:01.000Z", leaseMs: 1, retryBackoffMs: 0 });
+  inbox.enqueue(event);
+  let observed = "";
+  await inbox.processNext((claimed) => { observed = claimed.replyToken; throw new Error("after reply"); });
+  assert.equal(observed, "reply-token");
+  const retry = inbox.claimNext();
+  assert.equal(retry?.replyToken, "");
+  db.close();
+});
+
 test("reclaims a processing event after its lease expires", () => {
   let currentTime = "2026-09-09T00:00:01.000Z";
   const db = new TravelDatabase();
