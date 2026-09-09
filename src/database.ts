@@ -124,6 +124,8 @@ export class TravelDatabase {
         attempts INTEGER NOT NULL DEFAULT 0,
         last_error TEXT,
         lease_until TEXT,
+        lease_token TEXT,
+        next_attempt_at TEXT,
         completed_at TEXT,
         duplicate_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
@@ -137,6 +139,9 @@ export class TravelDatabase {
     if (!memberColumns.some((column) => column.name === "revoked_at")) {
       this.connection.exec(`ALTER TABLE members ADD COLUMN revoked_at TEXT`);
     }
+    const inboxColumns = this.connection.prepare(`PRAGMA table_info(webhook_inbox_events)`).all() as Array<{ name: string }>;
+    if (!inboxColumns.some((column) => column.name === "lease_token")) this.connection.exec(`ALTER TABLE webhook_inbox_events ADD COLUMN lease_token TEXT`);
+    if (!inboxColumns.some((column) => column.name === "next_attempt_at")) this.connection.exec(`ALTER TABLE webhook_inbox_events ADD COLUMN next_attempt_at TEXT`);
   }
 
   close(): void {

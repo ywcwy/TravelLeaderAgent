@@ -3,6 +3,8 @@ import test from "node:test";
 import { TravelDatabase } from "../src/database.ts";
 import type { AcceptedLineEvent } from "../src/line-webhook-handler.ts";
 import { WebhookInbox } from "../src/webhook-inbox.ts";
+import { LineWebhookIngress } from "../src/line-webhook-ingress.ts";
+import type { LineWebhookHandler } from "../src/line-webhook-handler.ts";
 
 const event: AcceptedLineEvent = {
   eventId: "01JINBOX000000000000000000",
@@ -15,6 +17,21 @@ const event: AcceptedLineEvent = {
   rawBody: "{\"events\":[]}",
   replyToken: "reply-token",
 };
+
+test("enqueues accepted events before acknowledging the webhook", () => {
+  const calls: AcceptedLineEvent[] = [];
+  const handler = { handle: () => ({ status: 200 as const, acceptedEvents: [event], replies: [{ replyToken: event.replyToken, text: "ok" }] }) } as unknown as LineWebhookHandler;
+  const ingress = new LineWebhookIngress(handler, { enqueue: (accepted) => { calls.push(accepted); return "enqueued"; } });
+  const response = ingress.handle({ rawBody: "{}", signature: "" });
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [event]);
+});
+
+test("returns 503 when durable inbox enqueue fails", () => {
+  const handler = { handle: () => ({ status: 200 as const, acceptedEvents: [event], replies: [] }) } as unknown as LineWebhookHandler;
+  const ingress = new LineWebhookIngress(handler, { enqueue: () => { throw new Error("db unavailable"); } });
+  assert.equal(ingress.handle({ rawBody: "{}", signature: "" }).status, 503);
+});
 
 test("persists an accepted event once and identifies duplicate delivery", () => {
   const db = new TravelDatabase();
@@ -29,6 +46,8 @@ test("persists an accepted event once and identifies duplicate delivery", () => 
     attempts: 0,
     lastError: null,
     leaseUntil: null,
+    leaseToken: null,
+    nextAttemptAt: null,
     completedAt: null,
   });
   db.close();
@@ -36,7 +55,7 @@ test("persists an accepted event once and identifies duplicate delivery", () => 
 
 test("retries failed processing three times before dead-lettering", async () => {
   const db = new TravelDatabase();
-  const inbox = new WebhookInbox(db, { clock: () => "2026-09-09T00:00:01.000Z", leaseMs: 1 });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-09T00:00:01.000Z", leaseMs: 1, retryBackoffMs: 0 });
   inbox.enqueue(event);
 
   await inbox.processNext(() => { throw new Error("temporary failure"); });
@@ -55,7 +74,7 @@ test("retries failed processing three times before dead-lettering", async () => 
 test("reclaims a processing event after its lease expires", () => {
   let currentTime = "2026-09-09T00:00:01.000Z";
   const db = new TravelDatabase();
-  const inbox = new WebhookInbox(db, { clock: () => currentTime, leaseMs: 1000 });
+  const inbox = new WebhookInbox(db, { clock: () => currentTime, leaseMs: 1000, retryBackoffMs: 0 });
   inbox.enqueue(event);
 
   const firstClaim = inbox.claimNext();
@@ -69,23 +88,40 @@ test("reclaims a processing event after its lease expires", () => {
   db.close();
 });
 
-test("dead-letters an expired third-attempt lease instead of retrying a fourth time", () => {
+test("does not let a stale worker complete a reclaimed event", () => {
   let currentTime = "2026-09-09T00:00:01.000Z";
   const db = new TravelDatabase();
   const inbox = new WebhookInbox(db, { clock: () => currentTime, leaseMs: 1000 });
   inbox.enqueue(event);
-  assert.ok(inbox.claimNext());
-  inbox.fail(event.eventId, "failure 1");
-  assert.ok(inbox.claimNext());
-  inbox.fail(event.eventId, "failure 2");
-  assert.ok(inbox.claimNext());
+  const first = inbox.claimNext();
   currentTime = "2026-09-09T00:00:02.001Z";
+  const second = inbox.claimNext();
+  assert.equal(inbox.complete(event.eventId, firstLeaseToken(inbox, first)), false);
+  assert.equal(inbox.complete(event.eventId, firstLeaseToken(inbox, second)), true);
+  db.close();
+});
+
+test("dead-letters an expired third-attempt lease instead of retrying a fourth time", () => {
+  let currentTime = "2026-09-09T00:00:01.000Z";
+  const db = new TravelDatabase();
+  const inbox = new WebhookInbox(db, { clock: () => currentTime, leaseMs: 0, retryBackoffMs: 0 });
+  inbox.enqueue(event);
+  const first = inbox.claimNext();
+  inbox.fail(event.eventId, firstLeaseToken(inbox, first), "failure 1");
+  const second = inbox.claimNext();
+  inbox.fail(event.eventId, firstLeaseToken(inbox, second), "failure 2");
+  assert.ok(inbox.claimNext());
 
   assert.equal(inbox.claimNext(), null);
   assert.equal(inbox.get(event.eventId)?.outcome, "dead_letter");
   assert.equal(inbox.get(event.eventId)?.attempts, 3);
   db.close();
 });
+
+function firstLeaseToken(inbox: WebhookInbox, claimed: ReturnType<WebhookInbox["claimNext"]>): string {
+  assert.ok(claimed?.leaseToken);
+  return claimed.leaseToken;
+}
 
 test("completing an event removes its reply token and purges old raw payload", async () => {
   const db = new TravelDatabase();
