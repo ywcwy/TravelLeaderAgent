@@ -73,16 +73,26 @@ export class TravelService {
     if (!options.idempotencyKey.trim()) throw new InvalidSourceError("A Source Idempotency Key is required.");
 
     const sourceId = randomUUID();
-    const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO sources (id, trip_id, type, idempotency_key, content, source_time, created_at) VALUES (?, ?, 'markdown', ?, ?, ?, ?)`)
-      .run(sourceId, tripId, options.idempotencyKey, markdown, options.sourceTime ?? now(), now());
-    const persistedSource = insert.changes === 1
-      ? { id: sourceId }
-      : this.db.connection.prepare(`SELECT id FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, options.idempotencyKey) as { id: string } | undefined;
-    if (!persistedSource) throw new InvalidSourceError("The Source could not be persisted.");
-    if (insert.changes === 0) return this.getSourceImportResult(persistedSource.id);
+    this.db.connection.exec("BEGIN");
+    try {
+      const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO sources (id, trip_id, type, idempotency_key, content, source_time, created_at) VALUES (?, ?, 'markdown', ?, ?, ?, ?)`)
+        .run(sourceId, tripId, options.idempotencyKey, markdown, options.sourceTime ?? now(), now());
+      const persistedSource = insert.changes === 1
+        ? { id: sourceId }
+        : this.db.connection.prepare(`SELECT id FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, options.idempotencyKey) as { id: string } | undefined;
+      if (!persistedSource) throw new InvalidSourceError("The Source could not be persisted.");
+      if (insert.changes === 0) {
+        this.db.connection.exec("COMMIT");
+        return this.getSourceImportResult(persistedSource.id);
+      }
 
-    const proposalIds = this.extractMarkdown(markdown).map((item) => this.createProposal(tripId, persistedSource.id, item));
-    return { sourceId, proposalIds };
+      const proposalIds = this.extractMarkdown(markdown).map((item) => this.createProposal(tripId, persistedSource.id, item));
+      this.db.connection.exec("COMMIT");
+      return { sourceId, proposalIds };
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   createProposal(tripId: string, sourceId: string, item: ExtractedTripItem): string {
@@ -133,7 +143,10 @@ export class TravelService {
     const pending = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' ORDER BY deadline_at, title`).all(tripId) as unknown as ProposalRow[];
     const proposals = pending.map(toProposal);
     const sourceIds = (this.db.connection.prepare(`SELECT id FROM sources WHERE trip_id = ?`).all(tripId) as unknown as Array<{ id: string }>).map((source) => source.id);
-    const proposalSourceIds = new Set(proposals.map((proposal) => proposal.sourceId));
+    const proposalSourceIds = new Set(
+      (this.db.connection.prepare(`SELECT source_id FROM proposals WHERE trip_id = ?`).all(tripId) as unknown as Array<{ source_id: string }>)
+        .map((proposal) => proposal.source_id),
+    );
     const issues = buildReviewIssues(proposals, confirmed);
     for (const sourceId of sourceIds) {
       if (!proposalSourceIds.has(sourceId)) {

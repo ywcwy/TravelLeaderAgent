@@ -48,6 +48,7 @@ test("a System Administrator bootstraps one Active Trip and archives its mutatio
   assert.throws(() => service.reactivateTrip("U-member", trip.id), PermissionError);
   service.reactivateTrip("system-admin", trip.id);
   assert.equal(service.confirmProposal(trip.id, "U-owner", imported.proposalIds[0]).title, "住宿");
+  assert.equal(service.reviewTrip(trip.id).issues.some((issue) => issue.code === "source_unparsed" && issue.sourceId === imported.sourceId), false);
   db.close();
 });
 
