@@ -159,8 +159,8 @@ test("an owner resolves mutually exclusive proposals through a Decision", () => 
   service.addMember("system-admin", tripId, "owner", "Owner", "owner");
   service.addMember("system-admin", tripId, "member", "Member", "member");
   const imported = service.importMarkdown(tripId, `
-- [conflicted] Carmel 住宿 | 2026-10-16T15:00:00-07:00 | Carmel
-- [conflicted] Monterey 住宿 | 2026-10-16T15:00:00-07:00 | Monterey
+- [provisional] Carmel 住宿 | 2026-10-16T15:00:00-07:00 | Carmel
+- [provisional] Monterey 住宿 | 2026-10-16T15:00:00-07:00 | Monterey
 `, { idempotencyKey: "test:decision:1" });
   const otherTripId = bootstrapActiveTrip(service, "C-decision-2");
   const otherTripProposal = service.importMarkdown(otherTripId, "- [conflicted] 其他旅程住宿 | 2026-10-16T15:00:00-07:00 | Oakland", { idempotencyKey: "test:decision:other-trip" });
@@ -171,6 +171,7 @@ test("an owner resolves mutually exclusive proposals through a Decision", () => 
 
   const decision = service.createDecision(tripId, "owner", "10/16 住宿地點", imported.proposalIds);
   assert.equal(decision.status, "open");
+  assert.throws(() => service.createDecision(tripId, "owner", "重複決策", imported.proposalIds), ConflictError);
   assert.throws(
     () => service.resolveDecision(tripId, "member", decision.id, imported.proposalIds[0]),
     PermissionError,
