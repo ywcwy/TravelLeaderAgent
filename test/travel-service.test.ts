@@ -190,3 +190,42 @@ test("an owner resolves mutually exclusive proposals through a Decision", () => 
   assert.equal(review.conflicts.length, 0);
   db.close();
 });
+
+test("an owner confirms a Replacement Proposal without losing itinerary history", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-replacement-1");
+  service.addMember("system-admin", tripId, "owner", "Owner", "owner");
+  const source = service.importMarkdown(tripId, "- [provisional] Carmel 住宿 | 2026-10-16T15:00:00-07:00 | Carmel", { idempotencyKey: "test:replacement:source" });
+  const predecessor = service.confirmProposal(tripId, "owner", source.proposalIds[0]);
+  const otherTripId = bootstrapActiveTrip(service, "C-replacement-2");
+  service.addMember("system-admin", otherTripId, "owner", "Owner", "owner");
+  const otherSource = service.importMarkdown(otherTripId, "- [provisional] 其他旅程住宿 | 2026-10-16T15:00:00-07:00 | Oakland", { idempotencyKey: "test:replacement:other-source" });
+  const otherPredecessor = service.confirmProposal(otherTripId, "owner", otherSource.proposalIds[0]);
+  assert.throws(
+    () => service.createReplacementProposal(tripId, otherSource.sourceId, predecessor.id, { kind: "lodging", title: "跨旅程替代", status: "provisional" }),
+    ConflictError,
+  );
+  assert.throws(
+    () => service.createReplacementProposal(tripId, source.sourceId, otherPredecessor.id, { kind: "lodging", title: "跨旅程替代", status: "provisional" }),
+    ConflictError,
+  );
+
+  const replacement = service.createReplacementProposal(tripId, source.sourceId, predecessor.id, {
+    kind: "lodging",
+    title: "Monterey 住宿",
+    status: "provisional",
+    startsAt: "2026-10-16T15:00:00-07:00",
+    location: "Monterey",
+  });
+  const successor = service.confirmProposal(tripId, "owner", replacement);
+
+  assert.notEqual(successor.id, predecessor.id);
+  assert.equal(successor.title, "Monterey 住宿");
+  assert.equal(successor.replacementForItemId, predecessor.id);
+  const review = service.reviewTrip(tripId);
+  assert.deepEqual(review.confirmed.map((item) => item.title), ["Monterey 住宿"]);
+  assert.deepEqual(review.cancelled.map((item) => item.title), ["Carmel 住宿"]);
+  assert.equal(review.cancelled[0].status, "cancelled");
+  db.close();
+});
