@@ -27,6 +27,11 @@ export interface ExtractedTripItem {
   sourceExcerpt?: string;
 }
 
+export interface SourceImportOptions {
+  idempotencyKey: string;
+  sourceTime?: string;
+}
+
 export interface TripItem extends ExtractedTripItem {
   id: string;
   sourceId: string;

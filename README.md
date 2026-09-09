@@ -26,3 +26,7 @@ The fields are `status | title | startsAt | location | notes`, followed by optio
 `timezone=` and `deadline=` metadata. Supported statuses are `confirmed`,
 `provisional`, `open_decision`, and `conflicted`. The original line and its line
 number are stored with every proposal as evidence.
+
+Every import also supplies a provider-specific Source Idempotency Key. Repeating
+an import with the same key returns the original Source and Proposal IDs; a new key
+creates a separate Source even when the Markdown is identical.

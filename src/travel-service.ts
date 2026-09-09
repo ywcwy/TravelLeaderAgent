@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
-import type { ExtractedTripItem, MemberRole, Proposal, ReviewIssue, TravelGroup, Trip, TripItem, TripItemStatus, TripReview } from "./domain.ts";
+import type { ExtractedTripItem, MemberRole, Proposal, ReviewIssue, SourceImportOptions, TravelGroup, Trip, TripItem, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -9,6 +9,7 @@ export class NotFoundError extends Error {}
 export class ConflictError extends Error {}
 export class TripNotActiveError extends Error {}
 export class InvalidTimezoneError extends Error {}
+export class InvalidSourceError extends Error {}
 
 export class TravelService {
   private readonly db: TravelDatabase;
@@ -67,11 +68,19 @@ export class TravelService {
       .run(tripId, lineUserId, displayName, role);
   }
 
-  importMarkdown(tripId: string, markdown: string, sourceTime = now()): { sourceId: string; proposalIds: string[] } {
+  importMarkdown(tripId: string, markdown: string, options: SourceImportOptions): { sourceId: string; proposalIds: string[] } {
     this.requireActiveTrip(tripId);
+    if (!options.idempotencyKey.trim()) throw new InvalidSourceError("A Source Idempotency Key is required.");
+
+    const existing = this.db.connection.prepare(`SELECT id FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, options.idempotencyKey) as { id: string } | undefined;
+    if (existing) {
+      const proposalIds = (this.db.connection.prepare(`SELECT id FROM proposals WHERE source_id = ? ORDER BY created_at, id`).all(existing.id) as unknown as Array<{ id: string }>).map((proposal) => proposal.id);
+      return { sourceId: existing.id, proposalIds };
+    }
+
     const sourceId = randomUUID();
     this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, idempotency_key, content, source_time, created_at) VALUES (?, ?, 'markdown', ?, ?, ?, ?)`)
-      .run(sourceId, tripId, `legacy-import:${randomUUID()}`, markdown, sourceTime, now());
+      .run(sourceId, tripId, options.idempotencyKey, markdown, options.sourceTime ?? now(), now());
 
     const proposalIds = this.extractMarkdown(markdown).map((item) => this.createProposal(tripId, sourceId, item));
     return { sourceId, proposalIds };
