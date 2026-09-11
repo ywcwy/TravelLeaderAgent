@@ -21,7 +21,11 @@ It requires `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`,
 settings include `TRAVEL_DATABASE_PATH` (default `./data/travel.sqlite`),
 `PORT` (default `3000`), `WEBHOOK_BODY_LIMIT_BYTES` (default `262144`),
 `WEBHOOK_REQUEST_TIMEOUT_MS` (default `10000`), and `TRAVEL_WORKER_POLL_MS`
-(default `1000`). The runtime exposes `POST /webhooks/line` and `GET /healthz`.
+(default `1000`). The runtime exposes `POST /webhooks/line` (also accepted as
+`POST /line/webhook`) and `GET /healthz`.
+
+For local development, put these variables in a root `.env` file. `npm run start`
+loads it automatically; never commit that file because it contains credentials.
 
 The implementation uses Node.js' built-in `node:sqlite` module. Node 22.5 or newer
 is required.

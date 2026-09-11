@@ -50,7 +50,7 @@ export class LineWebhookHttpServer {
         this.sendJson(response, healthy ? 200 : 503, healthy ? { status: "ok", database: "ok" } : { status: "unavailable", database: "unavailable" });
         return;
       }
-      if (request.method !== "POST" || request.url !== "/webhooks/line") { this.sendJson(response, 404, { error: "not_found" }); return; }
+      if (request.method !== "POST" || !["/webhooks/line", "/line/webhook"].includes(request.url ?? "")) { this.sendJson(response, 404, { error: "not_found" }); return; }
       const rawBody = await this.readBody(request);
       const signature = this.header(request, "x-line-signature");
       const result = this.options.ingress.handle({ rawBody, signature });
