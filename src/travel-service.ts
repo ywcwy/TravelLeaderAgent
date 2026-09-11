@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
-import type { Decision, ExtractedTripItem, MemberRole, Proposal, ReviewIssue, SourceImportOptions, TravelGroup, Trip, TripItem, TripItemStatus, TripReview } from "./domain.ts";
+import type { Decision, ExtractedTripItem, MemberRole, Proposal, ReviewIssue, Source, SourceImportOptions, TravelGroup, Trip, TripItem, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -98,8 +98,9 @@ export class TravelService {
     const sourceId = randomUUID();
     this.db.connection.exec("BEGIN");
     try {
-      const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO sources (id, trip_id, type, idempotency_key, content, source_time, created_at) VALUES (?, ?, 'markdown', ?, ?, ?, ?)`)
-        .run(sourceId, tripId, options.idempotencyKey, markdown, options.sourceTime ?? now(), now());
+      const provenance = options.provenance;
+      const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO sources (id, trip_id, type, idempotency_key, content, source_time, provider, provider_message_id, provider_group_id, provider_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(sourceId, tripId, options.type ?? "markdown", options.idempotencyKey, markdown, options.sourceTime ?? now(), provenance?.provider ?? null, provenance?.messageId ?? null, provenance?.groupId ?? null, provenance?.userId ?? null, now());
       const persistedSource = insert.changes === 1
         ? { id: sourceId }
         : this.db.connection.prepare(`SELECT id FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, options.idempotencyKey) as { id: string } | undefined;
@@ -116,6 +117,13 @@ export class TravelService {
       this.db.connection.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  getSource(sourceId: string): Source | null {
+    const row = this.db.connection.prepare(`SELECT * FROM sources WHERE id = ?`).get(sourceId) as SourceRow | undefined;
+    if (!row) return null;
+    return { id: row.id, tripId: row.trip_id, type: row.type, idempotencyKey: row.idempotency_key, content: row.content, sourceTime: row.source_time,
+      provenance: row.provider ? { provider: row.provider, messageId: row.provider_message_id ?? "", ...(row.provider_group_id ? { groupId: row.provider_group_id } : {}), ...(row.provider_user_id ? { userId: row.provider_user_id } : {}) } : null };
   }
 
   createProposal(tripId: string, sourceId: string, item: ExtractedTripItem): string {
@@ -321,6 +329,8 @@ export class TravelService {
 interface TravelGroupRow {
   id: string; line_group_id: string; display_name: string;
 }
+
+interface SourceRow { id: string; trip_id: string; type: string; idempotency_key: string; content: string; source_time: string; provider: string | null; provider_message_id: string | null; provider_group_id: string | null; provider_user_id: string | null; }
 
 interface TripRow {
   id: string; travel_group_id: string; title: string; timezone: string; status: "active" | "archived";
