@@ -151,6 +151,17 @@ It tracks acknowledgement, processing attempts, rejection or completion, and
 may retain the raw payload only during its retention window.
 _Avoid_: Source, message queue
 
+**LINE Reply Token**:
+A one-time LINE credential that permits a short acknowledgement for one Webhook
+Event. It is delivery machinery, not itinerary evidence, and never belongs in a
+Source.
+_Avoid_: Push token, Source credential
+
+**Webhook Runtime**:
+The deployed boundary that receives signed LINE Webhook Events, persists them in
+the Webhook Inbox, and runs the worker that turns accepted events into Sources.
+_Avoid_: LINE bot logic, chat server
+
 **Processing Lease**:
 A bounded claim held by one worker while processing a Webhook Inbox Event. An
 expired lease allows another worker to recover the event without creating a
