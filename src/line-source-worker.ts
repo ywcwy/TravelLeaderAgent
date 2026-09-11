@@ -31,7 +31,7 @@ export class LineSourceWorker {
       run = this.processClaimedEvent();
     } catch (error) {
       this.processing = false;
-      console.error("LINE source worker failed to claim an Inbox event", error);
+      process.stderr.write(`line_source_worker_claim_failed errorType=${error instanceof Error ? error.constructor.name : "UnknownError"}\n`);
       return Promise.resolve("failed");
     }
     const tracked = run.finally(() => { this.processing = false; this.active = null; });
