@@ -81,3 +81,31 @@ test("polls the Inbox one event at a time and stops cleanly", async () => {
   assert.deepEqual(replies, ["reply-poll"]);
   db.close();
 });
+
+test("guards concurrent processNext calls to one in-flight event", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-concurrent", "Concurrent 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Concurrent 旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  const first = { eventId: "01JLINECONCURRENT000000000", messageId: "message-concurrent-1", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "- [provisional] 第一筆 | 2026-10-16 | 台北", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-1" };
+  const second = { ...first, eventId: "01JLINECONCURRENT000000001", messageId: "message-concurrent-2", text: "- [provisional] 第二筆 | 2026-10-17 | 台北", replyToken: "reply-2" };
+  inbox.enqueue(first);
+  inbox.enqueue(second);
+  let release!: () => void;
+  let replyCalls = 0;
+  const worker = new LineSourceWorker(inbox, travel, async () => { replyCalls += 1; if (replyCalls === 1) await new Promise<void>((resolve) => { release = resolve; }); });
+  const firstRun = worker.processNext();
+  const secondRun = worker.processNext();
+  assert.equal(inbox.get(first.eventId)?.status, "processing");
+  assert.equal(inbox.get(second.eventId)?.status, "pending");
+  for (let attempt = 0; attempt < 100 && !release; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.equal(inbox.get(first.eventId)?.status, "processing");
+  assert.ok(release);
+  release();
+  assert.equal(await firstRun, "processed");
+  assert.equal(await secondRun, "processed");
+  assert.equal(inbox.get(second.eventId)?.status, "pending");
+  assert.equal(await worker.processNext(), "processed");
+  db.close();
+});

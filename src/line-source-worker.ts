@@ -9,12 +9,13 @@ export class LineSourceWorker {
   private readonly reply: LineReplySender;
   private timer: ReturnType<typeof setInterval> | null = null;
   private active: Promise<"processed" | "failed" | "idle"> | null = null;
+  private processing = false;
   constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender) { this.inbox = inbox; this.travel = travel; this.reply = reply; }
 
   start(intervalMs = 1_000): void {
     if (this.timer) return;
-    void this.tick();
-    this.timer = setInterval(() => { void this.tick(); }, intervalMs);
+    void this.processNext();
+    this.timer = setInterval(() => { void this.processNext(); }, intervalMs);
   }
 
   async stop(): Promise<void> {
@@ -23,6 +24,15 @@ export class LineSourceWorker {
   }
 
   processNext(): Promise<"processed" | "failed" | "idle"> {
+    if (this.processing) return this.active ?? Promise.resolve("idle");
+    this.processing = true;
+    const run = this.processClaimedEvent();
+    const tracked = run.finally(() => { this.processing = false; this.active = null; });
+    this.active = tracked;
+    return tracked;
+  }
+
+  private processClaimedEvent(): Promise<"processed" | "failed" | "idle"> {
     const event = this.inbox.claimNext();
     if (!event) return Promise.resolve("idle");
     const leaseToken = event.leaseToken ?? "";
@@ -49,10 +59,4 @@ export class LineSourceWorker {
     });
   }
 
-  private async tick(): Promise<void> {
-    if (this.active) return;
-    const run = Promise.resolve().then(() => this.processNext());
-    this.active = run;
-    try { await run; } finally { if (this.active === run) this.active = null; }
-  }
 }
