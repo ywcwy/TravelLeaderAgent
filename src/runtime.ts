@@ -35,8 +35,8 @@ export class TravelLeaderRuntime {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
-    await this.poller?.stop();
     await this.server.stop();
+    await this.poller?.stop();
     this.database.close();
   }
 }

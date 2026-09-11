@@ -71,8 +71,9 @@ export class LineWebhookHttpServer {
       const finish = (callback: () => void) => { if (!settled) { settled = true; request.setTimeout(0); callback(); } };
       request.setTimeout(this.options.requestTimeoutMs, () => finish(() => reject(new RequestTimeoutError())));
       request.on("data", (chunk: Buffer | string) => {
+        if (settled) return;
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk); length += buffer.length;
-        if (length > this.options.bodyLimitBytes) { request.destroy(); finish(() => reject(new BodyLimitError())); return; }
+        if (length > this.options.bodyLimitBytes) { request.resume(); finish(() => reject(new BodyLimitError())); return; }
         chunks.push(buffer);
       });
       request.on("end", () => finish(() => resolve(Buffer.concat(chunks).toString("utf8"))));

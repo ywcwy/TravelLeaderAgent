@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import test from "node:test";
 import { LineWebhookHttpServer } from "../src/line-webhook-server.ts";
 import type { LineWebhookRequest, LineWebhookResponse } from "../src/line-webhook-handler.ts";
@@ -36,6 +37,16 @@ test("maps ingress status and rejects oversized webhook bodies", async () => {
   });
   const baseUrl = await listen(server);
   assert.equal((await fetch(`${baseUrl}/webhooks/line`, { method: "POST", body: "123456789" })).status, 413);
+  const chunkedStatus = await new Promise<number>((resolve, reject) => {
+    const request = httpRequest(`${baseUrl}/webhooks/line`, { method: "POST", headers: { "transfer-encoding": "chunked" } }, (response) => {
+      response.resume();
+      response.on("end", () => resolve(response.statusCode ?? 0));
+    });
+    request.on("error", reject);
+    request.write("1234");
+    request.end("56789");
+  });
+  assert.equal(chunkedStatus, 413);
   assert.equal((await fetch(`${baseUrl}/webhooks/line`, { method: "POST", body: "{}" })).status, 401);
   assert.equal((await fetch(`${baseUrl}/webhooks/line`, { method: "POST", body: "{}" })).status, 503);
   assert.equal((await fetch(`${baseUrl}/unknown`)).status, 404);

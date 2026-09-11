@@ -29,3 +29,17 @@ test("starts the provider-neutral runtime with an in-memory database", async () 
   assert.equal(address.host, "0.0.0.0");
   await runtime.stop();
 });
+
+test("stops accepting HTTP before stopping the poller", async () => {
+  let releasePoller!: () => void;
+  let pollerStopping!: () => void;
+  const stopStarted = new Promise<void>((resolve) => { pollerStopping = resolve; });
+  const poller = { start: () => undefined, stop: () => new Promise<void>((resolve) => { pollerStopping(); releasePoller = resolve; }) };
+  const runtime = new TravelLeaderRuntime(loadRuntimeConfig({ ...required, TRAVEL_DATABASE_PATH: ":memory:", PORT: "0" }), poller);
+  const address = await runtime.start();
+  const stopping = runtime.stop();
+  await stopStarted;
+  await assert.rejects(fetch(`http://${address.host}:${address.port}/healthz`));
+  releasePoller();
+  await stopping;
+});
