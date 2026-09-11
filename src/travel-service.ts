@@ -284,7 +284,7 @@ export class TravelService {
 
   private extractMarkdown(markdown: string): ExtractedTripItem[] {
     return markdown.split(/\r?\n/).flatMap((line, index) => {
-      const match = line.match(/^\s*-\s*\[(confirmed|provisional|open_decision|conflicted)\]\s*(.+)$/i);
+      const match = line.match(/^\s*(?:@leaderAgent\s*)?-\s*\[(confirmed|provisional|open_decision|conflicted)\]\s*(.+)$/i);
       if (!match) return [];
       const [, status, body] = match;
       const parts = body.split("|").map((part) => part.trim());

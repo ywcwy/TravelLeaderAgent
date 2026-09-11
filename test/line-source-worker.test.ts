@@ -17,9 +17,10 @@ test("ingests a mentioned LINE group message into one Source with provenance", a
   const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
   const replies: Array<{ token: string; text: string }> = [];
   const worker = new LineSourceWorker(inbox, travel, async (token, text) => { replies.push({ token, text }); });
-  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JLINEE2E000000000000000000", replyToken: "reply-e2e", source: { type: "group", groupId: "C-end-to-end", userId: "U-member" }, message: { type: "text", id: "message-e2e", text: "- [provisional] 住宿 | 2026-10-16 | 台北", mention: { mentionees: [{ type: "user", userId: "U-bot" }] } } }] });
+  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JLINEE2E000000000000000000", replyToken: "reply-e2e", source: { type: "group", groupId: "C-end-to-end", userId: "U-member" }, message: { type: "text", id: "message-e2e", text: "@leaderAgent - [provisional] 住宿 | 2026-10-16 | 台北", mention: { mentionees: [{ type: "user", userId: "U-bot" }] } } }] });
   const response = new LineWebhookIngress(handler, inbox).handle({ rawBody, signature: createHmac("sha256", "secret").update(rawBody).digest("base64") });
   assert.equal(response.status, 200);
+  assert.deepEqual(response.replies, []);
   assert.equal(await worker.processNext(), "processed");
   assert.equal(await worker.processNext(), "idle");
 
@@ -29,7 +30,7 @@ test("ingests a mentioned LINE group message into one Source with provenance", a
   const review = travel.reviewTrip(trip.id);
   assert.equal(review.provisional.length, 1);
   const source = travel.getSource(review.provisional[0].sourceId);
-  assert.deepEqual(source, { id: source?.id, tripId: trip.id, type: "line_text", idempotencyKey: "01JLINEE2E000000000000000000", content: "- [provisional] 住宿 | 2026-10-16 | 台北", sourceTime: "2026-09-11T00:00:00.000Z", provenance: { provider: "line", messageId: "message-e2e", groupId: "C-end-to-end", userId: "U-member" } });
+  assert.deepEqual(source, { id: source?.id, tripId: trip.id, type: "line_text", idempotencyKey: "01JLINEE2E000000000000000000", content: "@leaderAgent - [provisional] 住宿 | 2026-10-16 | 台北", sourceTime: "2026-09-11T00:00:00.000Z", provenance: { provider: "line", messageId: "message-e2e", groupId: "C-end-to-end", userId: "U-member" } });
   assert.deepEqual(replies, [{ token: "reply-e2e", text: "已收到，等待 Decision Owner 確認。" }]);
   assert.equal(travel.isActiveTripMember(trip.id, "U-member"), true);
   db.close();
