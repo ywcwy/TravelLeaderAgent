@@ -25,7 +25,7 @@ export interface AcceptedLineEvent {
 }
 
 export interface LineWebhookResponse {
-  status: 200 | 400 | 401;
+  status: 200 | 400 | 401 | 503;
   acceptedEvents: AcceptedLineEvent[];
   replies: LineReplyIntent[];
 }

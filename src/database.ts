@@ -108,6 +108,28 @@ export class TravelDatabase {
         content TEXT NOT NULL,
         sent_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS webhook_inbox_events (
+        event_id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        group_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        trip_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        raw_payload TEXT,
+        reply_token TEXT,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+        outcome TEXT NOT NULL CHECK (outcome IN ('accepted', 'processed', 'retryable_failure', 'dead_letter')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        lease_until TEXT,
+        lease_token TEXT,
+        next_attempt_at TEXT,
+        completed_at TEXT,
+        duplicate_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
     `);
     const tripItemColumns = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
     if (!tripItemColumns.some((column) => column.name === "replacement_for_item_id")) {
@@ -117,6 +139,9 @@ export class TravelDatabase {
     if (!memberColumns.some((column) => column.name === "revoked_at")) {
       this.connection.exec(`ALTER TABLE members ADD COLUMN revoked_at TEXT`);
     }
+    const inboxColumns = this.connection.prepare(`PRAGMA table_info(webhook_inbox_events)`).all() as Array<{ name: string }>;
+    if (!inboxColumns.some((column) => column.name === "lease_token")) this.connection.exec(`ALTER TABLE webhook_inbox_events ADD COLUMN lease_token TEXT`);
+    if (!inboxColumns.some((column) => column.name === "next_attempt_at")) this.connection.exec(`ALTER TABLE webhook_inbox_events ADD COLUMN next_attempt_at TEXT`);
   }
 
   close(): void {
