@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { loadRuntimeConfig } from "../src/runtime-config.ts";
-import { createRuntime } from "../src/runtime.ts";
+import { TravelLeaderRuntime } from "../src/runtime.ts";
 
 const required = {
   LINE_CHANNEL_SECRET: "secret",
@@ -24,7 +24,7 @@ test("fails fast and names missing variables without including secret values", (
 });
 
 test("starts the provider-neutral runtime with an in-memory database", async () => {
-  const runtime = createRuntime({ ...required, TRAVEL_DATABASE_PATH: ":memory:", PORT: "0" });
+  const runtime = new TravelLeaderRuntime({ ...loadRuntimeConfig({ ...required, TRAVEL_DATABASE_PATH: ":memory:", PORT: "0" }) });
   const address = await runtime.start();
   assert.equal(address.host, "0.0.0.0");
   await runtime.stop();

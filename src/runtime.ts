@@ -42,5 +42,7 @@ export class TravelLeaderRuntime {
 }
 
 export function createRuntime(environment: Record<string, string | undefined> = process.env): TravelLeaderRuntime {
-  return new TravelLeaderRuntime(loadRuntimeConfig(environment));
+  const config = loadRuntimeConfig(environment);
+  if (config.databasePath === ":memory:") throw new Error("TRAVEL_DATABASE_PATH must use persistent storage for the deployable runtime.");
+  return new TravelLeaderRuntime(config);
 }
