@@ -10,6 +10,20 @@ npm test
 npm run demo
 ```
 
+The deployable webhook runtime starts with:
+
+```sh
+npm run start
+```
+
+It requires `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`,
+`LINE_OFFICIAL_ACCOUNT_USER_ID`, and `TRAVEL_SYSTEM_ADMINISTRATOR_ID`. Optional
+settings include `TRAVEL_DATABASE_PATH` (default `./data/travel.sqlite`),
+`PORT` (default `3000`), `WEBHOOK_BODY_LIMIT_BYTES` (default `262144`),
+`WEBHOOK_REQUEST_TIMEOUT_MS` (default `10000`), and `TRAVEL_WORKER_POLL_MS`
+(default `1000`, consumed when the Inbox worker is wired in #18). The runtime
+exposes `POST /webhooks/line` and `GET /healthz`.
+
 The implementation uses Node.js' built-in `node:sqlite` module. Node 22.5 or newer
 is required.
 
