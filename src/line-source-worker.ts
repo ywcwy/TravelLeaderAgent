@@ -26,7 +26,14 @@ export class LineSourceWorker {
   processNext(): Promise<"processed" | "failed" | "idle"> {
     if (this.processing) return this.active ?? Promise.resolve("idle");
     this.processing = true;
-    const run = this.processClaimedEvent();
+    let run: Promise<"processed" | "failed" | "idle">;
+    try {
+      run = this.processClaimedEvent();
+    } catch (error) {
+      this.processing = false;
+      console.error("LINE source worker failed to claim an Inbox event", error);
+      return Promise.resolve("failed");
+    }
     const tracked = run.finally(() => { this.processing = false; this.active = null; });
     this.active = tracked;
     return tracked;
