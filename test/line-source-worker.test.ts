@@ -64,3 +64,20 @@ test("does not send a consumed reply token again after worker failure", async ()
   assert.deepEqual(replies, ["reply-retry"]);
   db.close();
 });
+
+test("polls the Inbox one event at a time and stops cleanly", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-poll", "Polling 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Polling 旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEPOLL0000000000000000", messageId: "message-poll", groupId: "C-poll", userId: "U-member", tripId: trip.id, text: "- [provisional] 住宿 | 2026-10-16 | 台北", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-poll" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (token) => { replies.push(token); await new Promise((resolve) => setTimeout(resolve, 2)); });
+  worker.start(1);
+  for (let attempt = 0; attempt < 100 && inbox.get("01JLINEPOLL0000000000000000")?.status !== "completed"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 2));
+  await worker.stop();
+  assert.equal(inbox.get("01JLINEPOLL0000000000000000")?.status, "completed");
+  assert.deepEqual(replies, ["reply-poll"]);
+  db.close();
+});
