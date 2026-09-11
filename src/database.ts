@@ -38,6 +38,10 @@ export class TravelDatabase {
         idempotency_key TEXT NOT NULL,
         content TEXT NOT NULL,
         source_time TEXT NOT NULL,
+        provider TEXT,
+        provider_message_id TEXT,
+        provider_group_id TEXT,
+        provider_user_id TEXT,
         created_at TEXT NOT NULL,
         UNIQUE (trip_id, idempotency_key)
       );
@@ -142,6 +146,11 @@ export class TravelDatabase {
     const inboxColumns = this.connection.prepare(`PRAGMA table_info(webhook_inbox_events)`).all() as Array<{ name: string }>;
     if (!inboxColumns.some((column) => column.name === "lease_token")) this.connection.exec(`ALTER TABLE webhook_inbox_events ADD COLUMN lease_token TEXT`);
     if (!inboxColumns.some((column) => column.name === "next_attempt_at")) this.connection.exec(`ALTER TABLE webhook_inbox_events ADD COLUMN next_attempt_at TEXT`);
+    const sourceColumns = this.connection.prepare(`PRAGMA table_info(sources)`).all() as Array<{ name: string }>;
+    if (!sourceColumns.some((column) => column.name === "provider")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider TEXT`);
+    if (!sourceColumns.some((column) => column.name === "provider_message_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_message_id TEXT`);
+    if (!sourceColumns.some((column) => column.name === "provider_group_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_group_id TEXT`);
+    if (!sourceColumns.some((column) => column.name === "provider_user_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_user_id TEXT`);
   }
 
   close(): void {

@@ -30,6 +30,25 @@ export interface ExtractedTripItem {
 export interface SourceImportOptions {
   idempotencyKey: string;
   sourceTime?: string;
+  type?: string;
+  provenance?: SourceProvenance;
+}
+
+export interface SourceProvenance {
+  provider: string;
+  messageId: string;
+  groupId?: string;
+  userId?: string;
+}
+
+export interface Source {
+  id: string;
+  tripId: string;
+  type: string;
+  idempotencyKey: string;
+  content: string;
+  sourceTime: string;
+  provenance: SourceProvenance | null;
 }
 
 export interface TripItem extends ExtractedTripItem {
