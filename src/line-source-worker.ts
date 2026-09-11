@@ -10,10 +10,21 @@ export class LineSourceWorker {
   constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender) { this.inbox = inbox; this.travel = travel; this.reply = reply; }
 
   processNext(): Promise<"processed" | "failed" | "idle"> {
-    return this.inbox.processNext(async (event) => {
-      this.importSource(event);
-      if (event.replyToken) await this.reply(event.replyToken, "已收到，等待 Decision Owner 確認。");
-    });
+    const event = this.inbox.claimNext();
+    if (!event) return Promise.resolve("idle");
+    const leaseToken = event.leaseToken ?? "";
+    const replyToken = this.inbox.consumeReplyToken(event.eventId, leaseToken);
+    return (async () => {
+      try {
+        this.importSource(event);
+        if (replyToken) await this.reply(replyToken, "已收到，等待 Decision Owner 確認。");
+        this.inbox.complete(event.eventId, leaseToken);
+        return "processed" as const;
+      } catch (error) {
+        this.inbox.fail(event.eventId, leaseToken, error);
+        return "failed" as const;
+      }
+    })();
   }
 
   private importSource(event: WebhookInboxEvent): void {

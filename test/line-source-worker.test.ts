@@ -48,3 +48,19 @@ test("keeps non-Markdown LINE text as a Source with a review issue", async () =>
   assert.equal(travel.reviewTrip(trip.id).issues.some((issue) => issue.code === "source_unparsed"), true);
   db.close();
 });
+
+test("does not send a consumed reply token again after worker failure", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-retry", "Retry 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Retry 旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", leaseMs: 0, retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINERETRY000000000000000", messageId: "message-retry", groupId: "C-retry", userId: "U-member", tripId: trip.id, text: "- [provisional] 住宿 | 2026-10-16 | 台北", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-retry" });
+  let attempts = 0;
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (token) => { replies.push(token); attempts += 1; if (attempts === 1) throw new Error("reply failed"); });
+  assert.equal(await worker.processNext(), "failed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.deepEqual(replies, ["reply-retry"]);
+  db.close();
+});
