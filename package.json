@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node --experimental-strip-types --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "demo": "node --experimental-strip-types src/demo.ts"
+    "demo": "node --experimental-strip-types src/demo.ts",
+    "start": "node --experimental-strip-types src/start.ts"
   },
   "devDependencies": {
     "@types/node": "^26.5.0",
