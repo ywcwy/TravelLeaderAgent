@@ -28,6 +28,16 @@ test("serves health and forwards the raw webhook request", async () => {
   await server.stop();
 });
 
+test("accepts the legacy LINE webhook path alias", async () => {
+  const calls: string[] = [];
+  const server = new LineWebhookHttpServer({ ingress: { handle: ({ rawBody }) => { calls.push(rawBody); return { status: 200, acceptedEvents: [], replies: [] }; } } });
+  const address = await server.start(0, "127.0.0.1");
+  const response = await fetch(`http://127.0.0.1:${address.port}/line/webhook`, { method: "POST", body: "{}" });
+  await server.stop();
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, ["{}"]) ;
+});
+
 test("maps ingress status and rejects oversized webhook bodies", async () => {
   const responseStatuses: Array<200 | 400 | 401 | 503> = [401, 503];
   let index = 0;
