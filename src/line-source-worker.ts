@@ -7,9 +7,39 @@ export class LineSourceWorker {
   private readonly inbox: WebhookInbox;
   private readonly travel: TravelService;
   private readonly reply: LineReplySender;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private active: Promise<"processed" | "failed" | "idle"> | null = null;
+  private processing = false;
   constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender) { this.inbox = inbox; this.travel = travel; this.reply = reply; }
 
+  start(intervalMs = 1_000): void {
+    if (this.timer) return;
+    void this.processNext();
+    this.timer = setInterval(() => { void this.processNext(); }, intervalMs);
+  }
+
+  async stop(): Promise<void> {
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    await this.active;
+  }
+
   processNext(): Promise<"processed" | "failed" | "idle"> {
+    if (this.processing) return this.active ?? Promise.resolve("idle");
+    this.processing = true;
+    let run: Promise<"processed" | "failed" | "idle">;
+    try {
+      run = this.processClaimedEvent();
+    } catch (error) {
+      this.processing = false;
+      process.stderr.write(`line_source_worker_claim_failed errorType=${error instanceof Error ? error.constructor.name : "UnknownError"}\n`);
+      return Promise.resolve("failed");
+    }
+    const tracked = run.finally(() => { this.processing = false; this.active = null; });
+    this.active = tracked;
+    return tracked;
+  }
+
+  private processClaimedEvent(): Promise<"processed" | "failed" | "idle"> {
     const event = this.inbox.claimNext();
     if (!event) return Promise.resolve("idle");
     const leaseToken = event.leaseToken ?? "";
@@ -35,4 +65,5 @@ export class LineSourceWorker {
       provenance: { provider: "line", messageId: event.messageId, groupId: event.groupId, userId: event.userId },
     });
   }
+
 }
