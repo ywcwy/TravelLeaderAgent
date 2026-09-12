@@ -9,8 +9,9 @@ the application can stay portable across hosting providers.
 
 ## Consequences
 
-- The stable public route is `POST /webhooks/line`; `GET /healthz` exposes only
-  safe runtime and database health.
+- The smoke-test public route is `POST /line/webhook`; the original
+  `POST /webhooks/line` remains as a compatibility alias. `GET /healthz` exposes
+  only safe runtime and database health.
 - Missing credentials or failed migrations prevent startup rather than allowing
   a partially configured bot to accept traffic.
 - Reply API failures do not roll back an already-created Source and never reuse

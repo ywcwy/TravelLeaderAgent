@@ -16,7 +16,7 @@ Accepted Source event:
 1. The webhook signature is valid.
 2. The event is a text message from a LINE group.
 3. The group ID is mapped to a Travel Group with an Active Trip.
-4. Native mention metadata addresses `@leaderAgent`.
+4. Native mention metadata addresses the configured LINE Official Account.
 5. The sender is added as a `member` of that Active Trip if not already present.
 6. The event ID is used as the Source Idempotency Key.
 
