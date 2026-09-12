@@ -21,11 +21,18 @@ It requires `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`,
 settings include `TRAVEL_DATABASE_PATH` (default `./data/travel.sqlite`),
 `PORT` (default `3000`), `WEBHOOK_BODY_LIMIT_BYTES` (default `262144`),
 `WEBHOOK_REQUEST_TIMEOUT_MS` (default `10000`), and `TRAVEL_WORKER_POLL_MS`
-(default `1000`). The runtime exposes `POST /webhooks/line` (also accepted as
-`POST /line/webhook`) and `GET /healthz`.
+(default `1000`). The runtime exposes `POST /line/webhook` (with
+`/webhooks/line` retained as a compatibility alias) and `GET /healthz`.
 
 For local development, put these variables in a root `.env` file. `npm run start`
 loads it automatically; never commit that file because it contains credentials.
+
+To create the first Active Trip for a LINE group, copy its `groupId` from the
+ngrok request inspector at `http://127.0.0.1:4040`, then run:
+
+```sh
+npm run setup:trip -- Cxxxxxxxxxxxxxxxx "測試旅程" Asia/Taipei
+```
 
 The implementation uses Node.js' built-in `node:sqlite` module. Node 22.5 or newer
 is required.

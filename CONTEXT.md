@@ -30,7 +30,7 @@ _Avoid_: deleted trip, closed group
 
 **Source**:
 An immutable piece of explicit itinerary evidence, such as imported Markdown, a
-booking record, or a message addressed to `@leaderAgent`.
+booking record, or a message addressed to the configured LINE Official Account.
 _Avoid_: chat history, LLM memory
 
 **Source Idempotency Key**:
@@ -127,8 +127,10 @@ replaceable presentation snapshot and cannot grant authority.
 _Avoid_: display name, LINE handle
 
 **Mention**:
-An explicit request addressed to `@leaderAgent`. Native LINE mention metadata is
-authoritative; exact-text matching is only a compatibility fallback.
+An explicit request addressed to the configured LINE Official Account through
+LINE's native mention picker. Native mention metadata and the account's LINE User
+ID are authoritative; the displayed account name (for example,
+`TravelLeaderAgent`) and typed `@` text are presentation only.
 _Avoid_: ordinary group chat, ambient message
 
 **LINE Official Account**:

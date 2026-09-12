@@ -1,8 +1,9 @@
 # LINE inbound events require explicit intent and signed delivery
 
 Phase 2 accepts only signed LINE Webhook Events from a LINE group. Text message
-events become Sources only when native Mention metadata addresses
-`@leaderAgent`; the group ID maps to its Travel Group and current Active Trip.
+events become Sources only when native Mention metadata addresses the configured
+LINE Official Account; the group ID maps to its Travel Group and current Active
+Trip.
 `memberLeft` events are accepted only as roster-control events and never create
 Sources. Direct conversations with the LINE Official Account do not create
 Sources in this phase. Phase 2 sends only a short acknowledgement through the
