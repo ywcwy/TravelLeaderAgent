@@ -58,7 +58,7 @@ verifies Inbox, Source, Proposal, Reply, redelivery, health, and cleanup outcome
 - Redelivery means the same Webhook Event with the same `webhookEventId`; manually typing the same text again is a new event and is not a redelivery test.
 - The redelivery check records only event ID, HTTP status, duplicate/outcome status, and resulting counts. It does not persist raw payload or Reply Token.
 - Reply failure and retry internals remain covered by automated integration tests; the staging smoke test covers the successful provider path and duplicate delivery.
-- Cleanup stops the runtime and ngrok, clears the Webhook URL and Use webhook setting, rotates or revokes test credentials, and removes the isolated database if no longer needed.
+- Cleanup stops the runtime and ngrok and turns Use webhook off. The staging Webhook URL may remain configured for reuse while disabled; test credentials are rotated or revoked and the isolated database is removed if no longer needed.
 
 ## Testing Decisions
 

@@ -95,10 +95,11 @@ raw request or reply token as evidence.
 ## 5. Verify unavailable health and clean up
 
 With the runtime stopped, `/healthz` must no longer return the healthy response.
-After the run, stop the runtime and ngrok, clear the Webhook URL and **Use
-webhook** setting in LINE Developers, and revoke or rotate the test Access Token
-and Channel Secret. Remove the local smoke-test SQLite file if it is no longer
-needed.
+After the run, stop the runtime and ngrok, and turn **Use webhook** off in LINE
+Developers. The staging Webhook URL may remain configured for reuse, but it must
+not be enabled while the tunnel is stopped. Revoke or rotate the test Access
+Token and Channel Secret when the account is no longer needed. Remove the local
+smoke-test SQLite file if it is no longer needed.
 
 Record the test date, account/group description, route, health result, event ID
 hash or redacted ID, counts, and cleanup result in the GitHub issue. Never record
