@@ -7,7 +7,7 @@ Account can deliver a native group Mention through an HTTPS ngrok endpoint into
 the Webhook Runtime, where it becomes one durable Source/Proposal and receives
 one acknowledgement. I also need to prove that a redelivered Webhook Event is
 idempotent, that health checks expose runtime availability safely, and that the
-test can be cleaned up without leaving credentials or production data behind.
+test can be cleaned up without exposing credentials or production data.
 
 ## Solution
 
@@ -40,7 +40,7 @@ verifies Inbox, Source, Proposal, Reply, redelivery, health, and cleanup outcome
 18. As a System Administrator, I want the unavailable runtime to fail the health check, so that monitoring can distinguish a healthy database-backed runtime from a stopped service.
 19. As a System Administrator, I want to record only redacted IDs, statuses, and counts, so that test evidence contains no raw payload, reply token, or secret.
 20. As a System Administrator, I want to stop the runtime and ngrok and clear the provider configuration, so that the temporary public endpoint is not left active.
-21. As a System Administrator, I want to revoke or rotate test credentials and remove the isolated database when finished, so that the staging test leaves no reusable secret or personal data.
+21. As a System Administrator, I want to retain credentials for the active dedicated staging account while keeping them local and ignored, so that I can reuse the staging setup; I want to revoke or rotate them when the account is retired or a credential may have been exposed.
 
 ## Implementation Decisions
 
@@ -58,7 +58,7 @@ verifies Inbox, Source, Proposal, Reply, redelivery, health, and cleanup outcome
 - Redelivery means the same Webhook Event with the same `webhookEventId`; manually typing the same text again is a new event and is not a redelivery test.
 - The redelivery check records only event ID, HTTP status, duplicate/outcome status, and resulting counts. It does not persist raw payload or Reply Token.
 - Reply failure and retry internals remain covered by automated integration tests; the staging smoke test covers the successful provider path and duplicate delivery.
-- Cleanup stops the runtime and ngrok, clears the Webhook URL and Use webhook setting, rotates or revokes test credentials, and removes the isolated database if no longer needed.
+- Cleanup stops the runtime and ngrok and turns Use webhook off. The staging Webhook URL may remain configured for reuse while disabled; credentials remain only in the local ignored `.env` while the dedicated account is active and are rotated or revoked when it is retired or exposed. The isolated database is removed if no longer needed.
 
 ## Testing Decisions
 
