@@ -97,9 +97,10 @@ raw request or reply token as evidence.
 With the runtime stopped, `/healthz` must no longer return the healthy response.
 After the run, stop the runtime and ngrok, and turn **Use webhook** off in LINE
 Developers. The staging Webhook URL may remain configured for reuse, but it must
-not be enabled while the tunnel is stopped. Revoke or rotate the test Access
-Token and Channel Secret when the account is no longer needed. Remove the local
-smoke-test SQLite file if it is no longer needed.
+not be enabled while the tunnel is stopped. While the dedicated staging account
+remains active, its credentials may remain in the local ignored `.env`; revoke
+or rotate them when the account is retired or a credential may have been
+exposed. Remove the local smoke-test SQLite file if it is no longer needed.
 
 Record the test date, account/group description, route, health result, event ID
 hash or redacted ID, counts, and cleanup result in the GitHub issue. Never record
