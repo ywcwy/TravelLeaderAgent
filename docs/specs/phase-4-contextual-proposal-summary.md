@@ -52,6 +52,12 @@ not infer a durable Travel Preference from a single submission.
 - The system does not create a Travel Preference record or infer a preference from one Proposal. Preference modeling is a later domain decision.
 - The response is group-visible and must not include Reply Tokens, credentials, raw payloads, or unnecessary sensitive travel data.
 - No model API, natural-language command interpretation, Push message, direct conversation ingestion, or notification scheduler is added.
+- Relevance is limited to the same date or overlapping time window and the same item kind. The summary does not dump the entire Effective Itinerary.
+- When no Active Trip exists, the accepted Source still creates a Proposal; the response says that contextual matching is unavailable until an Active Trip is configured.
+- A redelivered event is deduplicated by `event_id`; content similarity alone never suppresses a distinct event.
+- The displayed context includes date/time, kind/title, location, status, and Proposal ID only. It excludes raw provider payloads, credentials, Reply Tokens, and unnecessary booking data.
+- If a confirmed item exists without a time overlap, the response says that a confirmed item exists but no overlap was found. The system never rejects the new Proposal automatically.
+- If Reply delivery fails after persistence, the Inbox event follows the existing retryable failure path; Source and Proposal are not rolled back.
 
 ## Testing Decisions
 
@@ -60,6 +66,7 @@ not infer a durable Travel Preference from a single submission.
 - A second integration test supplies a matching confirmed item and verifies the feature does not claim the candidate is new; this is a guard for the next conflict slice even if no automatic resolution is implemented.
 - Existing worker, Inbox idempotency, Source import, Proposal extraction, and Reply API tests remain the prior art and must continue to pass.
 - A retry/redelivery regression verifies that contextual response generation does not duplicate Source, Proposal, or Reply.
+- The integration suite covers no Active Trip, multiple pending Proposals for the same date/kind, a confirmed non-overlapping item, and Reply delivery failure after persistence.
 - Tests use the existing SQLite integration seam and a fake Reply API transport, as established by the current runtime tests.
 
 ## Out of Scope
@@ -72,6 +79,7 @@ not infer a durable Travel Preference from a single submission.
 - Model API integration, natural-language understanding, OCR, or external search.
 - Direct one-to-one conversations, Push API, reminders, and production deployment.
 - Automatically choosing an accommodation, destination, or other itinerary option.
+- Content-based duplicate detection across distinct LINE event IDs.
 
 ## Further Notes
 

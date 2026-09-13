@@ -55,6 +55,12 @@ A candidate itinerary change derived from a Source that has not yet become part 
 the effective itinerary.
 _Avoid_: draft itinerary, pending trip item
 
+**Contextual Proposal Summary**:
+A deterministic, group-visible acknowledgement of a newly accepted Proposal and
+its relevant Active Trip context. It reports nearby confirmed and pending items
+without confirming, rejecting, or inferring preferences.
+_Avoid_: itinerary confirmation, recommendation, AI summary
+
 **Decision**:
 A named pending choice that groups mutually exclusive Proposals. Confirming one
 option resolves the Decision and rejects its other options.
