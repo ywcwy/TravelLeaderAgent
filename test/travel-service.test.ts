@@ -52,6 +52,16 @@ test("a System Administrator bootstraps one Active Trip and archives its mutatio
   db.close();
 });
 
+test("parses a native LINE mention display name before a Markdown candidate", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-native-mention", "Native mention");
+  const trip = service.createActiveTrip("system-admin", group.id, "Native mention trip", "Asia/Taipei");
+  service.importMarkdown(trip.id, "@TravelLeaderAgent - [provisional] 住宿 | 2026-10-16 | 台北", { idempotencyKey: "line:native-mention" });
+  assert.equal(service.reviewTrip(trip.id).provisional.length, 1);
+  db.close();
+});
+
 test("importing the same Source Idempotency Key reuses its Source and Proposals", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
