@@ -23,6 +23,12 @@ _Avoid_: workspace, project
 The single Trip in a Travel Group that accepts new evidence and sends reminders.
 _Avoid_: current group, live itinerary
 
+**Trip Reset**:
+A development operation that archives one explicitly identified Trip and creates
+a fresh Active Trip for the same Travel Group. It preserves the archived Trip's
+history and never means permanent deletion.
+_Avoid_: delete trip, clear itinerary
+
 **Archived Trip**:
 A Trip that no longer accepts Sources or sends reminders, but whose history remains
 readable. A Decision Owner may reactivate it for a bounded correction.
@@ -38,6 +44,12 @@ A provider-specific stable key that permits one Source to be recorded once even 
 an event or import is retried. LINE uses the webhook event ID; manual import uses
 a content hash and an explicit import batch.
 _Avoid_: duplicate check, title match
+
+**Import Batch**:
+The explicit identity assigned to one manual itinerary import attempt. Reusing an
+Import Batch returns its original Source and Proposal IDs; a changed document must
+use a new Import Batch.
+_Avoid_: upload session, filename
 
 **Research Source**:
 An external-search record containing retrieval time, URL, title, concise summary,
@@ -104,6 +116,12 @@ _Avoid_: suggested deadline, AI deadline
 An actionable request for missing or ambiguous information that is attached to a
 Source or Proposal. It retains the Source when extraction is incomplete.
 _Avoid_: discarded parse, validation error
+
+**Trip Review**:
+A read-only view of one Trip's Effective Itinerary, pending Proposals, and Review
+Issues. It explains what the system currently understands without changing domain
+state.
+_Avoid_: chat summary, itinerary confirmation
 
 **Schema-valid Proposal**:
 A Proposal whose extracted structure passes application validation. It is still
