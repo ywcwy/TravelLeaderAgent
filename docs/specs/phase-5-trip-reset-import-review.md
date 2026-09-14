@@ -82,15 +82,28 @@ create or change an Effective Itinerary item.
   import, and Trip Review. They reuse TravelService rather than adding a new
   HTTP transport.
 - Reset accepts a Travel Group identity, optional new Trip title/timezone, and
-  an explicit confirmation flag. It archives the current Active Trip and then
-  creates exactly one fresh Active Trip. It never deletes archived data.
+  an explicit confirmation flag. The implemented target is an explicitly
+  identified Trip ID; it archives that Active Trip and then creates exactly one
+  fresh Active Trip for the same Travel Group. It never deletes archived data.
+- Reset is one transaction. If archiving, roster copying, or new Trip creation
+  fails, the operation leaves the original Trip unchanged.
+- Reset copies active (not revoked) members, display-name snapshots, and roles.
+  Decisions, Reminders, Sources, Proposals, and Trip Items remain only on the
+  Archived Trip.
 - Reset is scoped to one Travel Group and uses the existing System Administrator
   authorization. A missing group or invalid timezone is a clear failure.
 - Bulk import targets one Active Trip, accepts a Markdown document and an
-  explicit provider-specific import identity, and reuses the existing
+  explicit Import Batch identity, and reuses the existing
   Source/Proposal extraction contract.
+- The input is a user-selected local Markdown file. The file must be readable and
+  within the command's configured size limit before the Source transaction starts.
 - The original document is one immutable Source. Parseable lines produce
   Proposals that retain source line and excerpt provenance.
+- Source creation and Proposal extraction use one transaction. Unparseable lines
+  become line-specific Review Issues; an empty or entirely unparseable document
+  still retains its Source with a `source_unparsed` issue.
+- Sensitive Travel Data is rejected before Source creation; it is not silently
+  masked into shared itinerary evidence.
 - A status marker in imported Markdown describes the candidate's evidence; it is
   not authority to create an Effective Itinerary Trip Item. Confirmation remains
   an explicit Decision Owner operation.
@@ -98,6 +111,10 @@ create or change an Effective Itinerary item.
   Importing the same content with a new identity creates a new Source by design.
 - Trip Review reads, but does not mutate, domain state. It presents confirmed
   Trip Items, pending Proposals, and Review Issues using existing domain terms.
+- Trip Review has a stable JSON schema and a default human-readable rendering.
+  The human-readable output includes Trip identity, Effective Itinerary, pending
+  Proposals, Review Issues, and counts. Import output reports created/reused,
+  Source ID, Proposal IDs, and Review Issue count.
 - Existing Trip Timezone rules govern date-only interpretation and deterministic
   schedule collision reporting.
 - No model API, external search, LINE Push API, or automatic Proposal
@@ -119,6 +136,10 @@ create or change an Effective Itinerary item.
   and Review Issues, including deterministic schedule collisions.
 - A cross-operation test resets a Trip, imports a complete itinerary, and reads
   the review to verify the end-to-end development workflow.
+- Tests cover atomic reset failure, active-member roster copying, Archived Trip
+  isolation, import batch conflicts, reused imports, empty/unparseable files,
+  sensitive-data rejection, stable text/JSON Review output, and no automatic
+  creation of Effective Itinerary items from `[confirmed]` source markers.
 - Existing TravelService, SQLite migration, Proposal extraction, and LINE worker
   tests remain regression coverage. A later LINE integration ticket may expose
   the same bulk import flow through a group message, but it is not required for
