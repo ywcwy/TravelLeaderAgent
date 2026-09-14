@@ -75,9 +75,11 @@ export interface ProposalContext {
 }
 
 export interface ReviewIssue {
-  code: "missing_start_time" | "missing_timezone" | "missing_location" | "schedule_collision" | "source_unparsed";
+  code: "missing_start_time" | "missing_timezone" | "missing_location" | "schedule_collision" | "source_unparsed" | "unparseable_line";
   message: string;
   sourceId?: string;
+  sourceLine?: number;
+  sourceExcerpt?: string;
   proposalIds: string[];
 }
 

@@ -22,6 +22,12 @@ export interface TripResetResult {
   copiedMemberCount: number;
 }
 
+export interface MarkdownImportResult {
+  sourceId: string;
+  proposalIds: string[];
+  outcome: "created" | "reused";
+}
+
 export class TravelService {
   private readonly db: TravelDatabase;
   private readonly systemAdministratorId: string;
@@ -154,6 +160,21 @@ export class TravelService {
       this.db.connection.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  importMarkdownBatch(tripId: string, markdown: string, importBatchId: string): MarkdownImportResult {
+    this.requireActiveTrip(tripId);
+    const batchId = importBatchId.trim();
+    if (!batchId) throw new InvalidSourceError("An Import Batch ID is required.");
+    if (containsSensitiveTravelData(markdown)) throw new InvalidSourceError("Sensitive Travel Data must be removed before importing this Source.");
+    const existing = this.db.connection.prepare(`SELECT id, content FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, batchId) as { id: string; content: string } | undefined;
+    if (existing) {
+      if (existing.content !== markdown) throw new ConflictError(`Import Batch ${batchId} already contains different content.`);
+      const replay = this.getSourceImportResult(existing.id);
+      return { ...replay, outcome: "reused" };
+    }
+    const created = this.importMarkdown(tripId, markdown, { idempotencyKey: batchId, type: "markdown" });
+    return { ...created, outcome: "created" };
   }
 
   getSource(sourceId: string): Source | null {
@@ -312,13 +333,16 @@ export class TravelService {
     const cancelled = this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'cancelled' ORDER BY starts_at, title`).all(tripId).map(toTripItem) as TripItem[];
     const pending = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' ORDER BY deadline_at, title`).all(tripId) as unknown as ProposalRow[];
     const proposals = pending.map(toProposal);
-    const sourceIds = (this.db.connection.prepare(`SELECT id FROM sources WHERE trip_id = ?`).all(tripId) as unknown as Array<{ id: string }>).map((source) => source.id);
+    const sources = this.db.connection.prepare(`SELECT id, content FROM sources WHERE trip_id = ?`).all(tripId) as Array<{ id: string; content: string }>;
+    const sourceIds = sources.map((source) => source.id);
     const proposalSourceIds = new Set(
       (this.db.connection.prepare(`SELECT source_id FROM proposals WHERE trip_id = ?`).all(tripId) as unknown as Array<{ source_id: string }>)
         .map((proposal) => proposal.source_id),
     );
     const issues = buildReviewIssues(proposals, confirmed);
-    for (const sourceId of sourceIds) {
+    for (const source of sources) {
+      for (const issue of findUnparseableLineIssues(source.id, source.content)) issues.push(issue);
+      const sourceId = source.id;
       if (!proposalSourceIds.has(sourceId)) {
         issues.push({ code: "source_unparsed", message: "Source has no parseable itinerary candidates.", sourceId, proposalIds: [] });
       }
@@ -334,7 +358,7 @@ export class TravelService {
   }
 
   private getSourceImportResult(sourceId: string): { sourceId: string; proposalIds: string[] } {
-    const proposalIds = (this.db.connection.prepare(`SELECT id FROM proposals WHERE source_id = ? ORDER BY created_at, id`).all(sourceId) as unknown as Array<{ id: string }>).map((proposal) => proposal.id);
+    const proposalIds = (this.db.connection.prepare(`SELECT id FROM proposals WHERE source_id = ? ORDER BY source_line, id`).all(sourceId) as unknown as Array<{ id: string }>).map((proposal) => proposal.id);
     return { sourceId, proposalIds };
   }
 
@@ -439,6 +463,18 @@ function isIanaTimezone(timezone: string): boolean {
   } catch {
     return false;
   }
+}
+
+function containsSensitiveTravelData(markdown: string): boolean {
+  return /(?:護照(?:號碼|号码)?|passport(?:\s*(?:number|no\.?))?)\s*[:：#-]?\s*[A-Z0-9]{6,}/i.test(markdown)
+    || /(?:信用卡|credit\s*card|card\s*number|卡號)\s*[:：#-]?\s*\d[\d -]{7,}/i.test(markdown);
+}
+
+function findUnparseableLineIssues(sourceId: string, markdown: string): ReviewIssue[] {
+  return markdown.split(/\r?\n/).flatMap((line, index) => {
+    if (!/^\s*-\s*\[/.test(line) || /^\s*(?:@[^-]*?\s+)?-\s*\[(confirmed|provisional|open_decision|conflicted)\]\s*.+$/i.test(line)) return [];
+    return [{ code: "unparseable_line" as const, message: `第 ${index + 1} 行無法解析為有效行程候選。`, sourceId, sourceLine: index + 1, sourceExcerpt: line.trim(), proposalIds: [] }];
+  });
 }
 
 type ScheduledItem = Pick<ExtractedTripItem, "startsAt" | "endsAt">;
