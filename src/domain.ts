@@ -110,6 +110,7 @@ export interface Decision {
 export interface TripReview {
   confirmed: TripItem[];
   cancelled: TripItem[];
+  pending: Proposal[];
   provisional: Proposal[];
   openDecisions: Proposal[];
   conflicts: Proposal[];
