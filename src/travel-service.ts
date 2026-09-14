@@ -137,6 +137,11 @@ export class TravelService {
     return id;
   }
 
+  getProposal(tripId: string, proposalId: string): Proposal | null {
+    const row = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND id = ?`).get(tripId, proposalId) as ProposalRow | undefined;
+    return row ? toProposal(row) : null;
+  }
+
   createReplacementProposal(tripId: string, sourceId: string, predecessorItemId: string, item: ExtractedTripItem): string {
     this.requireActiveTrip(tripId);
     const source = this.db.connection.prepare(`SELECT id FROM sources WHERE id = ? AND trip_id = ?`).get(sourceId, tripId);
