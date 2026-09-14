@@ -31,7 +31,10 @@ test("ingests a mentioned LINE group message into one Source with provenance", a
   assert.equal(review.provisional.length, 1);
   const source = travel.getSource(review.provisional[0].sourceId);
   assert.deepEqual(source, { id: source?.id, tripId: trip.id, type: "line_text", idempotencyKey: "01JLINEE2E000000000000000000", content: "@leaderAgent - [provisional] 住宿 | 2026-10-16 | 台北", sourceTime: "2026-09-11T00:00:00.000Z", provenance: { provider: "line", messageId: "message-e2e", groupId: "C-end-to-end", userId: "U-member" } });
-  assert.deepEqual(replies, [{ token: "reply-e2e", text: "已收到，等待 Decision Owner 確認。" }]);
+  const proposal = review.provisional[0];
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0]?.token, "reply-e2e");
+  assert.equal(replies[0]?.text, `已收到 Proposal ${proposal.id}：住宿｜2026-10-16｜台北\n目前沒有同日期、同類型的 confirmed 行程。\n狀態：provisional / pending。\nDecision Owner 後續可確認此 Proposal。`);
   assert.equal(travel.isActiveTripMember(trip.id, "U-member"), true);
   db.close();
 });
