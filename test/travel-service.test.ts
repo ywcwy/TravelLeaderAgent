@@ -52,6 +52,34 @@ test("a System Administrator bootstraps one Active Trip and archives its mutatio
   db.close();
 });
 
+test("resets one Active Trip into a fresh Trip while preserving history and roster", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-reset", "Reset 群組");
+  const oldTrip = service.createActiveTrip("system-admin", group.id, "舊旅程", "Asia/Taipei");
+  service.addMember("system-admin", oldTrip.id, "U-owner", "Owner", "owner");
+  service.addMember("system-admin", oldTrip.id, "U-member", "Member", "member");
+  service.addMember("system-admin", oldTrip.id, "U-revoked", "Revoked", "member");
+  service.revokeGroupMember(oldTrip.id, "U-revoked");
+  const oldImport = service.importMarkdown(oldTrip.id, "- [provisional] 舊住宿 | 2026-10-16 | 台北", { idempotencyKey: "reset:old" });
+
+  const result = service.resetActiveTrip("system-admin", oldTrip.id, { title: "新旅程", timezone: "Asia/Tokyo" });
+
+  assert.equal(result.archivedTrip.id, oldTrip.id);
+  assert.equal(result.archivedTrip.status, "archived");
+  assert.notEqual(result.activeTrip.id, oldTrip.id);
+  assert.equal(result.activeTrip.title, "新旅程");
+  assert.equal(result.activeTrip.timezone, "Asia/Tokyo");
+  assert.equal(result.copiedMemberCount, 2);
+  assert.equal(service.getActiveTripForLineGroup(group.lineGroupId)?.id, result.activeTrip.id);
+  assert.equal(service.isActiveTripMember(result.activeTrip.id, "U-owner"), true);
+  assert.equal(service.isActiveTripMember(result.activeTrip.id, "U-member"), true);
+  assert.equal(service.isActiveTripMember(result.activeTrip.id, "U-revoked"), false);
+  assert.equal(service.reviewTrip(oldTrip.id).provisional[0]?.sourceId, oldImport.sourceId);
+  assert.throws(() => service.importMarkdown(oldTrip.id, "- [provisional] 不應寫入 | 2026-10-17 | 台北", { idempotencyKey: "reset:archived" }), TripNotActiveError);
+  db.close();
+});
+
 test("parses a native LINE mention display name before a Markdown candidate", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
