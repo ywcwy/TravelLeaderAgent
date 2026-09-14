@@ -67,6 +67,13 @@ export interface Proposal extends Omit<ExtractedTripItem, "status" | "deadlineAt
   deadlineAt: string | null;
 }
 
+export interface ProposalContext {
+  proposal: Proposal;
+  confirmed: TripItem[];
+  overlappingConfirmed: TripItem[];
+  pending: Proposal[];
+}
+
 export interface ReviewIssue {
   code: "missing_start_time" | "missing_timezone" | "missing_location" | "schedule_collision" | "source_unparsed";
   message: string;

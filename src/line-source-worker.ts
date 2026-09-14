@@ -67,9 +67,17 @@ export class LineSourceWorker {
   }
 
   private contextualReply(tripId: string, proposalIds: string[]): string {
-    const proposals = proposalIds.map((proposalId) => this.travel.getProposal(tripId, proposalId)).filter((proposal): proposal is NonNullable<typeof proposal> => proposal !== null);
+    const contexts = proposalIds.map((proposalId) => this.travel.getProposalContext(tripId, proposalId)).filter((context): context is NonNullable<typeof context> => context !== null);
+    const proposals = contexts.map((context) => context.proposal);
     const candidates = proposals.map((proposal) => `${proposal.id}：${proposal.title}${proposal.startsAt ? `｜${proposal.startsAt}` : ""}${proposal.location ? `｜${proposal.location}` : ""}`).join("、");
-    return `已收到 Proposal ${candidates}\n目前沒有同日期、同類型的 confirmed 行程。\n狀態：${proposals.map((proposal) => `${proposal.itemStatus} / ${proposal.status}`).join("、")}。\nDecision Owner 後續可確認此 Proposal。`;
+    const confirmed = contexts.flatMap((context) => context.confirmed);
+    const pending = contexts.flatMap((context) => context.pending);
+    const overlapping = contexts.flatMap((context) => context.overlappingConfirmed);
+    const contextLines = confirmed.length > 0
+      ? [`目前已有 confirmed 行程：${confirmed.map((item) => `${item.title}${item.startsAt ? `｜${item.startsAt}` : ""}${item.location ? `｜${item.location}` : ""}`).join("、")}`, overlapping.length > 0 ? "與新 Proposal 有時間重疊，請由 Decision Owner 判斷。" : "目前未偵測到時間衝突。"]
+      : ["目前沒有同日期、同類型的 confirmed 行程。"];
+    if (pending.length > 0) contextLines.push(`同日期、同類型的 pending Proposal：${pending.map((proposal) => proposal.id).join("、")}`);
+    return `已收到 Proposal ${candidates}\n${contextLines.join("\n")}\n狀態：${proposals.map((proposal) => `${proposal.itemStatus} / ${proposal.status}`).join("、")}。\nDecision Owner 後續可確認此 Proposal。`;
   }
 
 }

@@ -52,6 +52,28 @@ test("keeps non-Markdown LINE text as a Source with a review issue", async () =>
   db.close();
 });
 
+test("includes same-date confirmed and pending itinerary context in the reply", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-context", "Context 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Context 旅程", "Asia/Taipei");
+  travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
+  const confirmedSource = travel.importMarkdown(trip.id, "- [provisional] 已確認住宿 | 2026-10-16T15:00:00+08:00 | 台北", { idempotencyKey: "context:confirmed" });
+  travel.confirmProposal(trip.id, "U-owner", confirmedSource.proposalIds[0]);
+  const pending = travel.importMarkdown(trip.id, "- [provisional] 另一住宿 | 2026-10-16T18:00:00+08:00 | 新北", { idempotencyKey: "context:pending" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINECONTEXT00000000000000", messageId: "message-context", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "- [provisional] 新住宿 | 2026-10-16T20:00:00+08:00 | 桃園", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-context" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(replies.length, 1);
+  assert.match(replies[0] ?? "", /目前已有 confirmed 行程：已確認住宿｜2026-10-16T15:00:00\+08:00｜台北/);
+  assert.match(replies[0] ?? "", /目前未偵測到時間衝突。/);
+  assert.match(replies[0] ?? "", new RegExp(`同日期、同類型的 pending Proposal：${pending.proposalIds[0]}`));
+  db.close();
+});
+
 test("does not send a consumed reply token again after worker failure", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
