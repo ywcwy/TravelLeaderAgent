@@ -85,8 +85,27 @@ test("does not send a consumed reply token again after worker failure", async ()
   const replies: string[] = [];
   const worker = new LineSourceWorker(inbox, travel, async (token) => { replies.push(token); attempts += 1; if (attempts === 1) throw new Error("reply failed"); });
   assert.equal(await worker.processNext(), "failed");
+  assert.equal(travel.reviewTrip(trip.id).provisional.length, 1);
   assert.equal(await worker.processNext(), "processed");
   assert.deepEqual(replies, ["reply-retry"]);
+  assert.equal(travel.reviewTrip(trip.id).provisional.length, 1);
+  db.close();
+});
+
+test("redelivery of a contextual event does not duplicate its Source or Proposal", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-redelivery-context", "Redelivery context 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Redelivery context 旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  const event = { eventId: "01JLINEREDeliveryContext00000", messageId: "message-redelivery-context", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "- [provisional] 住宿 | 2026-10-16 | 台北", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-redelivery-context" };
+  assert.equal(inbox.enqueue(event), "enqueued");
+  const worker = new LineSourceWorker(inbox, travel, async () => undefined);
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(inbox.enqueue(event), "duplicate");
+  assert.equal(await worker.processNext(), "idle");
+  assert.equal(inbox.get(event.eventId)?.duplicateCount, 1);
+  assert.equal(travel.reviewTrip(trip.id).provisional.length, 1);
   db.close();
 });
 

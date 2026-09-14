@@ -44,6 +44,7 @@ test("persists an accepted event once and identifies duplicate delivery", () => 
     status: "pending",
     outcome: "accepted",
     attempts: 0,
+    duplicateCount: 1,
     lastError: null,
     leaseUntil: null,
     leaseToken: null,
