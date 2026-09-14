@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { TravelDatabase } from "../src/database.ts";
-import { ConflictError, InvalidTimezoneError, PermissionError, TravelService, TripNotActiveError } from "../src/travel-service.ts";
+import { ConflictError, InvalidSourceError, InvalidTimezoneError, PermissionError, TravelService, TripNotActiveError } from "../src/travel-service.ts";
 
 function bootstrapActiveTrip(service: TravelService, lineGroupId: string): string {
   const travelGroup = service.createTravelGroup("system-admin", lineGroupId, "測試旅遊群");
@@ -122,6 +122,39 @@ test("importing the same Source Idempotency Key reuses its Source and Proposals"
     sourceId: unparseable.sourceId,
     proposalIds: [],
   });
+  db.close();
+});
+
+test("bulk import reuses an Import Batch, rejects changed content, and reports invalid lines", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-bulk-import");
+  const markdown = [
+    "- [confirmed] 東京住宿 | 2026-10-16 | 東京",
+    "- [provisional] 缺少地點 | 2026-10-17 |",
+    "- [provisional 東京住宿 | 2026-10-18 | 東京",
+  ].join("\n");
+
+  const first = service.importMarkdownBatch(tripId, markdown, "batch-1");
+  const replay = service.importMarkdownBatch(tripId, markdown, "batch-1");
+  assert.equal(first.outcome, "created");
+  assert.equal(replay.outcome, "reused");
+  assert.deepEqual(replay.sourceId, first.sourceId);
+  assert.deepEqual(replay.proposalIds, first.proposalIds);
+  assert.throws(() => service.importMarkdownBatch(tripId, `${markdown}\n- [provisional] 新增 | 2026-10-19 | 東京`, "batch-1"), ConflictError);
+  const review = service.reviewTrip(tripId);
+  assert.equal(review.provisional.length, 1);
+  assert.equal(review.issues.some((issue) => issue.code === "unparseable_line" && issue.sourceLine === 3), true);
+  assert.equal(review.issues.some((issue) => issue.code === "missing_location"), true);
+  db.close();
+});
+
+test("bulk import rejects Sensitive Travel Data before creating a Source", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-sensitive-import");
+  assert.throws(() => service.importMarkdownBatch(tripId, "護照號碼: X12345678", "batch-sensitive"), InvalidSourceError);
+  assert.equal(service.reviewTrip(tripId).issues.length, 0);
   db.close();
 });
 
