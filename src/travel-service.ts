@@ -116,6 +116,11 @@ export class TravelService {
     return row ? toTrip(row) : null;
   }
 
+  getTrip(tripId: string): Trip | null {
+    const row = this.db.connection.prepare(`SELECT * FROM trips WHERE id = ?`).get(tripId) as TripRow | undefined;
+    return row ? toTrip(row) : null;
+  }
+
   ensureGroupMember(tripId: string, lineUserId: string, displayName: string): boolean {
     this.requireActiveTrip(tripId);
     const existing = this.db.connection.prepare(`SELECT revoked_at FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, lineUserId) as { revoked_at: string | null } | undefined;
@@ -350,6 +355,7 @@ export class TravelService {
     return {
       confirmed,
       cancelled,
+      pending: proposals,
       provisional: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "provisional"),
       openDecisions: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "open_decision"),
       conflicts: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "conflicted"),
