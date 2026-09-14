@@ -76,7 +76,11 @@ only the event ID, HTTP status, and database counts. Expected result:
 - one Inbox event with `status=completed` and `outcome=processed`;
 - one `line_text` Source for the test group;
 - one expected Proposal;
-- one short acknowledgement in the group: `已收到，等待 Decision Owner 確認。`.
+- one contextual acknowledgement in the group containing the new Proposal ID,
+  the candidate details, `provisional / pending`, and
+  `Decision Owner 後續可確認此 Proposal。`;
+- when there is no same-date, same-kind confirmed item, it also says
+  `目前沒有同日期、同類型的 confirmed 行程。`.
 
 For a local SQLite check:
 
@@ -89,8 +93,10 @@ sqlite3 ./data/line-smoke-test.sqlite \
 
 Trigger one LINE webhook redelivery of the same event and verify that the
 `webhookEventId` is unchanged, the Inbox records a duplicate, Source/Proposal
-counts remain unchanged, and no second acknowledgement appears. Do not save the
-raw request or reply token as evidence.
+counts remain unchanged, and no second acknowledgement appears. If a Reply
+delivery fails after persistence, verify that the Inbox is retryable while the
+Source and Proposal remain present. Do not save the raw request or reply token
+as evidence.
 
 ## 5. Verify unavailable health and clean up
 
