@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
-import type { Decision, ExtractedTripItem, MemberRole, Proposal, ReviewIssue, Source, SourceImportOptions, TravelGroup, Trip, TripItem, TripItemStatus, TripReview } from "./domain.ts";
+import type { Decision, ExtractedTripItem, MemberRole, Proposal, ProposalContext, ReviewIssue, Source, SourceImportOptions, TravelGroup, Trip, TripItem, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -140,6 +140,20 @@ export class TravelService {
   getProposal(tripId: string, proposalId: string): Proposal | null {
     const row = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND id = ?`).get(tripId, proposalId) as ProposalRow | undefined;
     return row ? toProposal(row) : null;
+  }
+
+  getProposalContext(tripId: string, proposalId: string): ProposalContext | null {
+    const proposal = this.getProposal(tripId, proposalId);
+    if (!proposal) return null;
+    const trip = this.requireTrip(tripId);
+    const confirmed = (this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'confirmed' AND kind = ?`).all(tripId, proposal.kind) as Array<Record<string, unknown>>)
+      .map(toTripItem)
+      .filter((item) => isSameDateOrOverlapping(proposal, item, trip.timezone));
+    const overlappingConfirmed = confirmed.filter((item) => hasTimeOverlap(proposal, item));
+    const pending = (this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' AND id <> ? AND kind = ?`).all(tripId, proposalId, proposal.kind) as unknown as ProposalRow[])
+      .map(toProposal)
+      .filter((item) => isSameDateOrOverlapping(proposal, item, trip.timezone));
+    return { proposal, confirmed, overlappingConfirmed, pending };
   }
 
   createReplacementProposal(tripId: string, sourceId: string, predecessorItemId: string, item: ExtractedTripItem): string {
@@ -388,6 +402,36 @@ function isIanaTimezone(timezone: string): boolean {
   } catch {
     return false;
   }
+}
+
+type ScheduledItem = Pick<ExtractedTripItem, "startsAt" | "endsAt">;
+
+function isSameDateOrOverlapping(left: ScheduledItem, right: ScheduledItem, tripTimezone: string): boolean {
+  if (dateKey(left.startsAt, tripTimezone) === dateKey(right.startsAt, tripTimezone)) return true;
+  return hasTimeOverlap(left, right);
+}
+
+function hasTimeOverlap(left: ScheduledItem, right: ScheduledItem): boolean {
+  if (!left.startsAt || !right.startsAt || isDateOnly(left.startsAt) || isDateOnly(right.startsAt)) return false;
+  const leftStart = Date.parse(left.startsAt);
+  const rightStart = Date.parse(right.startsAt);
+  if (Number.isNaN(leftStart) || Number.isNaN(rightStart)) return false;
+  const leftEnd = left.endsAt ? Date.parse(left.endsAt) : leftStart;
+  const rightEnd = right.endsAt ? Date.parse(right.endsAt) : rightStart;
+  if ([leftEnd, rightEnd].some(Number.isNaN)) return false;
+  return leftStart <= rightEnd && rightStart <= leftEnd;
+}
+
+function dateKey(value: string | undefined, tripTimezone: string): string | null {
+  if (!value) return null;
+  if (isDateOnly(value)) return value;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", { timeZone: tripTimezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(parsed);
+}
+
+function isDateOnly(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 function buildReviewIssues(proposals: Proposal[], confirmed: TripItem[]): ReviewIssue[] {
