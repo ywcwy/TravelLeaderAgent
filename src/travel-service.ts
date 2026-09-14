@@ -11,6 +11,17 @@ export class TripNotActiveError extends Error {}
 export class InvalidTimezoneError extends Error {}
 export class InvalidSourceError extends Error {}
 
+export interface TripResetOptions {
+  title?: string;
+  timezone?: string;
+}
+
+export interface TripResetResult {
+  archivedTrip: Trip;
+  activeTrip: Trip;
+  copiedMemberCount: number;
+}
+
 export class TravelService {
   private readonly db: TravelDatabase;
   private readonly systemAdministratorId: string;
@@ -50,6 +61,32 @@ export class TravelService {
     const updated = this.db.connection.prepare(`UPDATE trips SET status = 'archived', archived_at = ? WHERE id = ? AND status = 'active'`)
       .run(now(), tripId);
     if (updated.changes === 0) this.requireTrip(tripId);
+  }
+
+  resetActiveTrip(administratorId: string, tripId: string, options: TripResetOptions = {}): TripResetResult {
+    this.requireSystemAdministrator(administratorId);
+    const current = this.requireActiveTrip(tripId);
+    const title = options.title?.trim() || current.title;
+    const timezone = options.timezone?.trim() || current.timezone;
+    if (!title) throw new ConflictError("A Trip title is required.");
+    if (!isIanaTimezone(timezone)) throw new InvalidTimezoneError(`Trip Timezone ${timezone} is not a valid IANA timezone.`);
+
+    const archivedTrip: Trip = { ...toTrip(current), status: "archived" };
+    const activeTrip: Trip = { id: randomUUID(), travelGroupId: current.travel_group_id, title, timezone, status: "active" };
+    this.db.connection.exec("BEGIN IMMEDIATE");
+    try {
+      const members = this.db.connection.prepare(`SELECT line_user_id, display_name, role FROM members WHERE trip_id = ? AND revoked_at IS NULL`).all(tripId) as Array<{ line_user_id: string; display_name: string; role: MemberRole }>;
+      const archived = this.db.connection.prepare(`UPDATE trips SET status = 'archived', archived_at = ? WHERE id = ? AND status = 'active'`).run(now(), tripId);
+      if (archived.changes !== 1) throw new TripNotActiveError(`Trip ${tripId} is not active.`);
+      this.db.connection.prepare(`INSERT INTO trips (id, travel_group_id, title, timezone, status, created_at) VALUES (?, ?, ?, ?, 'active', ?)`).run(activeTrip.id, activeTrip.travelGroupId, activeTrip.title, activeTrip.timezone, now());
+      const insertMember = this.db.connection.prepare(`INSERT INTO members (trip_id, line_user_id, display_name, role, revoked_at) VALUES (?, ?, ?, ?, NULL)`);
+      for (const member of members) insertMember.run(activeTrip.id, member.line_user_id, member.display_name, member.role);
+      this.db.connection.exec("COMMIT");
+      return { archivedTrip, activeTrip, copiedMemberCount: members.length };
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   reactivateTrip(administratorId: string, tripId: string): void {
