@@ -4,6 +4,10 @@ export function isDateOnly(value: string): boolean {
 
 export function localDate(value: string, timezone: string): string | null {
   if (isDateOnly(value)) return value;
+  // An offsetless timestamp is a wall-clock value. Keep its stated calendar
+  // date deterministic while the Review Issue asks the owner to resolve DST
+  // ambiguity instead of letting the host process timezone decide.
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)) return value.slice(0, 10);
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
@@ -16,6 +20,7 @@ export function localDate(value: string, timezone: string): string | null {
 
 export function formatLocalDateTime(value: string, timezone: string): string {
   if (isDateOnly(value)) return value;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)) return `${value} (UTC offset unresolved)`;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   const parts = new Intl.DateTimeFormat("en-CA", {

@@ -138,6 +138,13 @@ origin and destination are required route facts; a single `location` is not a
 substitute for them.
 _Avoid_: multi-stop itinerary, transport status
 
+**Route Endpoint Timezone**:
+The IANA timezone associated with a Route's origin or destination. A Route may
+retain different endpoint timezones; when unavailable, local-date queries use
+the Route timezone or Trip Timezone as a compatibility fallback and expose a
+Review Issue.
+_Avoid_: user timezone, departure offset only
+
 **Contextual Proposal Summary**:
 A deterministic, group-visible acknowledgement of a newly accepted Proposal and
 its relevant Active Trip context. It reports nearby confirmed and pending items

@@ -27,6 +27,8 @@ export interface ExtractedTripItem {
   endsAt?: string;
   timezone?: string;
   timezoneSource?: TimezoneSource;
+  originTimezone?: string;
+  destinationTimezone?: string;
   location?: string;
   origin?: string;
   destination?: string;
@@ -87,7 +89,7 @@ export interface ProposalContext {
 }
 
 export interface ReviewIssue {
-  code: "missing_start_time" | "missing_timezone" | "invalid_timezone" | "missing_location" | "missing_route_endpoint" | "shape_conflict" | "unknown_kind" | "kind_clarification" | "schedule_collision" | "source_unparsed" | "unparseable_line";
+  code: "missing_start_time" | "missing_timezone" | "invalid_timezone" | "missing_endpoint_timezone" | "invalid_endpoint_timezone" | "ambiguous_local_time" | "missing_location" | "missing_route_endpoint" | "shape_conflict" | "unknown_kind" | "kind_clarification" | "schedule_collision" | "source_unparsed" | "unparseable_line";
   message: string;
   sourceId?: string;
   sourceLine?: number;
