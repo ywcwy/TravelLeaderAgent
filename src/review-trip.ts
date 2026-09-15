@@ -66,7 +66,8 @@ function formatTripItem(item: TripItem): string {
     ? `${item.origin ?? "?"} → ${item.destination ?? "?"}`
     : item.location;
   const time = item.startsAt ? ` | ${item.timezone ? formatLocalDateTime(item.startsAt, item.timezone) : item.startsAt}` : "";
-  return `- [${item.shape}] [${item.kinds.join(", ")}] ${item.title}${time}${item.timezone ? ` | ${item.timezone}` : ""}${item.timezoneSource === "fallback" ? " | timezone fallback" : ""}${place ? ` | ${place}` : ""}`;
+  const endpointZones = item.originTimezone || item.destinationTimezone ? ` | ${item.originTimezone ?? item.timezone ?? "?"} → ${item.destinationTimezone ?? item.timezone ?? "?"}` : "";
+  return `- [${item.shape}] [${item.kinds.join(", ")}] ${item.title}${time}${item.timezone ? ` | ${item.timezone}` : ""}${endpointZones}${item.timezoneSource === "fallback" ? " | timezone fallback" : ""}${place ? ` | ${place}` : ""}`;
 }
 
 function formatProposal(proposal: Proposal): string {
@@ -74,5 +75,6 @@ function formatProposal(proposal: Proposal): string {
     ? `${proposal.origin ?? "?"} → ${proposal.destination ?? "?"}`
     : proposal.location;
   const time = proposal.startsAt ? ` | ${proposal.timezone ? formatLocalDateTime(proposal.startsAt, proposal.timezone) : proposal.startsAt}` : "";
-  return `- ${proposal.id} | [${proposal.shape}] [${proposal.kinds.join(", ")}] ${proposal.itemStatus} / ${proposal.status} | ${proposal.title}${time}${proposal.timezone ? ` | ${proposal.timezone}` : ""}${proposal.timezoneSource === "fallback" ? " | timezone fallback" : ""}${place ? ` | ${place}` : ""}`;
+  const endpointZones = proposal.originTimezone || proposal.destinationTimezone ? ` | ${proposal.originTimezone ?? proposal.timezone ?? "?"} → ${proposal.destinationTimezone ?? proposal.timezone ?? "?"}` : "";
+  return `- ${proposal.id} | [${proposal.shape}] [${proposal.kinds.join(", ")}] ${proposal.itemStatus} / ${proposal.status} | ${proposal.title}${time}${proposal.timezone ? ` | ${proposal.timezone}` : ""}${endpointZones}${proposal.timezoneSource === "fallback" ? " | timezone fallback" : ""}${place ? ` | ${place}` : ""}`;
 }

@@ -15,7 +15,7 @@ test("review:trip CLI renders stable JSON and human-readable Trip Review", () =>
   const group = travel.createTravelGroup("system-admin", "C-review-cli", "CLI Review");
   const trip = travel.createActiveTrip("system-admin", group.id, "Review 旅程", "Asia/Taipei");
   travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
-  const imported = travel.importMarkdown(trip.id, "- [confirmed] 已確認行程 | 2026-10-16 | 台北\n- [provisional] 待確認住宿 | 2026-10-17 | 台中\n- [provisional] Las Vegas → St. George | 2026-10-18 | | | shape=route | origin=Las Vegas | destination=St. George\n- [provisional] 被拒絕住宿 | 2026-10-19 | 台中", { idempotencyKey: "review:cli" });
+  const imported = travel.importMarkdown(trip.id, "- [confirmed] 已確認行程 | 2026-10-16 | 台北\n- [provisional] 待確認住宿 | 2026-10-17 | 台中\n- [provisional] Las Vegas → St. George | 2026-11-01T01:30 | | | shape=route | origin=Las Vegas | destination=St. George | ends_at=2026-11-01T03:30 | origin_timezone=America/Los_Angeles | destination_timezone=America/Denver\n- [provisional] 被拒絕住宿 | 2026-10-19 | 台中", { idempotencyKey: "review:cli" });
   travel.confirmProposal(trip.id, "U-owner", imported.proposalIds[0]);
   travel.rejectProposal(trip.id, "U-owner", imported.proposalIds[3], "不符合預算");
   database.close();
@@ -48,6 +48,7 @@ test("review:trip CLI renders stable JSON and human-readable Trip Review", () =>
   assert.match(humanOutput, /Rejected Proposals/);
   assert.match(humanOutput, /被拒絕住宿/);
   assert.match(humanOutput, /\[route\].*Las Vegas.*St\. George/);
+  assert.match(humanOutput, /UTC offset unresolved/);
   assert.match(humanOutput, /\[lodging\]/);
   rmSync(directory, { recursive: true, force: true });
 });

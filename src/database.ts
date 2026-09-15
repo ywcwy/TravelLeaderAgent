@@ -75,6 +75,8 @@ export class TravelDatabase {
         shape_source TEXT,
         origin TEXT,
         destination TEXT,
+        origin_timezone TEXT,
+        destination_timezone TEXT,
         title TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('confirmed', 'provisional', 'open_decision', 'conflicted', 'cancelled')),
         starts_at TEXT,
@@ -111,6 +113,8 @@ export class TravelDatabase {
         shape_source TEXT,
         origin TEXT,
         destination TEXT,
+        origin_timezone TEXT,
+        destination_timezone TEXT,
         title TEXT NOT NULL,
         item_status TEXT NOT NULL CHECK (item_status IN ('confirmed', 'provisional', 'open_decision', 'conflicted', 'cancelled')),
         proposal_status TEXT NOT NULL CHECK (proposal_status IN ('pending', 'confirmed', 'rejected')),
@@ -219,12 +223,16 @@ export class TravelDatabase {
     if (!proposalColumns.some((column) => column.name === "shape_source")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN shape_source TEXT`);
     if (!proposalColumns.some((column) => column.name === "origin")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN origin TEXT`);
     if (!proposalColumns.some((column) => column.name === "destination")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN destination TEXT`);
+    if (!proposalColumns.some((column) => column.name === "origin_timezone")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN origin_timezone TEXT`);
+    if (!proposalColumns.some((column) => column.name === "destination_timezone")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN destination_timezone TEXT`);
     if (!proposalColumns.some((column) => column.name === "timezone_source")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN timezone_source TEXT`);
     const tripItemColumnsAfterMigration = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape_source")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape_source TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "origin")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN origin TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "destination")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN destination TEXT`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "origin_timezone")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN origin_timezone TEXT`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "destination_timezone")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN destination_timezone TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "timezone_source")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN timezone_source TEXT`);
     this.connection.exec(`UPDATE proposals SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.connection.exec(`UPDATE trip_items SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);

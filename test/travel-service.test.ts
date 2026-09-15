@@ -216,6 +216,55 @@ test("queries each timed item by its local date and renders timezone context", (
   db.close();
 });
 
+test("queries Route Proposals across local dates and endpoint timezones", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-query-route-overlap");
+  service.ensureGroupMember(tripId, "U-member", "Member");
+  service.importMarkdown(tripId, [
+    "- [provisional] Las Vegas → Denver | 2026-10-01T23:30:00-07:00 | | | shape=route | origin=Las Vegas | destination=Denver | ends_at=2026-10-02T01:30:00-06:00 | origin_timezone=America/Los_Angeles | destination_timezone=America/Denver",
+    "- [provisional] Overnight route | 2026-10-03T23:30:00-07:00 | | | shape=route | origin=Page | destination=Las Vegas | ends_at=2026-10-04T01:30:00-07:00 | origin_timezone=America/Phoenix | destination_timezone=America/Los_Angeles",
+  ].join("\n"), { idempotencyKey: "query:route-overlap" });
+
+  const oct1 = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-01" });
+  const oct2 = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-02" });
+  const oct3 = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-03" });
+  const oct4 = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-04" });
+  assert.equal(oct1.pending.length, 1);
+  assert.equal(oct2.pending.length, 1);
+  assert.equal(oct3.pending.length, 1);
+  assert.equal(oct4.pending.length, 1);
+  assert.equal(oct1.pending[0]?.originTimezone, "America/Los_Angeles");
+  assert.equal(oct1.pending[0]?.destinationTimezone, "America/Denver");
+  assert.match(renderItineraryQuery(oct2), /America\/Los_Angeles.*America\/Denver/);
+  assert.equal(service.queryActiveTrip(tripId, "U-member", { date: "2026-10-05" }).pending.length, 0);
+  db.close();
+});
+
+test("retains Route Source evidence when endpoint timezone data is invalid or ambiguous", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-route-timezone-review");
+  const imported = service.importMarkdown(tripId, [
+    "- [provisional] Unknown route | 2026-11-01T01:30 | | | shape=route | origin=Somewhere | destination=Elsewhere | ends_at=2026-11-01T03:30 | origin_timezone=PST | destination_timezone=Not/AZone",
+  ].join("\n"), { idempotencyKey: "query:route-timezone-review" });
+  assert.equal(imported.proposalIds.length, 1);
+  const review = service.reviewTrip(tripId);
+  assert.equal(review.issues.some((issue) => issue.code === "invalid_endpoint_timezone" && issue.sourceId === imported.sourceId), true);
+  assert.equal(review.issues.some((issue) => issue.code === "missing_endpoint_timezone" && issue.proposalIds.includes(imported.proposalIds[0])), true);
+  assert.equal(review.issues.some((issue) => issue.code === "ambiguous_local_time" && issue.proposalIds.includes(imported.proposalIds[0])), true);
+  const ambiguousResult = service.queryActiveTrip(tripId, "system-admin", { date: "2026-11-01" });
+  assert.equal(ambiguousResult.pending.length, 1);
+  assert.match(renderItineraryQuery(ambiguousResult), /2026-11-01T01:30 \(UTC offset unresolved\)/);
+  assert.ok(service.getSource(imported.sourceId));
+  const seed = service.importMarkdown(tripId, "- [provisional] Seed | 2026-11-02T10:00:00Z | Somewhere", { idempotencyKey: "query:route-timezone-seed" });
+  assert.throws(() => service.createProposal(tripId, seed.sourceId, {
+    kind: "transport", kinds: ["transport"], shape: "route", shapeSource: "explicit", title: "Invalid direct route", status: "provisional",
+    startsAt: "2026-11-02T10:00:00Z", origin: "Somewhere", destination: "Elsewhere", originTimezone: "PST",
+  }), InvalidTimezoneError);
+  db.close();
+});
+
 test("parses a native LINE mention display name before a Markdown candidate", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
@@ -667,6 +716,29 @@ test("an existing SQLite database backfills legacy location Proposals as inferre
   const migrated = new TravelService(upgraded, "system-admin").getProposal(tripId, imported.proposalIds[0]);
   assert.equal(migrated?.shape, "point");
   assert.equal(migrated?.shapeSource, "inferred");
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test("an existing SQLite database adds Route endpoint timezone columns with compatibility fallback", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-route-timezone-migration-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  const service = new TravelService(initial, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-route-timezone-migration");
+  const imported = service.importMarkdown(tripId, "- [provisional] Legacy route | 2026-10-01T10:00:00-07:00 | | | shape=route | origin=Somewhere | destination=Elsewhere | ends_at=2026-10-01T12:00:00-07:00", { idempotencyKey: "migration:route-timezone" });
+  const sourceContent = service.getSource(imported.sourceId)?.content;
+  initial.connection.exec(`ALTER TABLE proposals DROP COLUMN origin_timezone; ALTER TABLE proposals DROP COLUMN destination_timezone; ALTER TABLE trip_items DROP COLUMN origin_timezone; ALTER TABLE trip_items DROP COLUMN destination_timezone;`);
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const upgradedService = new TravelService(upgraded, "system-admin");
+  const migrated = upgradedService.getProposal(tripId, imported.proposalIds[0]);
+  assert.equal(migrated?.originTimezone, undefined);
+  assert.equal(migrated?.destinationTimezone, undefined);
+  assert.equal(upgradedService.getSource(imported.sourceId)?.content, sourceContent);
+  assert.equal(upgradedService.queryTrip(tripId, "system-admin", { date: "2026-10-01" }).pending.length, 1);
+  assert.equal(upgradedService.reviewTrip(tripId).issues.some((issue) => issue.code === "missing_endpoint_timezone"), true);
   upgraded.close();
   rmSync(directory, { recursive: true, force: true });
 });
