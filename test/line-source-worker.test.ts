@@ -52,6 +52,89 @@ test("keeps non-Markdown LINE text as a Source with a review issue", async () =>
   db.close();
 });
 
+test("parses LINE free-form lodging and multi-leg route statements with shared Sources", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-freeform", "自由格式群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自由格式旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEFREEFORM000000000000", messageId: "message-freeform-lodging", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "2026-10-01 入住 Holiday Inn Express", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-freeform-lodging" });
+  inbox.enqueue({ eventId: "01JLINEFREEFORM000000000001", messageId: "message-freeform-route", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "2026-10-01 Las Vegas → St. George → Kanab → Page", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-freeform-route" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  const review = travel.reviewTrip(trip.id);
+  assert.equal(review.provisional.length, 4);
+  const lodging = review.provisional.find((proposal) => proposal.title === "住宿：Holiday Inn Express");
+  assert.equal(lodging?.shape, "point");
+  assert.deepEqual(lodging?.kinds, ["lodging"]);
+  assert.equal(lodging?.location, "Holiday Inn Express");
+  assert.deepEqual(review.provisional.filter((proposal) => proposal.shape === "route").map((proposal) => [proposal.origin, proposal.destination]).sort((left, right) => `${left[0]}${left[1]}`.localeCompare(`${right[0]}${right[1]}`)), [
+    ["Kanab", "Page"], ["Las Vegas", "St. George"], ["St. George", "Kanab"],
+  ]);
+  assert.equal(new Set(review.provisional.map((proposal) => proposal.sourceId)).size, 2);
+  assert.equal(replies.length, 2);
+  db.close();
+});
+
+test("keeps an incomplete or date-less free-form route traceable", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-freeform-review", "自由格式 review 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自由格式 review 旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEFREEFORMREVIEW000000", messageId: "message-freeform-review-1", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "從 Las Vegas 前往", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-freeform-review-1" });
+  inbox.enqueue({ eventId: "01JLINEFREEFORMREVIEW000001", messageId: "message-freeform-review-2", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "Las Vegas → Page", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-freeform-review-2" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  const review = travel.reviewTrip(trip.id);
+  assert.equal(review.provisional.length, 1);
+  assert.equal(review.provisional[0]?.startsAt, undefined);
+  assert.equal(review.issues.some((issue) => issue.code === "missing_route_endpoint"), true);
+  assert.equal(review.issues.some((issue) => issue.code === "source_unparsed"), false);
+  assert.equal(review.issues.some((issue) => issue.code === "missing_start_time" && issue.proposalIds.includes(review.provisional[0]?.id ?? "")), true);
+  assert.equal(replies.length, 2);
+  db.close();
+});
+
+test("infers multiple kinds from one LINE free-form statement", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-freeform-kinds", "自由格式 kinds 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自由格式 kinds 旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEFREEFORMKINDS00000", messageId: "message-freeform-kinds", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "2026-10-01 入住夜班火車，提供住宿與晚餐", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-freeform-kinds" });
+  const worker = new LineSourceWorker(inbox, travel, () => undefined);
+
+  assert.equal(await worker.processNext(), "processed");
+  const proposal = travel.reviewTrip(trip.id).provisional[0];
+  assert.deepEqual(proposal?.kinds, ["lodging", "meal", "transport"]);
+  assert.equal(proposal?.kind, "lodging");
+  db.close();
+});
+
+test("does not turn a LINE question into a Proposal and acknowledges its Source", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-freeform-question", "自由格式問題群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自由格式問題旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEFREEFORMQUESTION000", messageId: "message-freeform-question", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "推薦 Page 的住宿？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-freeform-question" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(travel.reviewTrip(trip.id).provisional.length, 0);
+  assert.equal(travel.reviewTrip(trip.id).issues.some((issue) => issue.code === "source_unparsed"), true);
+  assert.deepEqual(replies, ["已收到內容，已保存原始 Source；目前無法建立 Proposal，請補充日期、地點或路線。"]);
+  db.close();
+});
+
 test("includes same-date confirmed and pending itinerary context in the reply", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");

@@ -360,9 +360,10 @@ export class TravelService {
     );
     const issues = buildReviewIssues(proposals, confirmed);
     for (const source of sources) {
-      for (const issue of findUnparseableLineIssues(source.id, source.content)) issues.push(issue);
+      const sourceIssues = findUnparseableLineIssues(source.id, source.content);
+      issues.push(...sourceIssues);
       const sourceId = source.id;
-      if (!proposalSourceIds.has(sourceId)) {
+      if (!proposalSourceIds.has(sourceId) && sourceIssues.length === 0) {
         issues.push({ code: "source_unparsed", message: "Source has no parseable itinerary candidates.", sourceId, proposalIds: [] });
       }
     }
@@ -400,8 +401,8 @@ export class TravelService {
 
   private extractMarkdown(markdown: string): ExtractedTripItem[] {
     return markdown.split(/\r?\n/).flatMap((line, index) => {
-      const parsed = parseMarkdownCandidate(line, index + 1);
-      return parsed.item ? [parsed.item] : [];
+      const parsed = parseItineraryCandidate(line, index + 1);
+      return parsed.items ?? (parsed.item ? [parsed.item] : []);
     });
   }
 
@@ -490,7 +491,7 @@ function inferKinds(title: string): TripItem["kind"][] {
   if (/flight|航班|飛機/.test(lower)) kinds.push("flight");
   if (/hotel|住宿|飯店|住 /.test(lower)) kinds.push("lodging");
   if (/car|租車|還車/.test(lower)) kinds.push("rental_car");
-  if (/train|bus|交通|接駁|開車/.test(lower)) kinds.push("transport");
+  if (/train|bus|交通|接駁|開車|火車/.test(lower)) kinds.push("transport");
   if (/breakfast|lunch|dinner|meal|早餐|午餐|晚餐|餐/.test(lower)) kinds.push("meal");
   if (/tour|ticket|活動|門票|預約/.test(lower)) kinds.push("activity");
   if (/shopping|supermarket|walmart|safeway|採買|購物|超市/.test(lower)) kinds.push("shopping");
@@ -500,8 +501,83 @@ function inferKinds(title: string): TripItem["kind"][] {
 
 interface ParsedMarkdownCandidate {
   item?: ExtractedTripItem;
+  items?: ExtractedTripItem[];
   issue?: Pick<ReviewIssue, "code" | "message">;
   issues?: Array<Pick<ReviewIssue, "code" | "message">>;
+}
+
+function parseItineraryCandidate(line: string, sourceLine: number): ParsedMarkdownCandidate {
+  const markdown = parseMarkdownCandidate(line, sourceLine);
+  if (markdown.item || markdown.items || markdown.issue || markdown.issues) return markdown;
+  return parseFreeformCandidate(line, sourceLine);
+}
+
+function parseFreeformCandidate(line: string, sourceLine: number): ParsedMarkdownCandidate {
+  const original = line.trim();
+  if (!original || isFreeformQuestion(original)) return {};
+  const text = original.replace(/^@[^\s]+\s+/, "").trim();
+  const dateMatch = text.match(/\b(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?|\d{1,2}\/\d{1,2})\b/);
+  const startsAt = dateMatch?.[1];
+  const withoutDate = text.replace(dateMatch?.[0] ?? "", " ").replace(/\s+/g, " ").trim().replace(/[。.!！?？]+$/, "");
+  const routeParts = freeformRouteParts(withoutDate);
+  if (routeParts) {
+    if (routeParts.length < 2) {
+      return { issue: { code: "missing_route_endpoint", message: `第 ${sourceLine} 行的 Route Proposal 缺少起點或終點。` } };
+    }
+    const items = routeParts.slice(0, -1).map((origin, index) => {
+      const destination = routeParts[index + 1];
+      const inferredKinds = inferKinds(withoutDate).filter((kind) => kind !== "other");
+      const kinds = ["transport" as const, ...inferredKinds.filter((kind) => kind !== "transport")];
+      return makeFreeformItem({
+        kind: "transport", kinds: [...new Set(kinds)], shape: "route", title: `${origin} → ${destination}`,
+        startsAt, origin, destination, sourceLine, sourceExcerpt: original,
+      });
+    });
+    return { items };
+  }
+
+  const point = freeformPointStatement(withoutDate);
+  if (!point) return {};
+  return { item: makeFreeformItem({ ...point, startsAt, sourceLine, sourceExcerpt: original }) };
+}
+
+function freeformRouteParts(text: string): string[] | null {
+  const arrowParts = text.split(/\s*(?:→|->)\s*/).map((part) => part.trim()).filter(Boolean);
+  if (arrowParts.length > 1) return arrowParts;
+  const fromMatch = text.match(/^(?:從|from)\s+(.+?)\s+(?:前往|到|至|to)\s+(.+)$/i);
+  if (fromMatch) return [fromMatch[1].trim(), fromMatch[2].trim()];
+  if (/^(?:從|from)\s+/i.test(text) && /(?:前往|到|至|to)/i.test(text)) return [];
+  return null;
+}
+
+type FreeformPoint = Pick<ExtractedTripItem, "kind" | "kinds" | "shape" | "title" | "location">;
+
+function freeformPointStatement(text: string): FreeformPoint | null {
+  const diningAt = text.match(/^(?:在|於)\s*(.+?)\s*(?:吃|用餐|用餐於)?\s*(早餐|午餐|晚餐|吃飯|用餐)$/i)
+    ?? text.match(/^(早餐|午餐|晚餐|吃飯|用餐)\s*(?:在|於|：|:)\s*(.+)$/i);
+  if (diningAt) {
+    const meal = diningAt[1].match(/早餐|午餐|晚餐|吃飯|用餐/i) ? diningAt[1] : diningAt[2];
+    const location = diningAt[1].match(/早餐|午餐|晚餐|吃飯|用餐/i) ? diningAt[2] : diningAt[1];
+    return { kind: "meal", kinds: freeformKinds(text, "meal"), shape: "point", title: `${meal}：${location}`, location: location.trim() };
+  }
+  const lodging = text.match(/^(?:入住|住宿於|住宿在|住在|staying at)\s*[:：]?\s*(.+)$/i);
+  if (lodging) return { kind: "lodging", kinds: freeformKinds(text, "lodging"), shape: "point", title: `住宿：${lodging[1].trim()}`, location: lodging[1].trim() };
+  const rental = text.match(/^(?:租車(?:取車|還車)?|取車|還車)\s*[:：在於]?\s*(.+)$/i);
+  if (rental) return { kind: "rental_car", kinds: freeformKinds(text, "rental_car"), shape: "point", title: `租車：${rental[1].trim()}`, location: rental[1].trim() };
+  return null;
+}
+
+function freeformKinds(text: string, fallback: ExtractedTripItem["kind"]): ExtractedTripItem["kind"][] {
+  const inferred = inferKinds(text).filter((kind) => kind !== "other");
+  return inferred.length > 0 ? inferred : [fallback];
+}
+
+function makeFreeformItem(input: Pick<ExtractedTripItem, "kind" | "kinds" | "shape" | "title" | "startsAt" | "origin" | "destination" | "location" | "sourceLine" | "sourceExcerpt">): ExtractedTripItem {
+  return { ...input, shapeSource: "inferred", status: "provisional" };
+}
+
+function isFreeformQuestion(text: string): boolean {
+  return /[?？]$/.test(text) || /^(?:推薦|推荐|怎麼|怎么|如何|哪裡|哪里|有沒有|是否|可以|請問|请问)\b/.test(text) || /\b(?:推薦|推荐)\b/.test(text);
 }
 
 function parseMarkdownCandidate(line: string, sourceLine: number): ParsedMarkdownCandidate {
@@ -571,11 +647,11 @@ function containsSensitiveTravelData(markdown: string): boolean {
 
 function findUnparseableLineIssues(sourceId: string, markdown: string): ReviewIssue[] {
   return markdown.split(/\r?\n/).flatMap((line, index) => {
-    if (!/^\s*-\s*\[/.test(line)) return [];
-    const parsed = parseMarkdownCandidate(line, index + 1);
+    const parsed = parseItineraryCandidate(line, index + 1);
+    if (!/^\s*-\s*\[/.test(line) && !parsed.issue && !parsed.issues?.length) return [];
     if (parsed.issue) return [{ ...parsed.issue, sourceId, sourceLine: index + 1, sourceExcerpt: line.trim(), proposalIds: [] }];
     if (parsed.issues?.length) return parsed.issues.map((issue) => ({ ...issue, sourceId, sourceLine: index + 1, sourceExcerpt: line.trim(), proposalIds: [] }));
-    if (parsed.item) return [];
+    if (parsed.item || parsed.items?.length) return [];
     return [{ code: "unparseable_line" as const, message: `第 ${index + 1} 行無法解析為有效行程候選。`, sourceId, sourceLine: index + 1, sourceExcerpt: line.trim(), proposalIds: [] }];
   });
 }
