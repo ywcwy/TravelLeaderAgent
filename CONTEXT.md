@@ -138,8 +138,27 @@ _Avoid_: itinerary confirmation, recommendation, AI summary
 
 **Decision**:
 A named pending choice that groups mutually exclusive Proposals. Confirming one
-option resolves the Decision and rejects its other options.
+option resolves the Decision and rejects its other options. A Decision may need
+new options when all current options are rejected, or be explicitly cancelled by
+the Decision Owner.
 _Avoid_: implicit conflict, title matching
+
+**Trip Access Policy**:
+The visibility and interaction rules for one Trip. It determines which
+structured itinerary states and Source details a Group Member may read; it does
+not replace Decision Owner authority.
+_Avoid_: global permissions, chat permissions
+
+**Itinerary Query**:
+A read-only request for structured Trip data, such as the Effective Itinerary,
+pending Proposals, Decisions, or Review Issues. An Itinerary Query is not a
+Source and does not change Trip state.
+_Avoid_: itinerary evidence, Proposal
+
+**Decision Needs Options**:
+The lifecycle state of a Decision whose current Proposals have all been
+rejected, while the underlying decision topic remains open for new options.
+_Avoid_: cancelled Decision, resolved Decision
 
 **Proposal ID**:
 A stable identifier used for an owner confirmation command. Natural-language
