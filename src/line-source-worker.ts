@@ -51,9 +51,11 @@ export class LineSourceWorker {
         const command = parseProposalCommand(event.text);
         if (command) {
           if (replyToken) {
-            const text = command.type === "invalid" ? proposalCommandHelp : command.type === "confirm"
-              ? this.confirmReply(event.tripId, event.userId, command.proposalId)
-              : this.rejectReply(event.tripId, event.userId, command.proposalId, command.reason);
+            const text = command.type === "invalid" ? proposalCommandHelp
+              : command.type === "confirm" ? this.confirmReply(event.tripId, event.userId, command.proposalId)
+              : command.type === "reject" ? this.rejectReply(event.tripId, event.userId, command.proposalId, command.reason)
+              : command.type === "select" ? this.selectReply(event.tripId, event.userId, command.decisionId, command.proposalId)
+              : this.cancelReply(event.tripId, event.userId, command.decisionId);
             await this.reply(replyToken, text);
           }
           this.inbox.complete(event.eventId, leaseToken);
@@ -91,6 +93,24 @@ export class LineSourceWorker {
     try {
       const proposal = this.travel.rejectProposal(tripId, userId, proposalId, reason);
       return `已拒絕 Proposal ${proposalId}${proposal.rejectionReason ? `：${proposal.rejectionReason}` : "。"}`;
+    } catch (error) {
+      return commandErrorReply(error);
+    }
+  }
+
+  private selectReply(tripId: string, userId: string, decisionId: string, proposalId: string): string {
+    try {
+      const resolved = this.travel.resolveDecision(tripId, userId, decisionId, proposalId);
+      return `已在 Decision ${decisionId} 選擇 Proposal ${proposalId}：${resolved.item.title}。`;
+    } catch (error) {
+      return commandErrorReply(error);
+    }
+  }
+
+  private cancelReply(tripId: string, userId: string, decisionId: string): string {
+    try {
+      this.travel.cancelDecision(tripId, userId, decisionId);
+      return `已取消 Decision ${decisionId}。`;
     } catch (error) {
       return commandErrorReply(error);
     }

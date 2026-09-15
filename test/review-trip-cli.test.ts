@@ -15,8 +15,9 @@ test("review:trip CLI renders stable JSON and human-readable Trip Review", () =>
   const group = travel.createTravelGroup("system-admin", "C-review-cli", "CLI Review");
   const trip = travel.createActiveTrip("system-admin", group.id, "Review 旅程", "Asia/Taipei");
   travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
-  const imported = travel.importMarkdown(trip.id, "- [confirmed] 已確認行程 | 2026-10-16 | 台北\n- [provisional] 待確認住宿 | 2026-10-17 | 台中\n- [provisional] Las Vegas → St. George | 2026-10-18 | | | shape=route | origin=Las Vegas | destination=St. George", { idempotencyKey: "review:cli" });
+  const imported = travel.importMarkdown(trip.id, "- [confirmed] 已確認行程 | 2026-10-16 | 台北\n- [provisional] 待確認住宿 | 2026-10-17 | 台中\n- [provisional] Las Vegas → St. George | 2026-10-18 | | | shape=route | origin=Las Vegas | destination=St. George\n- [provisional] 被拒絕住宿 | 2026-10-19 | 台中", { idempotencyKey: "review:cli" });
   travel.confirmProposal(trip.id, "U-owner", imported.proposalIds[0]);
+  travel.rejectProposal(trip.id, "U-owner", imported.proposalIds[3], "不符合預算");
   database.close();
 
   const jsonOutput = execFileSync(process.execPath, ["--experimental-strip-types", "src/review-trip.ts", trip.id, "--json"], {
@@ -24,13 +25,16 @@ test("review:trip CLI renders stable JSON and human-readable Trip Review", () =>
     env: { ...process.env, TRAVEL_DATABASE_PATH: databasePath },
     encoding: "utf8",
   });
-  const json = JSON.parse(jsonOutput) as { trip: { id: string; title: string }; effectiveItinerary: Array<{ title: string }>; pendingProposals: Array<{ title: string }>; reviewIssues: unknown[]; counts: { confirmed: number; pending: number } };
+  const json = JSON.parse(jsonOutput) as { trip: { id: string; title: string }; effectiveItinerary: Array<{ title: string }>; pendingProposals: Array<{ title: string }>; rejectedProposals: Array<{ title: string; rejectionReason: string | null }>; reviewIssues: unknown[]; counts: { confirmed: number; pending: number; rejected: number } };
   assert.equal(json.trip.id, trip.id);
   assert.equal(json.trip.title, "Review 旅程");
   assert.deepEqual(json.effectiveItinerary.map((item) => item.title), ["已確認行程"]);
   assert.deepEqual(json.pendingProposals.map((proposal) => proposal.title), ["Las Vegas → St. George", "待確認住宿"]);
+  assert.deepEqual(json.rejectedProposals.map((proposal) => proposal.title), ["被拒絕住宿"]);
+  assert.equal(json.rejectedProposals[0]?.rejectionReason, "不符合預算");
   assert.equal(json.counts.confirmed, 1);
   assert.equal(json.counts.pending, 2);
+  assert.equal(json.counts.rejected, 1);
 
   const humanOutput = execFileSync(process.execPath, ["--experimental-strip-types", "src/review-trip.ts", trip.id], {
     cwd: process.cwd(),
@@ -41,6 +45,8 @@ test("review:trip CLI renders stable JSON and human-readable Trip Review", () =>
   assert.match(humanOutput, /Pending Proposals/);
   assert.match(humanOutput, /已確認行程/);
   assert.match(humanOutput, /待確認住宿/);
+  assert.match(humanOutput, /Rejected Proposals/);
+  assert.match(humanOutput, /被拒絕住宿/);
   assert.match(humanOutput, /\[route\].*Las Vegas.*St\. George/);
   assert.match(humanOutput, /\[lodging\]/);
   rmSync(directory, { recursive: true, force: true });

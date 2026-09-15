@@ -90,10 +90,12 @@ export class TravelDatabase {
         id TEXT PRIMARY KEY,
         trip_id TEXT NOT NULL REFERENCES trips(id),
         title TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
+        status TEXT NOT NULL CHECK (status IN ('open', 'resolved', 'needs_options', 'cancelled')),
         selected_proposal_id TEXT,
         resolved_by TEXT,
         resolved_at TEXT,
+        cancelled_by TEXT,
+        cancelled_at TEXT,
         created_at TEXT NOT NULL
       );
 
@@ -185,6 +187,27 @@ export class TravelDatabase {
     if (!sourceColumns.some((column) => column.name === "provider_message_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_message_id TEXT`);
     if (!sourceColumns.some((column) => column.name === "provider_group_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_group_id TEXT`);
     if (!sourceColumns.some((column) => column.name === "provider_user_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_user_id TEXT`);
+    const decisionColumns = this.connection.prepare(`PRAGMA table_info(decisions)`).all() as Array<{ name: string }>;
+    const decisionTable = this.connection.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'decisions'`).get() as { sql: string } | undefined;
+    if (decisionTable && !decisionTable.sql.includes("needs_options")) {
+      this.connection.exec(`PRAGMA foreign_keys = OFF`);
+      try {
+        this.connection.exec("BEGIN IMMEDIATE");
+        this.connection.exec(`CREATE TABLE decisions_v2 (id TEXT PRIMARY KEY, trip_id TEXT NOT NULL REFERENCES trips(id), title TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('open', 'resolved', 'needs_options', 'cancelled')), selected_proposal_id TEXT, resolved_by TEXT, resolved_at TEXT, cancelled_by TEXT, cancelled_at TEXT, created_at TEXT NOT NULL)`);
+        this.connection.exec(`INSERT INTO decisions_v2 (id, trip_id, title, status, selected_proposal_id, resolved_by, resolved_at, created_at) SELECT id, trip_id, title, status, selected_proposal_id, resolved_by, resolved_at, created_at FROM decisions`);
+        this.connection.exec(`DROP TABLE decisions`);
+        this.connection.exec(`ALTER TABLE decisions_v2 RENAME TO decisions`);
+        this.connection.exec("COMMIT");
+      } catch (error) {
+        this.connection.exec("ROLLBACK");
+        throw error;
+      } finally {
+        this.connection.exec(`PRAGMA foreign_keys = ON`);
+      }
+    } else {
+      if (!decisionColumns.some((column) => column.name === "cancelled_by")) this.connection.exec(`ALTER TABLE decisions ADD COLUMN cancelled_by TEXT`);
+      if (!decisionColumns.some((column) => column.name === "cancelled_at")) this.connection.exec(`ALTER TABLE decisions ADD COLUMN cancelled_at TEXT`);
+    }
     const proposalColumns = this.connection.prepare(`PRAGMA table_info(proposals)`).all() as Array<{ name: string }>;
     if (!proposalColumns.some((column) => column.name === "confirmed_trip_item_id")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN confirmed_trip_item_id TEXT REFERENCES trip_items(id)`);
     if (!proposalColumns.some((column) => column.name === "rejection_reason")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN rejection_reason TEXT`);

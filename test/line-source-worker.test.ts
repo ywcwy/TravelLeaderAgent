@@ -102,6 +102,33 @@ test("handles owner Proposal commands and keeps non-owner commands read-only", a
   db.close();
 });
 
+test("handles LINE Decision select and cancel commands idempotently", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-decision-command", "Decision 指令群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Decision 指令旅程", "Asia/Taipei");
+  travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
+  const options = travel.importMarkdown(trip.id, "- [open_decision] A | 2026-10-01 | Page\n- [open_decision] B | 2026-10-01 | Kanab", { idempotencyKey: "command:decision-options" });
+  const decision = travel.createDecision(trip.id, "U-owner", "住宿選擇", options.proposalIds);
+  const cancelOptions = travel.importMarkdown(trip.id, "- [open_decision] C | 2026-10-02 | Page\n- [open_decision] D | 2026-10-02 | Kanab", { idempotencyKey: "command:cancel-options" });
+  const cancellable = travel.createDecision(trip.id, "U-owner", "另一個選擇", cancelOptions.proposalIds);
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEDECISION000000000000", messageId: "decision-select", groupId: group.lineGroupId, userId: "U-owner", tripId: trip.id, text: `選擇 ${decision.id} ${options.proposalIds[0]}`, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "select-reply" });
+  inbox.enqueue({ eventId: "01JLINEDECISION000000000001", messageId: "decision-select-retry", groupId: group.lineGroupId, userId: "U-owner", tripId: trip.id, text: `選擇 ${decision.id} ${options.proposalIds[0]}`, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "select-retry-reply" });
+  inbox.enqueue({ eventId: "01JLINEDECISION000000000002", messageId: "decision-cancel", groupId: group.lineGroupId, userId: "U-owner", tripId: trip.id, text: `取消 Decision ${cancellable.id}`, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "cancel-reply" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /已在 Decision/);
+  assert.match(replies[1] ?? "", /已在 Decision/);
+  assert.match(replies[2] ?? "", /已取消 Decision/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM trip_items WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
+  assert.equal(travel.reviewTrip(trip.id).decisions.find((item) => item.id === cancellable.id)?.status, "cancelled");
+  db.close();
+});
+
 test("parses LINE free-form lodging and multi-leg route statements with shared Sources", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");

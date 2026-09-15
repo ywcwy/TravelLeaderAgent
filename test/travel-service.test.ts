@@ -472,6 +472,7 @@ test("an owner resolves mutually exclusive proposals through a Decision", () => 
   assert.equal(resolved.decision.resolvedBy, "owner");
   assert.ok(resolved.decision.resolvedAt);
   assert.equal(resolved.item.title, "Carmel 住宿");
+  assert.throws(() => service.resolveDecision(tripId, "owner", decision.id, imported.proposalIds[1]), ConflictError);
 
   const review = service.reviewTrip(tripId);
   assert.deepEqual(review.confirmed.map((item) => item.title), ["Carmel 住宿"]);
@@ -498,6 +499,41 @@ test("resolves a multi-kind Point Proposal through a Decision into one Trip Item
   assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM trip_items WHERE trip_id = ?`).get(tripId) as { count: number }).count, 1);
   assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM trip_item_kinds WHERE trip_item_id = ?`).get(resolved.item.id) as { count: number }).count, 3);
   assert.deepEqual(service.reviewTrip(tripId).confirmed.map((item) => item.id), [resolved.item.id]);
+  db.close();
+});
+
+test("runs Decision needs-options, reopening, selection, and cancellation lifecycle", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-decision-lifecycle");
+  service.addMember("system-admin", tripId, "owner", "Owner", "owner");
+  service.addMember("system-admin", tripId, "member", "Member", "member");
+  const initial = service.importMarkdown(tripId, [
+    "- [open_decision] 住宿 A | 2026-10-01T18:00:00+08:00 | Page | | timezone=Asia/Taipei",
+    "- [open_decision] 住宿 B | 2026-10-01T18:00:00+08:00 | Kanab | | timezone=Asia/Taipei",
+  ].join("\n"), { idempotencyKey: "decision:lifecycle:initial" });
+  const decision = service.createDecision(tripId, "owner", "住宿選擇", initial.proposalIds);
+  assert.throws(() => service.cancelDecision(tripId, "member", decision.id), PermissionError);
+  service.rejectProposal(tripId, "owner", initial.proposalIds[0], "不選 A");
+  assert.equal(service.reviewTrip(tripId).decisions.find((item) => item.id === decision.id)?.status, "open");
+  service.rejectProposal(tripId, "owner", initial.proposalIds[1], "不選 B");
+  assert.equal(service.reviewTrip(tripId).decisions.find((item) => item.id === decision.id)?.status, "needs_options");
+
+  const added = service.importMarkdown(tripId, "- [open_decision] 住宿 C | 2026-10-01T18:00:00+08:00 | Page | | timezone=Asia/Taipei", { idempotencyKey: "decision:lifecycle:added" });
+  assert.equal(service.addDecisionOptions(tripId, "owner", decision.id, added.proposalIds).status, "open");
+  const selected = service.resolveDecision(tripId, "owner", decision.id, added.proposalIds[0]);
+  const repeated = service.resolveDecision(tripId, "owner", decision.id, added.proposalIds[0]);
+  assert.equal(repeated.item.id, selected.item.id);
+  assert.equal(service.reviewTrip(tripId).rejected.some((proposal) => proposal.title === "住宿 A" && proposal.rejectedBy === "owner"), true);
+  assert.equal(service.reviewTrip(tripId).decisions.find((item) => item.id === decision.id)?.status, "resolved");
+
+  const cancellable = service.createDecision(tripId, "owner", "另一個決策", [
+    service.importMarkdown(tripId, "- [open_decision] 午餐 A | 2026-10-02 | Page", { idempotencyKey: "decision:lifecycle:cancel-a" }).proposalIds[0],
+    service.importMarkdown(tripId, "- [open_decision] 午餐 B | 2026-10-02 | Page", { idempotencyKey: "decision:lifecycle:cancel-b" }).proposalIds[0],
+  ]);
+  assert.equal(service.cancelDecision(tripId, "owner", cancellable.id).status, "cancelled");
+  assert.equal(service.cancelDecision(tripId, "owner", cancellable.id).status, "cancelled");
+  assert.equal(service.reviewTrip(tripId).pending.some((proposal) => proposal.title === "午餐 A" || proposal.title === "午餐 B"), false);
   db.close();
 });
 

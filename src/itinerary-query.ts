@@ -2,7 +2,7 @@ import type { ItineraryQuery, ItineraryQueryResult, TripItemKind } from "./domai
 
 export type ParsedItineraryMessage = { type: "query"; query: ItineraryQuery } | { type: "help" } | null;
 
-export type ParsedProposalCommand = { type: "confirm"; proposalId: string } | { type: "reject"; proposalId: string; reason: string | null } | { type: "invalid" } | null;
+export type ParsedProposalCommand = { type: "confirm"; proposalId: string } | { type: "reject"; proposalId: string; reason: string | null } | { type: "select"; decisionId: string; proposalId: string } | { type: "cancel"; decisionId: string } | { type: "invalid" } | null;
 
 export function parseProposalCommand(text: string): ParsedProposalCommand {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "").trim();
@@ -10,11 +10,15 @@ export function parseProposalCommand(text: string): ParsedProposalCommand {
   if (confirm) return { type: "confirm", proposalId: confirm[1].toUpperCase() };
   const reject = normalized.match(/^(?:拒絕|reject)\s+(P-[A-Z0-9]{8})(?:\s*[|｜]\s*(.*))?$/i);
   if (reject) return { type: "reject", proposalId: reject[1].toUpperCase(), reason: reject[2]?.trim() || null };
-  if (/^(?:確認|confirm)(?:\s|$)/i.test(normalized) || /^(?:拒絕|reject)(?:\s|$)/i.test(normalized)) return { type: "invalid" };
+  const select = normalized.match(/^(?:選擇|select)\s+(D-[A-Z0-9]{8})\s+(P-[A-Z0-9]{8})$/i);
+  if (select) return { type: "select", decisionId: select[1].toUpperCase(), proposalId: select[2].toUpperCase() };
+  const cancel = normalized.match(/^(?:取消\s+Decision|cancel\s+decision)\s+(D-[A-Z0-9]{8})$/i);
+  if (cancel) return { type: "cancel", decisionId: cancel[1].toUpperCase() };
+  if (/^(?:確認|confirm|拒絕|reject|選擇|select|取消\s+Decision|cancel\s+decision)(?:\s|$)/i.test(normalized)) return { type: "invalid" };
   return null;
 }
 
-export const proposalCommandHelp = "指令格式：確認 P-XXXXXXXX，或拒絕 P-XXXXXXXX｜原因。";
+export const proposalCommandHelp = "指令格式：確認 P-XXXXXXXX、拒絕 P-XXXXXXXX｜原因、選擇 D-XXXXXXXX P-XXXXXXXX，或取消 Decision D-XXXXXXXX。";
 
 export function parseItineraryMessage(text: string): ParsedItineraryMessage {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "").trim();

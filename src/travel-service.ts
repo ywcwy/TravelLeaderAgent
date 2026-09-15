@@ -288,7 +288,7 @@ export class TravelService {
     if (!title.trim() || uniqueProposalIds.length < 2) throw new ConflictError("A Decision requires a title and at least two distinct Proposals.");
 
     const placeholders = uniqueProposalIds.map(() => "?").join(", ");
-    const decision: Decision = { id: `D-${randomUUID().slice(0, 8).toUpperCase()}`, tripId, title, status: "open", selectedProposalId: null, resolvedBy: null, resolvedAt: null };
+    const decision: Decision = { id: `D-${randomUUID().slice(0, 8).toUpperCase()}`, tripId, title, status: "open", selectedProposalId: null, resolvedBy: null, resolvedAt: null, cancelledBy: null, cancelledAt: null };
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
       const proposals = this.db.connection.prepare(`SELECT id, trip_id, proposal_status, decision_id, replacement_for_item_id FROM proposals WHERE id IN (${placeholders})`).all(...uniqueProposalIds) as unknown as ProposalMembershipRow[];
@@ -312,8 +312,26 @@ export class TravelService {
     this.requireDecisionOwner(tripId, ownerId);
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
-      const decision = this.db.connection.prepare(`SELECT * FROM decisions WHERE id = ? AND trip_id = ? AND status = 'open'`).get(decisionId, tripId) as DecisionRow | undefined;
-      if (!decision) throw new NotFoundError(`Open Decision ${decisionId} was not found.`);
+      const decision = this.db.connection.prepare(`SELECT * FROM decisions WHERE id = ? AND trip_id = ?`).get(decisionId, tripId) as DecisionRow | undefined;
+      if (!decision) throw new NotFoundError(`Decision ${decisionId} was not found.`);
+      if (decision.status === "resolved" && decision.selected_proposal_id) {
+        if (decision.selected_proposal_id !== selectedProposalId) throw new ConflictError(`Decision ${decisionId} is already resolved with another Proposal.`);
+        const selected = this.db.connection.prepare(`SELECT confirmed_trip_item_id, source_id, title, starts_at, ends_at, location, origin, destination FROM proposals WHERE id = ? AND trip_id = ?`).get(decision.selected_proposal_id, tripId) as { confirmed_trip_item_id: string | null; source_id: string; title: string; starts_at: string | null; ends_at: string | null; location: string | null; origin: string | null; destination: string | null } | undefined;
+        if (selected?.confirmed_trip_item_id) {
+          const existing = this.db.connection.prepare(`SELECT * FROM trip_items WHERE id = ? AND trip_id = ?`).get(selected.confirmed_trip_item_id, tripId) as Record<string, unknown> | undefined;
+          if (existing) { this.db.connection.exec("COMMIT"); return { decision: toDecision(decision), item: this.hydrateTripItem(existing) }; }
+        }
+        if (selected) {
+          const candidates = (this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND source_id = ? AND title = ? AND status = 'confirmed'`).all(tripId, selected.source_id, selected.title) as Array<Record<string, unknown>>)
+            .filter((item) => item.starts_at === selected.starts_at && item.ends_at === selected.ends_at && item.location === selected.location && item.origin === selected.origin && item.destination === selected.destination);
+          if (candidates.length === 1) {
+            this.db.connection.prepare(`UPDATE proposals SET confirmed_trip_item_id = ? WHERE id = ? AND confirmed_trip_item_id IS NULL`).run(candidates[0].id as string, decision.selected_proposal_id);
+            this.db.connection.exec("COMMIT");
+            return { decision: toDecision(decision), item: this.hydrateTripItem(candidates[0]) };
+          }
+        }
+      }
+      if (decision.status !== "open") throw new ConflictError(`Decision ${decisionId} is not open.`);
       const proposal = this.db.connection.prepare(`SELECT * FROM proposals WHERE id = ? AND trip_id = ? AND decision_id = ? AND proposal_status = 'pending'`).get(selectedProposalId, tripId, decisionId) as ProposalRow | undefined;
       if (!proposal) throw new ConflictError("The selected Proposal is not an open option for this Decision.");
       const kinds = this.getProposalKinds(proposal.id);
@@ -332,12 +350,13 @@ export class TravelService {
         .run(item.id, tripId, item.sourceId, item.replacementForItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null, item.timezone ?? null, item.location ?? null, item.notes ?? null, ownerId, resolvedAt);
       const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) VALUES (?, ?)`);
       for (const kind of item.kinds) insertKind.run(item.id, kind);
-      this.db.connection.prepare(`UPDATE proposals SET proposal_status = CASE WHEN id = ? THEN 'confirmed' ELSE 'rejected' END WHERE decision_id = ? AND proposal_status = 'pending'`)
-        .run(selectedProposalId, decisionId);
+      this.db.connection.prepare(`UPDATE proposals SET proposal_status = CASE WHEN id = ? THEN 'confirmed' ELSE 'rejected' END, rejection_reason = CASE WHEN id = ? THEN rejection_reason ELSE 'Not selected in Decision ' || ? END, rejected_by = CASE WHEN id = ? THEN rejected_by ELSE ? END, rejected_at = CASE WHEN id = ? THEN rejected_at ELSE ? END WHERE decision_id = ? AND proposal_status = 'pending'`)
+        .run(selectedProposalId, selectedProposalId, decisionId, selectedProposalId, ownerId, selectedProposalId, resolvedAt, decisionId);
+      this.db.connection.prepare(`UPDATE proposals SET confirmed_trip_item_id = ? WHERE id = ?`).run(item.id, selectedProposalId);
       this.db.connection.prepare(`UPDATE decisions SET status = 'resolved', selected_proposal_id = ?, resolved_by = ?, resolved_at = ? WHERE id = ?`)
         .run(selectedProposalId, ownerId, resolvedAt, decisionId);
       this.db.connection.exec("COMMIT");
-      return { decision: { id: decision.id, tripId: decision.trip_id, title: decision.title, status: "resolved", selectedProposalId, resolvedBy: ownerId, resolvedAt }, item };
+      return { decision: { id: decision.id, tripId: decision.trip_id, title: decision.title, status: "resolved", selectedProposalId, resolvedBy: ownerId, resolvedAt, cancelledBy: null, cancelledAt: null }, item };
     } catch (error) {
       this.db.connection.exec("ROLLBACK");
       throw error;
@@ -411,9 +430,58 @@ export class TravelService {
       if (proposal.proposal_status !== "pending") throw new ConflictError(`Proposal ${proposalId} is not pending.`);
       const rejectedAt = now();
       this.db.connection.prepare(`UPDATE proposals SET proposal_status = 'rejected', rejection_reason = ?, rejected_by = ?, rejected_at = ? WHERE id = ? AND proposal_status = 'pending'`).run(reason?.trim() || null, ownerId, rejectedAt, proposalId);
+      if (proposal.decision_id) {
+        const remaining = this.db.connection.prepare(`SELECT COUNT(*) AS count FROM proposals WHERE decision_id = ? AND proposal_status = 'pending'`).get(proposal.decision_id) as { count: number };
+        if (Number(remaining.count) === 0) this.db.connection.prepare(`UPDATE decisions SET status = 'needs_options' WHERE id = ? AND status = 'open'`).run(proposal.decision_id);
+      }
       const updated = this.db.connection.prepare(`SELECT * FROM proposals WHERE id = ? AND trip_id = ?`).get(proposalId, tripId) as unknown as ProposalRow;
       this.db.connection.exec("COMMIT");
       return this.hydrateProposal(updated);
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  addDecisionOptions(tripId: string, ownerId: string, decisionId: string, proposalIds: string[]): Decision {
+    this.requireActiveTrip(tripId);
+    this.requireDecisionOwner(tripId, ownerId);
+    const uniqueProposalIds = [...new Set(proposalIds)];
+    if (uniqueProposalIds.length === 0) throw new ConflictError("At least one Proposal is required.");
+    const placeholders = uniqueProposalIds.map(() => "?").join(", ");
+    this.db.connection.exec("BEGIN IMMEDIATE");
+    try {
+      const decision = this.db.connection.prepare(`SELECT * FROM decisions WHERE id = ? AND trip_id = ?`).get(decisionId, tripId) as DecisionRow | undefined;
+      if (!decision) throw new NotFoundError(`Decision ${decisionId} was not found.`);
+      if (decision.status !== "needs_options") throw new ConflictError(`Decision ${decisionId} does not need new options.`);
+      const proposals = this.db.connection.prepare(`SELECT id, trip_id, proposal_status, decision_id, replacement_for_item_id FROM proposals WHERE id IN (${placeholders})`).all(...uniqueProposalIds) as unknown as ProposalMembershipRow[];
+      if (proposals.length !== uniqueProposalIds.length || proposals.some((proposal) => proposal.trip_id !== tripId || proposal.proposal_status !== "pending" || proposal.decision_id !== null || proposal.replacement_for_item_id !== null)) throw new ConflictError("Only unassigned pending Proposals from this Trip can be added.");
+      this.db.connection.prepare(`UPDATE proposals SET decision_id = ? WHERE id IN (${placeholders})`).run(decisionId, ...uniqueProposalIds);
+      this.db.connection.prepare(`UPDATE decisions SET status = 'open' WHERE id = ?`).run(decisionId);
+      const reopened = this.db.connection.prepare(`SELECT * FROM decisions WHERE id = ? AND trip_id = ?`).get(decisionId, tripId) as unknown as DecisionRow;
+      this.db.connection.exec("COMMIT");
+      return toDecision(reopened);
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  cancelDecision(tripId: string, ownerId: string, decisionId: string): Decision {
+    this.requireActiveTrip(tripId);
+    this.requireDecisionOwner(tripId, ownerId);
+    this.db.connection.exec("BEGIN IMMEDIATE");
+    try {
+      const decision = this.db.connection.prepare(`SELECT * FROM decisions WHERE id = ? AND trip_id = ?`).get(decisionId, tripId) as DecisionRow | undefined;
+      if (!decision) throw new NotFoundError(`Decision ${decisionId} was not found.`);
+      if (decision.status === "cancelled") { this.db.connection.exec("COMMIT"); return toDecision(decision); }
+      if (decision.status !== "open" && decision.status !== "needs_options") throw new ConflictError(`Decision ${decisionId} cannot be cancelled.`);
+      const cancelledAt = now();
+      this.db.connection.prepare(`UPDATE decisions SET status = 'cancelled', cancelled_by = ?, cancelled_at = ? WHERE id = ?`).run(ownerId, cancelledAt, decisionId);
+      this.db.connection.prepare(`UPDATE proposals SET proposal_status = 'rejected', rejection_reason = COALESCE(rejection_reason, 'Decision cancelled'), rejected_by = COALESCE(rejected_by, ?), rejected_at = COALESCE(rejected_at, ?) WHERE decision_id = ? AND proposal_status = 'pending'`).run(ownerId, cancelledAt, decisionId);
+      const cancelled = this.db.connection.prepare(`SELECT * FROM decisions WHERE id = ? AND trip_id = ?`).get(decisionId, tripId) as unknown as DecisionRow;
+      this.db.connection.exec("COMMIT");
+      return toDecision(cancelled);
     } catch (error) {
       this.db.connection.exec("ROLLBACK");
       throw error;
@@ -425,6 +493,7 @@ export class TravelService {
     const cancelled = this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'cancelled' ORDER BY starts_at, title`).all(tripId).map((row) => this.hydrateTripItem(row)) as TripItem[];
     const pending = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' ORDER BY deadline_at, title`).all(tripId) as unknown as ProposalRow[];
     const proposals = pending.map((row) => this.hydrateProposal(row));
+    const rejected = (this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'rejected' ORDER BY rejected_at, title`).all(tripId) as unknown as ProposalRow[]).map((row) => this.hydrateProposal(row));
     const sources = this.db.connection.prepare(`SELECT id, content FROM sources WHERE trip_id = ?`).all(tripId) as Array<{ id: string; content: string }>;
     const sourceIds = sources.map((source) => source.id);
     const proposalSourceIds = new Set(
@@ -440,14 +509,17 @@ export class TravelService {
         issues.push({ code: "source_unparsed", message: "Source has no parseable itinerary candidates.", sourceId, proposalIds: [] });
       }
     }
+    const decisions = (this.db.connection.prepare(`SELECT * FROM decisions WHERE trip_id = ? ORDER BY created_at, id`).all(tripId) as unknown as DecisionRow[]).map(toDecision);
     return {
       confirmed,
       cancelled,
       pending: proposals,
+      rejected,
       provisional: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "provisional"),
       openDecisions: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "open_decision"),
       conflicts: proposals.filter((proposal) => proposal.status === "pending" && proposal.itemStatus === "conflicted"),
       issues,
+      decisions,
     };
   }
 
@@ -579,11 +651,11 @@ interface ProposalMembershipRow {
 }
 
 interface DecisionRow {
-  id: string; trip_id: string; title: string; status: "open" | "resolved"; selected_proposal_id: string | null;
+  id: string; trip_id: string; title: string; status: "open" | "resolved" | "needs_options" | "cancelled"; selected_proposal_id: string | null; resolved_by: string | null; resolved_at: string | null; cancelled_by: string | null; cancelled_at: string | null;
 }
 
 function toDecision(row: DecisionRow): Decision {
-  return { id: row.id, tripId: row.trip_id, title: row.title, status: row.status, selectedProposalId: row.selected_proposal_id, resolvedBy: null, resolvedAt: null };
+  return { id: row.id, tripId: row.trip_id, title: row.title, status: row.status, selectedProposalId: row.selected_proposal_id, resolvedBy: row.resolved_by, resolvedAt: row.resolved_at, cancelledBy: row.cancelled_by, cancelledAt: row.cancelled_at };
 }
 
 function tripDate(value: string, timezone: string): string {

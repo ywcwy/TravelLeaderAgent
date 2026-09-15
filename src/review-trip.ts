@@ -30,10 +30,14 @@ function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, revie
     trip,
     effectiveItinerary: review.confirmed,
     pendingProposals: review.pending,
+    rejectedProposals: review.rejected,
+    decisions: review.decisions,
     reviewIssues: review.issues,
     counts: {
       confirmed: review.confirmed.length,
       pending: review.pending.length,
+      rejected: review.rejected.length,
+      decisions: review.decisions.length,
       reviewIssues: review.issues.length,
     },
   };
@@ -46,6 +50,10 @@ function renderHuman(result: ReturnType<typeof toResult>): string {
     ...result.effectiveItinerary.map(formatTripItem),
     `Pending Proposals (${result.counts.pending})`,
     ...result.pendingProposals.map(formatProposal),
+    `Rejected Proposals (${result.counts.rejected})`,
+    ...result.rejectedProposals.map((proposal) => `${formatProposal(proposal)}${proposal.rejectionReason ? ` | reason: ${proposal.rejectionReason}` : ""}${proposal.rejectedBy ? ` | by: ${proposal.rejectedBy}` : ""}`),
+    `Decisions (${result.counts.decisions})`,
+    ...result.decisions.map((decision) => `- ${decision.id} | ${decision.status} | ${decision.title}${decision.selectedProposalId ? ` | selected: ${decision.selectedProposalId}` : ""}${decision.cancelledBy ? ` | cancelled by: ${decision.cancelledBy}` : ""}`),
     `Review Issues (${result.counts.reviewIssues})`,
     ...result.reviewIssues.map((issue) => `- [${issue.code}] ${issue.message}${issue.sourceLine ? ` (line ${issue.sourceLine})` : ""}`),
   ];

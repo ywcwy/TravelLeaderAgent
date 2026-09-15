@@ -13,7 +13,7 @@ export type ProposalShapeSource = "explicit" | "inferred";
 export type ProposalStatus = "pending" | "confirmed" | "rejected";
 export type MemberRole = "owner" | "member";
 export type TripStatus = "active" | "archived";
-export type DecisionStatus = "open" | "resolved";
+export type DecisionStatus = "open" | "resolved" | "needs_options" | "cancelled";
 
 export interface ExtractedTripItem {
   kind: TripItemKind;
@@ -149,14 +149,18 @@ export interface Decision {
   selectedProposalId: string | null;
   resolvedBy: string | null;
   resolvedAt: string | null;
+  cancelledBy: string | null;
+  cancelledAt: string | null;
 }
 
 export interface TripReview {
   confirmed: TripItem[];
   cancelled: TripItem[];
   pending: Proposal[];
+  rejected: Proposal[];
   provisional: Proposal[];
   openDecisions: Proposal[];
   conflicts: Proposal[];
   issues: ReviewIssue[];
+  decisions: Decision[];
 }
