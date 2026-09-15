@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
+import { isDateOnly, localDate } from "./timezone.ts";
 import type { Decision, ExtractedTripItem, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
@@ -550,9 +551,9 @@ export class TravelService {
     const pageSize = Math.min(Math.max(query.pageSize ?? 10, 1), 10);
     const continuation = this.readQueryToken(query.continuationToken, tripId, memberId);
     const effectiveQuery = continuation?.query ?? query;
-    const matches = (item: { id?: string; title: string; startsAt?: string; location?: string; origin?: string; destination?: string; kinds: TripItemKind[] }) => {
+    const matches = (item: { id?: string; title: string; startsAt?: string; timezone?: string; location?: string; origin?: string; destination?: string; kinds: TripItemKind[] }) => {
       if (effectiveQuery.proposalId && item.id !== effectiveQuery.proposalId) return false;
-      if (effectiveQuery.date && (!item.startsAt || tripDate(item.startsAt, trip.timezone) !== effectiveQuery.date)) return false;
+      if (effectiveQuery.date && (!item.startsAt || localDate(item.startsAt, item.timezone ?? trip.timezone) !== effectiveQuery.date)) return false;
       if (effectiveQuery.location && ![item.location, item.origin, item.destination].some((value) => value?.toLocaleLowerCase().includes(effectiveQuery.location!.toLocaleLowerCase()))) return false;
       if (effectiveQuery.kind && !item.kinds.includes(effectiveQuery.kind)) return false;
       return true;
@@ -703,13 +704,11 @@ function toDecision(row: DecisionRow): Decision {
   return { id: row.id, tripId: row.trip_id, title: row.title, status: row.status, selectedProposalId: row.selected_proposal_id, resolvedBy: row.resolved_by, resolvedAt: row.resolved_at, cancelledBy: row.cancelled_by, cancelledAt: row.cancelled_at };
 }
 
-function tripDate(value: string, timezone: string): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
-}
-
 function compareScheduledItems(left: { startsAt?: string; title: string; id: string }, right: { startsAt?: string; title: string; id: string }): number {
-  const leftTime = left.startsAt ? Date.parse(left.startsAt) : Number.POSITIVE_INFINITY;
-  const rightTime = right.startsAt ? Date.parse(right.startsAt) : Number.POSITIVE_INFINITY;
+  // A date-only value has no instant; keep it out of Unix-time ordering and
+  // place it deterministically after timed records using the tie-breakers.
+  const leftTime = left.startsAt && !isDateOnly(left.startsAt) ? Date.parse(left.startsAt) : Number.POSITIVE_INFINITY;
+  const rightTime = right.startsAt && !isDateOnly(right.startsAt) ? Date.parse(right.startsAt) : Number.POSITIVE_INFINITY;
   return leftTime - rightTime || left.title.localeCompare(right.title) || left.id.localeCompare(right.id);
 }
 
@@ -981,10 +980,6 @@ function dateKey(value: string | undefined, tripTimezone: string): string | null
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
   return new Intl.DateTimeFormat("en-CA", { timeZone: tripTimezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(parsed);
-}
-
-function isDateOnly(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 function buildReviewIssues(proposals: Proposal[], confirmed: TripItem[]): ReviewIssue[] {

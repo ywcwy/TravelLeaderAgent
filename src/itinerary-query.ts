@@ -1,4 +1,5 @@
 import type { ItineraryQuery, ItineraryQueryResult, TripItemKind } from "./domain.ts";
+import { formatLocalDateTime } from "./timezone.ts";
 
 export type ParsedItineraryMessage = { type: "query"; query: ItineraryQuery } | { type: "help" } | null;
 
@@ -56,8 +57,9 @@ export function renderItineraryQuery(result: ItineraryQueryResult): string {
 
 export const itineraryQueryHelp = "可用查詢：查詢行程、查詢歷史 <Trip ID>、查詢 2026-10-01、查詢 Page、查詢待確認、查詢 Review Issues、查詢來源、查詢繼續 Q-XXXXXXXX。";
 
-function formatItem(item: { title: string; startsAt?: string; location?: string }): string {
-  return `${item.title}${item.startsAt ? `｜${item.startsAt}` : ""}${item.location ? `｜${item.location}` : ""}`;
+function formatItem(item: { title: string; startsAt?: string; timezone?: string; timezoneSource?: string; location?: string }): string {
+  const time = item.startsAt ? `｜${item.timezone ? formatLocalDateTime(item.startsAt, item.timezone) : item.startsAt}` : "";
+  return `${item.title}${time}${item.timezone ? `｜${item.timezone}` : ""}${item.timezoneSource === "fallback" ? "｜timezone fallback" : ""}${item.location ? `｜${item.location}` : ""}`;
 }
 
 function parseKind(value: string): TripItemKind | undefined {
