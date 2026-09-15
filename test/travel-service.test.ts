@@ -5,6 +5,7 @@ import test from "node:test";
 import { tmpdir } from "node:os";
 import { TravelDatabase } from "../src/database.ts";
 import { ConflictError, InvalidSourceError, InvalidTimezoneError, PermissionError, TravelService, TripNotActiveError } from "../src/travel-service.ts";
+import { renderItineraryQuery } from "../src/itinerary-query.ts";
 
 function bootstrapActiveTrip(service: TravelService, lineGroupId: string): string {
   const travelGroup = service.createTravelGroup("system-admin", lineGroupId, "測試旅遊群");
@@ -185,6 +186,33 @@ test("queries policy-permitted Active Trip records with stable filters", () => {
   const hidden = service.queryActiveTrip(tripId, "U-member", {});
   assert.deepEqual(hidden.pending, []);
   assert.deepEqual(hidden.issues, []);
+  db.close();
+});
+
+test("queries each timed item by its local date and renders timezone context", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-query-local-date");
+  service.ensureGroupMember(tripId, "U-member", "Member");
+  service.importMarkdown(tripId, [
+    "- [provisional] Las Vegas evening | 2026-10-01T18:00:00-07:00 | Las Vegas | | timezone=America/Los_Angeles",
+    "- [provisional] Page lodging | 2026-10-01T18:45:00-07:00 | Page | | timezone=America/Phoenix",
+    "- [provisional] St George boundary | 2026-10-02T00:30:00Z | St. George | | timezone=America/Denver",
+    "- [provisional] Date-only Page | 2026-10-01 | Page",
+    "- [provisional] Unknown fallback | 2026-10-01T18:00:00-07:00 | Somewhere",
+  ].join("\n"), { idempotencyKey: "query:local-date" });
+
+  const localDateResult = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-01" });
+  assert.deepEqual(localDateResult.pending.map((item) => item.title).sort(), ["Date-only Page", "Las Vegas evening", "Page lodging", "St George boundary", "Unknown fallback"].sort());
+  assert.equal(localDateResult.pending.at(-1)?.title, "Date-only Page");
+  const rendered = renderItineraryQuery(localDateResult);
+  assert.match(rendered, /America\/Los_Angeles/);
+  assert.match(rendered, /America\/Phoenix/);
+  assert.match(rendered, /America\/Denver/);
+  assert.match(rendered, /UTC-07:00/);
+
+  const fallbackResult = service.queryActiveTrip(tripId, "U-member", { location: "Somewhere" });
+  assert.match(renderItineraryQuery(fallbackResult), /timezone fallback/);
   db.close();
 });
 

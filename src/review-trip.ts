@@ -1,5 +1,6 @@
 import { TravelDatabase } from "./database.ts";
 import type { Proposal, TripReview, TripItem } from "./domain.ts";
+import { formatLocalDateTime } from "./timezone.ts";
 import { NotFoundError, TravelService } from "./travel-service.ts";
 
 const [tripId, ...flags] = process.argv.slice(2);
@@ -64,12 +65,14 @@ function formatTripItem(item: TripItem): string {
   const place = item.shape === "route"
     ? `${item.origin ?? "?"} → ${item.destination ?? "?"}`
     : item.location;
-  return `- [${item.shape}] [${item.kinds.join(", ")}] ${item.title}${item.startsAt ? ` | ${item.startsAt}` : ""}${place ? ` | ${place}` : ""}`;
+  const time = item.startsAt ? ` | ${item.timezone ? formatLocalDateTime(item.startsAt, item.timezone) : item.startsAt}` : "";
+  return `- [${item.shape}] [${item.kinds.join(", ")}] ${item.title}${time}${item.timezone ? ` | ${item.timezone}` : ""}${item.timezoneSource === "fallback" ? " | timezone fallback" : ""}${place ? ` | ${place}` : ""}`;
 }
 
 function formatProposal(proposal: Proposal): string {
   const place = proposal.shape === "route"
     ? `${proposal.origin ?? "?"} → ${proposal.destination ?? "?"}`
     : proposal.location;
-  return `- ${proposal.id} | [${proposal.shape}] [${proposal.kinds.join(", ")}] ${proposal.itemStatus} / ${proposal.status} | ${proposal.title}${proposal.startsAt ? ` | ${proposal.startsAt}` : ""}${place ? ` | ${place}` : ""}`;
+  const time = proposal.startsAt ? ` | ${proposal.timezone ? formatLocalDateTime(proposal.startsAt, proposal.timezone) : proposal.startsAt}` : "";
+  return `- ${proposal.id} | [${proposal.shape}] [${proposal.kinds.join(", ")}] ${proposal.itemStatus} / ${proposal.status} | ${proposal.title}${time}${proposal.timezone ? ` | ${proposal.timezone}` : ""}${proposal.timezoneSource === "fallback" ? " | timezone fallback" : ""}${place ? ` | ${place}` : ""}`;
 }
