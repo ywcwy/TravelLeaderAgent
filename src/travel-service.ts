@@ -499,20 +499,20 @@ function inferKinds(title: string): TripItem["kind"][] {
   return kinds.length > 0 ? [...new Set(kinds)] : ["other"];
 }
 
-interface ParsedMarkdownCandidate {
+interface ParsedItineraryCandidate {
   item?: ExtractedTripItem;
   items?: ExtractedTripItem[];
   issue?: Pick<ReviewIssue, "code" | "message">;
   issues?: Array<Pick<ReviewIssue, "code" | "message">>;
 }
 
-function parseItineraryCandidate(line: string, sourceLine: number): ParsedMarkdownCandidate {
+function parseItineraryCandidate(line: string, sourceLine: number): ParsedItineraryCandidate {
   const markdown = parseMarkdownCandidate(line, sourceLine);
   if (markdown.item || markdown.items || markdown.issue || markdown.issues) return markdown;
   return parseFreeformCandidate(line, sourceLine);
 }
 
-function parseFreeformCandidate(line: string, sourceLine: number): ParsedMarkdownCandidate {
+function parseFreeformCandidate(line: string, sourceLine: number): ParsedItineraryCandidate {
   const original = line.trim();
   if (!original || isFreeformQuestion(original)) return {};
   const text = original.replace(/^@[^\s]+\s+/, "").trim();
@@ -553,6 +553,11 @@ function freeformRouteParts(text: string): string[] | null {
 type FreeformPoint = Pick<ExtractedTripItem, "kind" | "kinds" | "shape" | "title" | "location">;
 
 function freeformPointStatement(text: string): FreeformPoint | null {
+  const englishDining = text.match(/^(?:dining|breakfast|lunch|dinner)\s+(?:at|in)\s+(.+)$/i);
+  if (englishDining) {
+    const location = englishDining[1].trim();
+    return { kind: "meal", kinds: ["meal"], shape: "point", title: `餐飲：${location}`, location };
+  }
   const diningAt = text.match(/^(?:在|於)\s*(.+?)\s*(?:吃|用餐|用餐於)?\s*(早餐|午餐|晚餐|吃飯|用餐)$/i)
     ?? text.match(/^(早餐|午餐|晚餐|吃飯|用餐)\s*(?:在|於|：|:)\s*(.+)$/i);
   if (diningAt) {
@@ -562,7 +567,8 @@ function freeformPointStatement(text: string): FreeformPoint | null {
   }
   const lodging = text.match(/^(?:入住|住宿於|住宿在|住在|staying at)\s*[:：]?\s*(.+)$/i);
   if (lodging) return { kind: "lodging", kinds: freeformKinds(text, "lodging"), shape: "point", title: `住宿：${lodging[1].trim()}`, location: lodging[1].trim() };
-  const rental = text.match(/^(?:租車(?:取車|還車)?|取車|還車)\s*[:：在於]?\s*(.+)$/i);
+  const rental = text.match(/^(?:租車(?:取車|還車)?|取車|還車)\s*[:：在於]?\s*(.+)$/i)
+    ?? text.match(/^(?:rental[- ]car\s+(?:pick[- ]?up|drop[- ]?off)|rental[- ]car\s+(?:pickup|dropoff)|car\s+(?:pick[- ]?up|drop[- ]?off))\s+(?:at|in)\s+(.+)$/i);
   if (rental) return { kind: "rental_car", kinds: freeformKinds(text, "rental_car"), shape: "point", title: `租車：${rental[1].trim()}`, location: rental[1].trim() };
   return null;
 }
@@ -580,7 +586,7 @@ function isFreeformQuestion(text: string): boolean {
   return /[?？]$/.test(text) || /^(?:推薦|推荐|怎麼|怎么|如何|哪裡|哪里|有沒有|是否|可以|請問|请问)\b/.test(text) || /\b(?:推薦|推荐)\b/.test(text);
 }
 
-function parseMarkdownCandidate(line: string, sourceLine: number): ParsedMarkdownCandidate {
+function parseMarkdownCandidate(line: string, sourceLine: number): ParsedItineraryCandidate {
   const match = line.match(/^\s*(?:@[^-]*?\s+)?-\s*\[(confirmed|provisional|open_decision|conflicted)\]\s*(.+)$/i);
   if (!match) return {};
   const [, status, body] = match;

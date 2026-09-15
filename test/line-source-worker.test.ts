@@ -118,6 +118,25 @@ test("infers multiple kinds from one LINE free-form statement", async () => {
   db.close();
 });
 
+test("supports English dining and rental-car free-form statements", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-freeform-english", "英文自由格式群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "英文自由格式旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEFREEFORMENGLISH000", messageId: "message-freeform-dining", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "2026-10-01 dining at BirdHouse", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-freeform-dining" });
+  inbox.enqueue({ eventId: "01JLINEFREEFORMENGLISH001", messageId: "message-freeform-rental", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "2026-10-01 rental car pickup at LAS", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-freeform-rental" });
+  const worker = new LineSourceWorker(inbox, travel, () => undefined);
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  const proposals = travel.reviewTrip(trip.id).provisional;
+  assert.equal(proposals.length, 2);
+  assert.deepEqual(proposals.find((proposal) => proposal.location === "BirdHouse")?.kinds, ["meal"]);
+  assert.deepEqual(proposals.find((proposal) => proposal.location === "LAS")?.kinds, ["rental_car"]);
+  db.close();
+});
+
 test("does not turn a LINE question into a Proposal and acknowledges its Source", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
