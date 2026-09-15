@@ -191,6 +191,7 @@ export class TravelService {
 
   createProposal(tripId: string, sourceId: string, item: ExtractedTripItem): string {
     this.requireActiveTrip(tripId);
+    const kinds = canonicalizeKinds(item.kind, item.kinds);
     const id = `P-${randomUUID().slice(0, 8).toUpperCase()}`;
     this.db.connection.prepare(`
       INSERT INTO proposals (id, trip_id, source_id, kind, shape, shape_source, origin, destination, title, item_status, proposal_status, starts_at, ends_at, timezone, location, notes, deadline_at, source_line, source_excerpt, created_at)
@@ -198,7 +199,7 @@ export class TravelService {
     `).run(id, tripId, sourceId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null,
       item.timezone ?? null, item.location ?? null, item.notes ?? null, item.deadlineAt ?? null, item.sourceLine ?? null, item.sourceExcerpt ?? null, now());
     const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) VALUES (?, ?)`);
-    for (const kind of item.kinds) insertKind.run(id, kind);
+    for (const kind of kinds) insertKind.run(id, kind);
     return id;
   }
 
@@ -225,6 +226,7 @@ export class TravelService {
 
   createReplacementProposal(tripId: string, sourceId: string, predecessorItemId: string, item: ExtractedTripItem): string {
     this.requireActiveTrip(tripId);
+    const kinds = canonicalizeKinds(item.kind, item.kinds);
     const source = this.db.connection.prepare(`SELECT id FROM sources WHERE id = ? AND trip_id = ?`).get(sourceId, tripId);
     const predecessor = this.db.connection.prepare(`SELECT id FROM trip_items WHERE id = ? AND trip_id = ? AND status = 'confirmed'`).get(predecessorItemId, tripId);
     if (!source || !predecessor) throw new ConflictError("A Replacement Proposal must reference a confirmed Trip Item and Source from the same Active Trip.");
@@ -235,7 +237,7 @@ export class TravelService {
     `).run(id, tripId, sourceId, predecessorItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null,
       item.timezone ?? null, item.location ?? null, item.notes ?? null, item.deadlineAt ?? null, item.sourceLine ?? null, item.sourceExcerpt ?? null, now());
     const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) VALUES (?, ?)`);
-    for (const kind of item.kinds) insertKind.run(id, kind);
+    for (const kind of kinds) insertKind.run(id, kind);
     return id;
   }
 
@@ -467,6 +469,21 @@ function toTripItem(row: Record<string, unknown>, kinds = [row.kind as TripItem[
   return { id: row.id as string, sourceId: row.source_id as string, replacementForItemId: (row.replacement_for_item_id as string) ?? null, kind: row.kind as TripItem["kind"], kinds, shape: (row.shape as ProposalShape | null) ?? "point", shapeSource: (row.shape_source as ProposalShapeSource | null) ?? "inferred", origin: (row.origin as string) ?? undefined, destination: (row.destination as string) ?? undefined, title: row.title as string, status: row.status as TripItemStatus, startsAt: (row.starts_at as string) ?? undefined, endsAt: (row.ends_at as string) ?? undefined, timezone: (row.timezone as string) ?? undefined, location: (row.location as string) ?? undefined, notes: (row.notes as string) ?? undefined, confirmedBy: (row.confirmed_by as string) ?? null };
 }
 
+const canonicalTripItemKinds = new Set<TripItemKind>(["flight", "lodging", "rental_car", "transport", "meal", "activity", "shopping", "meeting", "other"]);
+
+function canonicalizeKinds(primaryKind: TripItemKind, kinds: TripItemKind[]): TripItemKind[] {
+  if (!Array.isArray(kinds) || kinds.length === 0) {
+    throw new InvalidSourceError("A Proposal must have at least one Kind.");
+  }
+  const uniqueKinds = [...new Set(kinds)];
+  const unknownKind = uniqueKinds.find((kind) => !canonicalTripItemKinds.has(kind));
+  if (unknownKind) throw new InvalidSourceError(`Unsupported Proposal Kind: ${String(unknownKind)}.`);
+  if (!canonicalTripItemKinds.has(primaryKind) || !uniqueKinds.includes(primaryKind)) {
+    throw new InvalidSourceError("The primary Proposal Kind must be included in its Kinds.");
+  }
+  return uniqueKinds;
+}
+
 function inferKinds(title: string): TripItem["kind"][] {
   const lower = title.toLowerCase();
   const kinds: TripItem["kind"][] = [];
@@ -516,7 +533,7 @@ function parseMarkdownCandidate(line: string, sourceLine: number): ParsedMarkdow
   }
   const hasExplicitKinds = Boolean(fields.kinds);
   const parsedKinds = hasExplicitKinds ? fields.kinds.split(",").map((kind) => kind.trim()).filter(Boolean) : inferKinds(title);
-  const knownKinds = new Set<TripItem["kind"]>(["flight", "lodging", "rental_car", "transport", "meal", "activity", "shopping", "meeting", "other"]);
+  const knownKinds = canonicalTripItemKinds;
   const unknownKinds = parsedKinds.filter((kind) => !knownKinds.has(kind as TripItem["kind"]));
   const kinds = parsedKinds.filter((kind): kind is TripItem["kind"] => knownKinds.has(kind as TripItem["kind"]));
   if (kinds.length === 0) kinds.push("other");

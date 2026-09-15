@@ -140,6 +140,22 @@ test("imports multiple Proposal Kinds and reports unknown kinds", () => {
   db.close();
 });
 
+test("enforces non-empty, known, and primary-consistent Proposal Kinds at the service boundary", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-proposal-kind-validation");
+  const source = service.importMarkdown(tripId, "- [provisional] 來源 | 2026-10-16 | 台北", { idempotencyKey: "test:proposal-kind-validation" });
+  const base = { shape: "point" as const, shapeSource: "explicit" as const, title: "手動 Proposal", status: "provisional" as const };
+
+  assert.throws(() => service.createProposal(tripId, source.sourceId, { ...base, kind: "lodging", kinds: [] }), InvalidSourceError);
+  assert.throws(() => service.createProposal(tripId, source.sourceId, { ...base, kind: "lodging", kinds: ["spaceship"] as never }), InvalidSourceError);
+  assert.throws(() => service.createProposal(tripId, source.sourceId, { ...base, kind: "lodging", kinds: ["transport"] }), InvalidSourceError);
+
+  const id = service.createProposal(tripId, source.sourceId, { ...base, kind: "transport", kinds: ["transport", "transport", "meal"] });
+  assert.deepEqual(service.getProposal(tripId, id)?.kinds, ["meal", "transport"]);
+  db.close();
+});
+
 test("importing the same Source Idempotency Key reuses its Source and Proposals", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
