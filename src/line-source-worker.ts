@@ -1,6 +1,6 @@
 import type { TravelService } from "./travel-service.ts";
 import type { WebhookInbox, WebhookInboxEvent } from "./webhook-inbox.ts";
-import { itineraryQueryHelp, parseItineraryMessage, renderItineraryQuery } from "./itinerary-query.ts";
+import { itineraryQueryHelp, parseItineraryMessage, parseProposalCommand, proposalCommandHelp, renderItineraryQuery } from "./itinerary-query.ts";
 
 export type LineReplySender = (replyToken: string, text: string) => void | Promise<void>;
 
@@ -48,6 +48,17 @@ export class LineSourceWorker {
     return (async () => {
       try {
         const parsed = parseItineraryMessage(event.text);
+        const command = parseProposalCommand(event.text);
+        if (command) {
+          if (replyToken) {
+            const text = command.type === "invalid" ? proposalCommandHelp : command.type === "confirm"
+              ? this.confirmReply(event.tripId, event.userId, command.proposalId)
+              : this.rejectReply(event.tripId, event.userId, command.proposalId, command.reason);
+            await this.reply(replyToken, text);
+          }
+          this.inbox.complete(event.eventId, leaseToken);
+          return "processed" as const;
+        }
         if (parsed) {
           if (replyToken) {
             const text = parsed.type === "help" ? itineraryQueryHelp : renderItineraryQuery(this.travel.queryActiveTrip(event.tripId, event.userId, parsed.query));
@@ -65,6 +76,24 @@ export class LineSourceWorker {
         return "failed" as const;
       }
     })();
+  }
+
+  private confirmReply(tripId: string, userId: string, proposalId: string): string {
+    try {
+      const item = this.travel.confirmProposal(tripId, userId, proposalId);
+      return `已確認 Proposal ${proposalId}：${item.title}。`;
+    } catch (error) {
+      return commandErrorReply(error);
+    }
+  }
+
+  private rejectReply(tripId: string, userId: string, proposalId: string, reason: string | null): string {
+    try {
+      const proposal = this.travel.rejectProposal(tripId, userId, proposalId, reason);
+      return `已拒絕 Proposal ${proposalId}${proposal.rejectionReason ? `：${proposal.rejectionReason}` : "。"}`;
+    } catch (error) {
+      return commandErrorReply(error);
+    }
   }
 
   private importSource(event: WebhookInboxEvent): { proposalIds: string[] } {
@@ -91,4 +120,13 @@ export class LineSourceWorker {
     return `已收到 Proposal ${candidates}\n${contextLines.join("\n")}\n狀態：${proposals.map((proposal) => `${proposal.itemStatus} / ${proposal.status}`).join("、")}。\nDecision Owner 後續可確認此 Proposal。`;
   }
 
+}
+
+function commandErrorReply(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/decision owner/i.test(message)) return "你不是此旅程的 Decision Owner，無法執行這個指令。";
+  if (/not found/i.test(message)) return "找不到這個 Proposal，請確認 Proposal ID。";
+  if (/must be confirmed through that Decision/i.test(message)) return "這個 Proposal 已加入 Decision，請使用 Decision 選擇指令。";
+  if (/not pending/i.test(message)) return "這個 Proposal 已經處理過，無法再次變更。";
+  return `指令無法執行：${message}`;
 }

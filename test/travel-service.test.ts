@@ -365,13 +365,36 @@ test("markdown creates proposals and only an owner can confirm one", () => {
 
   assert.equal(result.proposalIds.length, 3);
   assert.throws(() => service.confirmProposal(tripId, "member", result.proposalIds[0]), PermissionError);
-  service.confirmProposal(tripId, "owner", result.proposalIds[0]);
+  const confirmed = service.confirmProposal(tripId, "owner", result.proposalIds[0]);
+  assert.equal(service.confirmProposal(tripId, "owner", result.proposalIds[0]).id, confirmed.id);
+  assert.equal(db.connection.prepare(`SELECT COUNT(*) AS count FROM trip_items WHERE trip_id = ?`).get(tripId)?.count, 1);
 
   const review = service.reviewTrip(tripId);
   assert.equal(review.confirmed.length, 1);
   assert.equal(review.confirmed[0].title, "UA 123 航班");
   assert.equal(review.openDecisions.length, 1);
   assert.equal(review.conflicts.length, 1);
+  db.close();
+});
+
+test("rejects a standalone Proposal with immutable rejection audit fields", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-reject-proposal");
+  service.addMember("system-admin", tripId, "owner", "Owner", "owner");
+  service.addMember("system-admin", tripId, "member", "Member", "member");
+  const imported = service.importMarkdown(tripId, "- [provisional] 晚餐 | 2026-10-16 | 台北", { idempotencyKey: "reject:proposal" });
+  assert.throws(() => service.rejectProposal(tripId, "member", imported.proposalIds[0], "不符合預算"), PermissionError);
+  const rejected = service.rejectProposal(tripId, "owner", imported.proposalIds[0], "不符合預算");
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.rejectionReason, "不符合預算");
+  assert.equal(rejected.rejectedBy, "owner");
+  assert.ok(rejected.rejectedAt);
+  assert.equal(service.rejectProposal(tripId, "owner", imported.proposalIds[0], "其他原因").rejectionReason, "不符合預算");
+  assert.equal(service.reviewTrip(tripId).pending.length, 0);
+  const queued = service.importMarkdown(tripId, "- [provisional] 午餐 | 2026-10-17 | 台北", { idempotencyKey: "reject:revoked-owner" });
+  service.revokeGroupMember(tripId, "owner");
+  assert.throws(() => service.rejectProposal(tripId, "owner", queued.proposalIds[0], "離群後不可操作"), PermissionError);
   db.close();
 });
 

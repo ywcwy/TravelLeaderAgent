@@ -72,6 +72,9 @@ export interface Proposal extends Omit<ExtractedTripItem, "status" | "deadlineAt
   itemStatus: TripItemStatus;
   status: ProposalStatus;
   deadlineAt: string | null;
+  rejectionReason: string | null;
+  rejectedBy: string | null;
+  rejectedAt: string | null;
 }
 
 export interface ProposalContext {

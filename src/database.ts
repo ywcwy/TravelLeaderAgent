@@ -117,6 +117,10 @@ export class TravelDatabase {
         location TEXT,
         notes TEXT,
         deadline_at TEXT,
+        confirmed_trip_item_id TEXT REFERENCES trip_items(id),
+        rejection_reason TEXT,
+        rejected_by TEXT,
+        rejected_at TEXT,
         source_line INTEGER,
         source_excerpt TEXT,
         created_at TEXT NOT NULL
@@ -182,6 +186,10 @@ export class TravelDatabase {
     if (!sourceColumns.some((column) => column.name === "provider_group_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_group_id TEXT`);
     if (!sourceColumns.some((column) => column.name === "provider_user_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_user_id TEXT`);
     const proposalColumns = this.connection.prepare(`PRAGMA table_info(proposals)`).all() as Array<{ name: string }>;
+    if (!proposalColumns.some((column) => column.name === "confirmed_trip_item_id")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN confirmed_trip_item_id TEXT REFERENCES trip_items(id)`);
+    if (!proposalColumns.some((column) => column.name === "rejection_reason")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN rejection_reason TEXT`);
+    if (!proposalColumns.some((column) => column.name === "rejected_by")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN rejected_by TEXT`);
+    if (!proposalColumns.some((column) => column.name === "rejected_at")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN rejected_at TEXT`);
     if (!proposalColumns.some((column) => column.name === "shape")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN shape TEXT`);
     if (!proposalColumns.some((column) => column.name === "shape_source")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN shape_source TEXT`);
     if (!proposalColumns.some((column) => column.name === "origin")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN origin TEXT`);

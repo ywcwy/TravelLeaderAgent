@@ -346,13 +346,26 @@ export class TravelService {
 
   confirmProposal(tripId: string, ownerId: string, proposalId: string): TripItem {
     this.requireActiveTrip(tripId);
-    const member = this.db.connection.prepare(`SELECT role, revoked_at FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole; revoked_at: string | null } | undefined;
-    if (member?.role !== "owner") throw new PermissionError("Only a decision owner can confirm a proposal.");
+    this.requireDecisionOwner(tripId, ownerId);
 
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
-      const proposal = this.db.connection.prepare(`SELECT * FROM proposals WHERE id = ? AND trip_id = ? AND proposal_status = 'pending'`).get(proposalId, tripId) as ProposalRow | undefined;
-      if (!proposal) throw new NotFoundError(`Pending proposal ${proposalId} was not found.`);
+      const proposal = this.db.connection.prepare(`SELECT * FROM proposals WHERE id = ? AND trip_id = ?`).get(proposalId, tripId) as ProposalRow | undefined;
+      if (!proposal) throw new NotFoundError(`Proposal ${proposalId} was not found.`);
+      if (proposal.proposal_status === "confirmed" && proposal.confirmed_trip_item_id) {
+        const existing = this.db.connection.prepare(`SELECT * FROM trip_items WHERE id = ? AND trip_id = ?`).get(proposal.confirmed_trip_item_id, tripId) as Record<string, unknown> | undefined;
+        if (existing) { this.db.connection.exec("COMMIT"); return this.hydrateTripItem(existing); }
+      }
+      if (proposal.proposal_status === "confirmed") {
+        const candidates = (this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND source_id = ? AND title = ? AND status = 'confirmed'`).all(tripId, proposal.source_id, proposal.title) as Array<Record<string, unknown>>)
+          .filter((item) => item.starts_at === proposal.starts_at && item.ends_at === proposal.ends_at && item.location === proposal.location && item.origin === proposal.origin && item.destination === proposal.destination);
+        if (candidates.length === 1) {
+          this.db.connection.prepare(`UPDATE proposals SET confirmed_trip_item_id = ? WHERE id = ? AND confirmed_trip_item_id IS NULL`).run(candidates[0].id as string, proposalId);
+          this.db.connection.exec("COMMIT");
+          return this.hydrateTripItem(candidates[0]);
+        }
+      }
+      if (proposal.proposal_status !== "pending") throw new ConflictError(`Proposal ${proposalId} is not pending.`);
       if (proposal.decision_id) throw new ConflictError("A Proposal assigned to a Decision must be confirmed through that Decision.");
       if (proposal.item_status === "conflicted") {
         throw new ConflictError("A conflicted proposal must be resolved before it can be confirmed.");
@@ -378,9 +391,29 @@ export class TravelService {
       if (proposal.replacement_for_item_id) {
         this.db.connection.prepare(`UPDATE trip_items SET status = 'cancelled' WHERE id = ? AND trip_id = ? AND status = 'confirmed'`).run(proposal.replacement_for_item_id, tripId);
       }
-      this.db.connection.prepare(`UPDATE proposals SET proposal_status = 'confirmed' WHERE id = ?`).run(proposalId);
+      this.db.connection.prepare(`UPDATE proposals SET proposal_status = 'confirmed', confirmed_trip_item_id = ? WHERE id = ?`).run(item.id, proposalId);
       this.db.connection.exec("COMMIT");
       return item;
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  rejectProposal(tripId: string, ownerId: string, proposalId: string, reason?: string | null): Proposal {
+    this.requireActiveTrip(tripId);
+    this.requireDecisionOwner(tripId, ownerId);
+    this.db.connection.exec("BEGIN IMMEDIATE");
+    try {
+      const proposal = this.db.connection.prepare(`SELECT * FROM proposals WHERE id = ? AND trip_id = ?`).get(proposalId, tripId) as ProposalRow | undefined;
+      if (!proposal) throw new NotFoundError(`Proposal ${proposalId} was not found.`);
+      if (proposal.proposal_status === "rejected") { this.db.connection.exec("COMMIT"); return this.hydrateProposal(proposal); }
+      if (proposal.proposal_status !== "pending") throw new ConflictError(`Proposal ${proposalId} is not pending.`);
+      const rejectedAt = now();
+      this.db.connection.prepare(`UPDATE proposals SET proposal_status = 'rejected', rejection_reason = ?, rejected_by = ?, rejected_at = ? WHERE id = ? AND proposal_status = 'pending'`).run(reason?.trim() || null, ownerId, rejectedAt, proposalId);
+      const updated = this.db.connection.prepare(`SELECT * FROM proposals WHERE id = ? AND trip_id = ?`).get(proposalId, tripId) as unknown as ProposalRow;
+      this.db.connection.exec("COMMIT");
+      return this.hydrateProposal(updated);
     } catch (error) {
       this.db.connection.exec("ROLLBACK");
       throw error;
@@ -495,7 +528,7 @@ export class TravelService {
   }
 
   private requireDecisionOwner(tripId: string, ownerId: string): void {
-    const member = this.db.connection.prepare(`SELECT role, revoked_at FROM members WHERE trip_id = ? AND line_user_id = ?`).get(tripId, ownerId) as { role: MemberRole; revoked_at: string | null } | undefined;
+    const member = this.db.connection.prepare(`SELECT role, revoked_at FROM members WHERE trip_id = ? AND line_user_id = ? AND revoked_at IS NULL`).get(tripId, ownerId) as { role: MemberRole; revoked_at: string | null } | undefined;
     if (member?.role !== "owner") throw new PermissionError("Only a Decision Owner can manage a Decision.");
   }
 }
@@ -537,7 +570,7 @@ function toTripAccessPolicy(row: TripAccessPolicyRow): TripAccessPolicy {
 }
 
 interface ProposalRow {
-  id: string; source_id: string; replacement_for_item_id: string | null; kind: string; shape: ProposalShape | null; shape_source: ProposalShapeSource | null; origin: string | null; destination: string | null; title: string; item_status: TripItemStatus; decision_id: string | null;
+  id: string; source_id: string; replacement_for_item_id: string | null; confirmed_trip_item_id: string | null; rejection_reason: string | null; rejected_by: string | null; rejected_at: string | null; kind: string; shape: ProposalShape | null; shape_source: ProposalShapeSource | null; origin: string | null; destination: string | null; title: string; item_status: TripItemStatus; proposal_status: "pending" | "confirmed" | "rejected"; decision_id: string | null;
   starts_at: string | null; ends_at: string | null; timezone: string | null; location: string | null; notes: string | null; deadline_at: string | null; source_line: number | null; source_excerpt: string | null;
 }
 
@@ -565,7 +598,7 @@ function compareScheduledItems(left: { startsAt?: string; title: string; id: str
 
 function toProposal(row: ProposalRow, kinds = [row.kind as Proposal["kind"]]): Proposal {
   const shape = row.shape ?? (row.location ? "point" : "point");
-  return { id: row.id, sourceId: row.source_id, replacementForItemId: row.replacement_for_item_id, kind: row.kind as Proposal["kind"], kinds, shape, shapeSource: row.shape_source ?? "inferred", origin: row.origin ?? undefined, destination: row.destination ?? undefined, title: row.title, itemStatus: row.item_status, status: "pending", startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, timezone: row.timezone ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
+  return { id: row.id, sourceId: row.source_id, replacementForItemId: row.replacement_for_item_id, kind: row.kind as Proposal["kind"], kinds, shape, shapeSource: row.shape_source ?? "inferred", origin: row.origin ?? undefined, destination: row.destination ?? undefined, title: row.title, itemStatus: row.item_status, status: row.proposal_status, startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, timezone: row.timezone ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, rejectionReason: row.rejection_reason, rejectedBy: row.rejected_by, rejectedAt: row.rejected_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
 }
 
 function toTravelGroup(row: TravelGroupRow): TravelGroup {

@@ -2,6 +2,20 @@ import type { ItineraryQuery, ItineraryQueryResult, TripItemKind } from "./domai
 
 export type ParsedItineraryMessage = { type: "query"; query: ItineraryQuery } | { type: "help" } | null;
 
+export type ParsedProposalCommand = { type: "confirm"; proposalId: string } | { type: "reject"; proposalId: string; reason: string | null } | { type: "invalid" } | null;
+
+export function parseProposalCommand(text: string): ParsedProposalCommand {
+  const normalized = text.trim().replace(/^@[^\s]+\s*/, "").trim();
+  const confirm = normalized.match(/^(?:確認|confirm)\s+(P-[A-Z0-9]{8})$/i);
+  if (confirm) return { type: "confirm", proposalId: confirm[1].toUpperCase() };
+  const reject = normalized.match(/^(?:拒絕|reject)\s+(P-[A-Z0-9]{8})(?:\s*[|｜]\s*(.*))?$/i);
+  if (reject) return { type: "reject", proposalId: reject[1].toUpperCase(), reason: reject[2]?.trim() || null };
+  if (/^(?:確認|confirm)(?:\s|$)/i.test(normalized) || /^(?:拒絕|reject)(?:\s|$)/i.test(normalized)) return { type: "invalid" };
+  return null;
+}
+
+export const proposalCommandHelp = "指令格式：確認 P-XXXXXXXX，或拒絕 P-XXXXXXXX｜原因。";
+
 export function parseItineraryMessage(text: string): ParsedItineraryMessage {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "").trim();
   const command = normalized.match(/^(查詢|查询|query)(.*)$/i);

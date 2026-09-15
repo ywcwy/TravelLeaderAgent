@@ -73,6 +73,35 @@ test("handles a mentioned itinerary query without creating a Source", async () =
   db.close();
 });
 
+test("handles owner Proposal commands and keeps non-owner commands read-only", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-proposal-command", "Proposal 指令群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Proposal 指令旅程", "Asia/Taipei");
+  travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
+  travel.addMember("system-admin", trip.id, "U-member", "Member", "member");
+  const first = travel.importMarkdown(trip.id, "- [provisional] 住宿 | 2026-10-01 | Page", { idempotencyKey: "command:first" });
+  const second = travel.importMarkdown(trip.id, "- [provisional] 晚餐 | 2026-10-02 | Page", { idempotencyKey: "command:second" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINECOMMAND0000000000000", messageId: "command-member", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: `確認 ${first.proposalIds[0]}`, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "member-reply" });
+  inbox.enqueue({ eventId: "01JLINECOMMAND0000000000001", messageId: "command-owner", groupId: group.lineGroupId, userId: "U-owner", tripId: trip.id, text: `拒絕 ${second.proposalIds[0]}｜行程調整`, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "owner-reply" });
+  inbox.enqueue({ eventId: "01JLINECOMMAND0000000000002", messageId: "command-retry", groupId: group.lineGroupId, userId: "U-owner", tripId: trip.id, text: `確認 ${first.proposalIds[0]}`, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "retry-reply" });
+  inbox.enqueue({ eventId: "01JLINECOMMAND0000000000003", messageId: "command-invalid", groupId: group.lineGroupId, userId: "U-owner", tripId: trip.id, text: "確認 P-BAD", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "invalid-reply" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /不是此旅程的 Decision Owner/);
+  assert.match(replies[1] ?? "", /已拒絕 Proposal/);
+  assert.match(replies[2] ?? "", /已確認 Proposal/);
+  assert.match(replies[3] ?? "", /指令格式/);
+  assert.equal(travel.reviewTrip(trip.id).confirmed.length, 1);
+  assert.equal(travel.reviewTrip(trip.id).pending.length, 0);
+  db.close();
+});
+
 test("parses LINE free-form lodging and multi-leg route statements with shared Sources", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
