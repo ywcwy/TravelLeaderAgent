@@ -80,6 +80,7 @@ export class TravelDatabase {
         starts_at TEXT,
         ends_at TEXT,
         timezone TEXT,
+        timezone_source TEXT,
         location TEXT,
         notes TEXT,
         confirmed_by TEXT,
@@ -116,6 +117,7 @@ export class TravelDatabase {
         starts_at TEXT,
         ends_at TEXT,
         timezone TEXT,
+        timezone_source TEXT,
         location TEXT,
         notes TEXT,
         deadline_at TEXT,
@@ -217,13 +219,17 @@ export class TravelDatabase {
     if (!proposalColumns.some((column) => column.name === "shape_source")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN shape_source TEXT`);
     if (!proposalColumns.some((column) => column.name === "origin")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN origin TEXT`);
     if (!proposalColumns.some((column) => column.name === "destination")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN destination TEXT`);
+    if (!proposalColumns.some((column) => column.name === "timezone_source")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN timezone_source TEXT`);
     const tripItemColumnsAfterMigration = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape_source")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape_source TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "origin")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN origin TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "destination")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN destination TEXT`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "timezone_source")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN timezone_source TEXT`);
     this.connection.exec(`UPDATE proposals SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.connection.exec(`UPDATE trip_items SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
+    this.backfillTimezoneMetadata("proposals");
+    this.backfillTimezoneMetadata("trip_items");
     this.connection.exec(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) SELECT id, kind FROM proposals WHERE kind IS NOT NULL`);
     this.connection.exec(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) SELECT id, kind FROM trip_items WHERE kind IS NOT NULL`);
     this.connection.exec(`INSERT OR IGNORE INTO trip_access_policies (trip_id) SELECT id FROM trips`);
@@ -231,5 +237,26 @@ export class TravelDatabase {
 
   close(): void {
     this.connection.close();
+  }
+
+  private backfillTimezoneMetadata(table: "proposals" | "trip_items"): void {
+    const rows = this.connection.prepare(`SELECT id, trip_id, timezone FROM ${table} WHERE timezone_source IS NULL AND starts_at IS NOT NULL AND starts_at NOT GLOB '????-??-??'`).all() as Array<{ id: string; trip_id: string; timezone: string | null }>;
+    const tripTimezone = this.connection.prepare(`SELECT timezone FROM trips WHERE id = ?`) as { get: (tripId: string) => { timezone: string } | undefined };
+    const update = this.connection.prepare(`UPDATE ${table} SET timezone = ?, timezone_source = ? WHERE id = ?`);
+    for (const row of rows) {
+      const valid = row.timezone !== null && isIanaTimezoneValue(row.timezone);
+      const fallback = tripTimezone.get(row.trip_id)?.timezone ?? "UTC";
+      update.run(valid ? row.timezone : fallback, valid ? "explicit" : "fallback", row.id);
+    }
+  }
+}
+
+function isIanaTimezoneValue(timezone: string): boolean {
+  if (!timezone || (timezone !== "UTC" && !timezone.includes("/"))) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format();
+    return true;
+  } catch {
+    return false;
   }
 }

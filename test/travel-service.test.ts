@@ -643,6 +643,65 @@ test("an existing SQLite database backfills legacy location Proposals as inferre
   rmSync(directory, { recursive: true, force: true });
 });
 
+test("normalizes item timezone provenance, fallback, and invalid timezone review", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-timezone-provenance");
+  const explicit = service.importMarkdown(tripId, "- [provisional] Explicit Page | 2026-10-01T18:45:00-07:00 | Page | | timezone=America/Phoenix", { idempotencyKey: "timezone:explicit" });
+  const inferred = service.importMarkdown(tripId, "- [provisional] Inferred Page | 2026-10-01T18:45:00-07:00 | Page", { idempotencyKey: "timezone:inferred" });
+  const fallback = service.importMarkdown(tripId, "- [provisional] Unknown stop | 2026-10-01T18:45:00-07:00 | Somewhere", { idempotencyKey: "timezone:fallback" });
+  const dateOnly = service.importMarkdown(tripId, "- [provisional] Date-only stop | 2026-10-01 | Somewhere", { idempotencyKey: "timezone:date-only" });
+  const invalid = service.importMarkdown(tripId, "- [provisional] Invalid timezone | 2026-10-01T18:45:00-07:00 | Page | | timezone=PST", { idempotencyKey: "timezone:invalid" });
+
+  assert.equal(service.getProposal(tripId, explicit.proposalIds[0])?.timezoneSource, "explicit");
+  assert.deepEqual(
+    { timezone: service.getProposal(tripId, inferred.proposalIds[0])?.timezone, source: service.getProposal(tripId, inferred.proposalIds[0])?.timezoneSource },
+    { timezone: "America/Phoenix", source: "inferred" },
+  );
+  assert.deepEqual(
+    { timezone: service.getProposal(tripId, fallback.proposalIds[0])?.timezone, source: service.getProposal(tripId, fallback.proposalIds[0])?.timezoneSource },
+    { timezone: "America/Los_Angeles", source: "fallback" },
+  );
+  assert.deepEqual(
+    { timezone: service.getProposal(tripId, invalid.proposalIds[0])?.timezone, source: service.getProposal(tripId, invalid.proposalIds[0])?.timezoneSource },
+    { timezone: "America/Los_Angeles", source: "fallback" },
+  );
+  const review = service.reviewTrip(tripId);
+  assert.equal(review.issues.some((issue) => issue.code === "missing_timezone" && issue.proposalIds.includes(fallback.proposalIds[0])), true);
+  assert.equal(review.issues.some((issue) => issue.code === "missing_timezone" && issue.proposalIds.includes(dateOnly.proposalIds[0])), false);
+  assert.equal(service.getProposal(tripId, dateOnly.proposalIds[0])?.timezoneSource, undefined);
+  assert.equal(review.issues.some((issue) => issue.code === "invalid_timezone" && issue.sourceId === service.getProposal(tripId, invalid.proposalIds[0])?.sourceId), true);
+  assert.equal(service.getSource(service.getProposal(tripId, invalid.proposalIds[0])?.sourceId ?? "")?.content.includes("timezone=PST"), true);
+  db.close();
+});
+
+test("migrates legacy timed records to Trip Timezone fallback without changing Source", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-timezone-migration-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  const service = new TravelService(initial, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-timezone-migration");
+  service.addMember("system-admin", tripId, "owner", "Owner", "owner");
+  const imported = service.importMarkdown(tripId, "- [provisional] Legacy stop | 2026-10-01T18:45:00-07:00 | Somewhere", { idempotencyKey: "timezone:migration" });
+  const confirmed = service.confirmProposal(tripId, "owner", imported.proposalIds[0]);
+  initial.connection.prepare("UPDATE proposals SET timezone = NULL, timezone_source = NULL WHERE id = ?").run(imported.proposalIds[0]);
+  initial.connection.prepare("UPDATE trip_items SET timezone = NULL, timezone_source = NULL WHERE id = ?").run(confirmed.id);
+  initial.connection.exec("ALTER TABLE proposals DROP COLUMN timezone_source; ALTER TABLE trip_items DROP COLUMN timezone_source;");
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const migratedService = new TravelService(upgraded, "system-admin");
+  const migrated = migratedService.getProposal(tripId, imported.proposalIds[0]);
+  assert.deepEqual({ timezone: migrated?.timezone, source: migrated?.timezoneSource }, { timezone: "America/Los_Angeles", source: "fallback" });
+  assert.deepEqual(
+    { timezone: migratedService.reviewTrip(tripId).confirmed[0]?.timezone, source: migratedService.reviewTrip(tripId).confirmed[0]?.timezoneSource },
+    { timezone: "America/Los_Angeles", source: "fallback" },
+  );
+  assert.equal(migratedService.getSource(imported.sourceId)?.content, "- [provisional] Legacy stop | 2026-10-01T18:45:00-07:00 | Somewhere");
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
 test("an existing SQLite database backfills legacy scalar Kinds into normalized associations", () => {
   const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-kind-migration-"));
   const databasePath = join(directory, "travel.sqlite");
