@@ -267,6 +267,26 @@ test("markdown creates proposals and only an owner can confirm one", () => {
   db.close();
 });
 
+test("confirms a multi-kind Route Proposal into one Trip Item with its structure intact", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-confirm-structured-route");
+  service.addMember("system-admin", tripId, "owner", "Owner", "owner");
+  const imported = service.importMarkdown(tripId, "- [provisional] Sleeper train to Page | 2026-10-01T22:00:00-07:00 | | onboard dinner | shape=route | origin=Las Vegas | destination=Page | kinds=transport,lodging,meal", { idempotencyKey: "test:confirm:structured-route" });
+
+  const item = service.confirmProposal(tripId, "owner", imported.proposalIds[0]);
+
+  assert.equal(item.shape, "route");
+  assert.equal(item.shapeSource, "explicit");
+  assert.equal(item.origin, "Las Vegas");
+  assert.equal(item.destination, "Page");
+  assert.deepEqual(item.kinds, ["lodging", "meal", "transport"]);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM trip_items WHERE trip_id = ?`).get(tripId) as { count: number }).count, 1);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM trip_item_kinds WHERE trip_item_id = ?`).get(item.id) as { count: number }).count, 3);
+  assert.deepEqual(service.reviewTrip(tripId).confirmed.map((confirmed) => confirmed.id), [item.id]);
+  db.close();
+});
+
 test("review preserves source evidence, identifies missing fields and blocks unresolved conflicts", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
@@ -325,6 +345,28 @@ test("an owner resolves mutually exclusive proposals through a Decision", () => 
   const review = service.reviewTrip(tripId);
   assert.deepEqual(review.confirmed.map((item) => item.title), ["Carmel 住宿"]);
   assert.equal(review.conflicts.length, 0);
+  db.close();
+});
+
+test("resolves a multi-kind Point Proposal through a Decision into one Trip Item", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-resolve-multi-kind");
+  service.addMember("system-admin", tripId, "owner", "Owner", "owner");
+  const imported = service.importMarkdown(tripId, [
+    "- [provisional] 車上住宿與晚餐 | 2026-10-16T22:00:00-07:00 | 夜班火車 | | kinds=transport,lodging,meal",
+    "- [provisional] 備選住宿 | 2026-10-16T22:00:00-07:00 | Page | | kinds=lodging",
+  ].join("\n"), { idempotencyKey: "test:resolve:multi-kind" });
+  const decision = service.createDecision(tripId, "owner", "夜班安排", imported.proposalIds);
+
+  const resolved = service.resolveDecision(tripId, "owner", decision.id, imported.proposalIds[0]);
+
+  assert.equal(resolved.item.shape, "point");
+  assert.deepEqual(resolved.item.kinds, ["lodging", "meal", "transport"]);
+  assert.equal(resolved.item.location, "夜班火車");
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM trip_items WHERE trip_id = ?`).get(tripId) as { count: number }).count, 1);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM trip_item_kinds WHERE trip_item_id = ?`).get(resolved.item.id) as { count: number }).count, 3);
+  assert.deepEqual(service.reviewTrip(tripId).confirmed.map((item) => item.id), [resolved.item.id]);
   db.close();
 });
 
