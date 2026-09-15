@@ -7,6 +7,47 @@ cannot yet ask the system what it currently knows. Decision Owners also need an
 explicit, idempotent LINE interaction for resolving Proposals without allowing
 ordinary chat to mutate the Trip.
 
+## Solution
+
+Add a deterministic query and command boundary to the existing LINE Webhook →
+Inbox → Worker → TravelService → SQLite → Reply seam. Group Members can read
+policy-permitted structured Trip data, while Decision Owners can perform
+explicit ID-based commands. Trip-scoped Access Policy controls visibility,
+queries remain read-only, and the existing Source/Proposal/Trip Item model stays
+the canonical domain model.
+
+## User Stories
+
+1. As a Group Member, I want to query the Active Trip, so that I can see what the system currently knows.
+2. As a Group Member, I want to see confirmed Trip Items, so that I can understand the Effective Itinerary.
+3. As a Group Member, I want to see pending Proposals, so that I know which itinerary facts still need confirmation.
+4. As a Group Member, I want to see open Decisions, so that I know which mutually exclusive choices need resolution.
+5. As a Group Member, I want to see Review Issues, so that I can help correct incomplete or ambiguous itinerary evidence.
+6. As a Group Member, I want structured results without raw Source text by default, so that casual conversation and unnecessary details are not exposed.
+7. As a Group Member, I want to query by date, location, kind, or Proposal ID, so that I can find relevant itinerary facts quickly.
+8. As a Group Member, I want an empty query to be reported clearly, so that no-result is not confused with a system failure.
+9. As a Group Member, I want ambiguous queries to offer clarification choices, so that the system does not silently guess my intent.
+10. As a Group Member, I want query messages to remain read-only, so that asking a question never creates a Source or Proposal.
+11. As a Group Member, I want to submit itinerary evidence separately from queries, so that the system can distinguish facts from questions.
+12. As a Decision Owner, I want to confirm a standalone Proposal by ID, so that an explicit decision makes it effective.
+13. As a Decision Owner, I want repeated confirmation commands to be idempotent, so that retries never create duplicate Trip Items.
+14. As a Decision Owner, I want to reject an individual Proposal, so that unsuitable options can be removed while a Decision remains open.
+15. As a Decision Owner, I want to select an option through its Decision, so that alternative options are rejected consistently.
+16. As a Decision Owner, I want to cancel an entire Decision explicitly, so that a decision topic can be closed without pretending an option was selected.
+17. As a Decision Owner, I want a Decision with all options rejected to become `needs_options`, so that the topic can receive new options later.
+18. As a Decision Owner, I want new options to reopen the same `needs_options` Decision, so that one decision topic retains its history.
+19. As a Decision Owner, I want rejected Proposals to remain immutable, so that later reconsideration creates a new Proposal rather than rewriting history.
+20. As a non-owner Group Member, I want a clear authorization response when I attempt a write command, so that read access is not confused with decision authority.
+21. As a System Administrator, I want each Trip to have its own Access Policy, so that different trips can use different visibility rules.
+22. As a System Administrator, I want to change a Trip Access Policy through an administrative seam, so that policy changes are not hidden in chat parsing.
+23. As a System Administrator, I want policy changes attributed to an administrator and time, so that visibility changes are accountable.
+24. As a Group Member, I want Active Trip queries to exclude Archived Trips by default, so that old and current journeys do not mix.
+25. As a Group Member, I want to request an Archived Trip explicitly, so that historical travel plans remain discoverable without polluting current results.
+26. As a Group Member, I want long results to be paginated, so that LINE messages remain readable and within provider limits.
+27. As a Group Member, I want continuation tokens bound to my Trip and identity, so that pagination cannot leak or mix another user's results.
+28. As a maintainer, I want Markdown and LINE queries to use the same TravelService read model, so that channels cannot drift in their interpretation.
+29. As a maintainer, I want existing Inbox idempotency and LINE identity rules preserved, so that retries and authorization remain trustworthy.
+
 ## Scope
 
 Phase 7 adds a deterministic read and command boundary for the Active Trip:
