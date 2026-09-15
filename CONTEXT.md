@@ -151,6 +151,12 @@ A Proposal that supersedes a confirmed Trip Item. On confirmation, it makes the
 prior item cancelled and preserves their shared decision history.
 _Avoid_: in-place edit, overwrite
 
+**Itinerary Evolution**:
+The ordered change of a Trip's evidence, Proposals, and confirmed Trip Items over
+time. It explains how the current Effective Itinerary emerged without treating
+older Sources or confirmed versions as overwritten data.
+_Avoid_: edit history, chat history
+
 **Resolution Proposal**:
 A Proposal that presents mutually inconsistent Sources as explicit options for a
 Decision Owner to resolve.
