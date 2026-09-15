@@ -104,6 +104,23 @@ export interface Trip {
   status: TripStatus;
 }
 
+export interface TripAccessPolicy {
+  tripId: string;
+  memberCanViewPending: boolean;
+  memberCanViewReviewIssues: boolean;
+  memberCanViewCancelledHistory: boolean;
+  memberCanViewSourceContent: boolean;
+  updatedBy: string | null;
+  updatedAt: string | null;
+}
+
+export interface TripAccessPolicyUpdate {
+  memberCanViewPending?: boolean;
+  memberCanViewReviewIssues?: boolean;
+  memberCanViewCancelledHistory?: boolean;
+  memberCanViewSourceContent?: boolean;
+}
+
 export interface Decision {
   id: string;
   tripId: string;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
-import type { Decision, ExtractedTripItem, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TravelGroup, Trip, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import type { Decision, ExtractedTripItem, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -57,9 +57,48 @@ export class TravelService {
     if (activeTrip) throw new ConflictError("A Travel Group can have only one Active Trip.");
 
     const trip: Trip = { id: randomUUID(), travelGroupId, title, timezone, status: "active" };
-    this.db.connection.prepare(`INSERT INTO trips (id, travel_group_id, title, timezone, status, created_at) VALUES (?, ?, ?, ?, 'active', ?)`)
-      .run(trip.id, trip.travelGroupId, trip.title, trip.timezone, now());
+    this.db.connection.exec("BEGIN");
+    try {
+      this.db.connection.prepare(`INSERT INTO trips (id, travel_group_id, title, timezone, status, created_at) VALUES (?, ?, ?, ?, 'active', ?)`)
+        .run(trip.id, trip.travelGroupId, trip.title, trip.timezone, now());
+      this.db.connection.prepare(`INSERT INTO trip_access_policies (trip_id) VALUES (?)`).run(trip.id);
+      this.db.connection.exec("COMMIT");
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
     return trip;
+  }
+
+  getTripAccessPolicy(tripId: string): TripAccessPolicy {
+    this.requireTrip(tripId);
+    const row = this.db.connection.prepare(`SELECT * FROM trip_access_policies WHERE trip_id = ?`).get(tripId) as TripAccessPolicyRow | undefined;
+    if (!row) throw new ConflictError(`Trip Access Policy for ${tripId} is missing.`);
+    return toTripAccessPolicy(row);
+  }
+
+  updateTripAccessPolicy(administratorId: string, tripId: string, update: TripAccessPolicyUpdate): TripAccessPolicy {
+    this.requireSystemAdministrator(administratorId);
+    this.requireActiveTrip(tripId);
+    for (const value of Object.values(update)) {
+      if (value !== undefined && typeof value !== "boolean") throw new ConflictError("Trip Access Policy values must be boolean.");
+    }
+    const current = this.getTripAccessPolicy(tripId);
+    const updatedAt = now();
+    this.db.connection.prepare(`
+      UPDATE trip_access_policies
+      SET member_can_view_pending = ?, member_can_view_review_issues = ?, member_can_view_cancelled_history = ?, member_can_view_source_content = ?, updated_by = ?, updated_at = ?
+      WHERE trip_id = ?
+    `).run(
+      Number(update.memberCanViewPending ?? current.memberCanViewPending),
+      Number(update.memberCanViewReviewIssues ?? current.memberCanViewReviewIssues),
+      Number(update.memberCanViewCancelledHistory ?? current.memberCanViewCancelledHistory),
+      Number(update.memberCanViewSourceContent ?? current.memberCanViewSourceContent),
+      administratorId,
+      updatedAt,
+      tripId,
+    );
+    return this.getTripAccessPolicy(tripId);
   }
 
   archiveTrip(administratorId: string, tripId: string): void {
@@ -85,6 +124,7 @@ export class TravelService {
       const archived = this.db.connection.prepare(`UPDATE trips SET status = 'archived', archived_at = ? WHERE id = ? AND status = 'active'`).run(now(), tripId);
       if (archived.changes !== 1) throw new TripNotActiveError(`Trip ${tripId} is not active.`);
       this.db.connection.prepare(`INSERT INTO trips (id, travel_group_id, title, timezone, status, created_at) VALUES (?, ?, ?, ?, 'active', ?)`).run(activeTrip.id, activeTrip.travelGroupId, activeTrip.title, activeTrip.timezone, now());
+      this.db.connection.prepare(`INSERT INTO trip_access_policies (trip_id) VALUES (?)`).run(activeTrip.id);
       const insertMember = this.db.connection.prepare(`INSERT INTO members (trip_id, line_user_id, display_name, role, revoked_at) VALUES (?, ?, ?, ?, NULL)`);
       for (const member of members) insertMember.run(activeTrip.id, member.line_user_id, member.display_name, member.role);
       this.db.connection.exec("COMMIT");
@@ -440,8 +480,30 @@ interface TripRow {
   id: string; travel_group_id: string; title: string; timezone: string; status: "active" | "archived";
 }
 
+interface TripAccessPolicyRow {
+  trip_id: string;
+  member_can_view_pending: number;
+  member_can_view_review_issues: number;
+  member_can_view_cancelled_history: number;
+  member_can_view_source_content: number;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
 function toTrip(row: TripRow): Trip {
   return { id: row.id, travelGroupId: row.travel_group_id, title: row.title, timezone: row.timezone, status: row.status };
+}
+
+function toTripAccessPolicy(row: TripAccessPolicyRow): TripAccessPolicy {
+  return {
+    tripId: row.trip_id,
+    memberCanViewPending: Boolean(row.member_can_view_pending),
+    memberCanViewReviewIssues: Boolean(row.member_can_view_review_issues),
+    memberCanViewCancelledHistory: Boolean(row.member_can_view_cancelled_history),
+    memberCanViewSourceContent: Boolean(row.member_can_view_source_content),
+    updatedBy: row.updated_by,
+    updatedAt: row.updated_at,
+  };
 }
 
 interface ProposalRow {

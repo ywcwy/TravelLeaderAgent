@@ -61,6 +61,7 @@ test("resets one Active Trip into a fresh Trip while preserving history and rost
   service.addMember("system-admin", oldTrip.id, "U-member", "Member", "member");
   service.addMember("system-admin", oldTrip.id, "U-revoked", "Revoked", "member");
   service.revokeGroupMember(oldTrip.id, "U-revoked");
+  service.updateTripAccessPolicy("system-admin", oldTrip.id, { memberCanViewSourceContent: true, memberCanViewCancelledHistory: true });
   const oldImport = service.importMarkdown(oldTrip.id, "- [provisional] 舊住宿 | 2026-10-16 | 台北", { idempotencyKey: "reset:old" });
 
   const result = service.resetActiveTrip("system-admin", oldTrip.id, { title: "新旅程", timezone: "Asia/Tokyo" });
@@ -75,9 +76,91 @@ test("resets one Active Trip into a fresh Trip while preserving history and rost
   assert.equal(service.isActiveTripMember(result.activeTrip.id, "U-owner"), true);
   assert.equal(service.isActiveTripMember(result.activeTrip.id, "U-member"), true);
   assert.equal(service.isActiveTripMember(result.activeTrip.id, "U-revoked"), false);
+  assert.deepEqual(service.getTripAccessPolicy(result.activeTrip.id), {
+    tripId: result.activeTrip.id,
+    memberCanViewPending: true,
+    memberCanViewReviewIssues: true,
+    memberCanViewCancelledHistory: false,
+    memberCanViewSourceContent: false,
+    updatedBy: null,
+    updatedAt: null,
+  });
   assert.equal(service.reviewTrip(oldTrip.id).provisional[0]?.sourceId, oldImport.sourceId);
   assert.throws(() => service.importMarkdown(oldTrip.id, "- [provisional] 不應寫入 | 2026-10-17 | 台北", { idempotencyKey: "reset:archived" }), TripNotActiveError);
   db.close();
+});
+
+test("isolates Trip Access Policy defaults and administrator updates per Trip", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const firstTripId = bootstrapActiveTrip(service, "C-policy-first");
+  const secondTripId = bootstrapActiveTrip(service, "C-policy-second");
+
+  assert.deepEqual(service.getTripAccessPolicy(firstTripId), {
+    tripId: firstTripId,
+    memberCanViewPending: true,
+    memberCanViewReviewIssues: true,
+    memberCanViewCancelledHistory: false,
+    memberCanViewSourceContent: false,
+    updatedBy: null,
+    updatedAt: null,
+  });
+  assert.throws(
+    () => service.updateTripAccessPolicy("U-member", firstTripId, { memberCanViewPending: false }),
+    PermissionError,
+  );
+
+  const updated = service.updateTripAccessPolicy("system-admin", firstTripId, {
+    memberCanViewPending: false,
+    memberCanViewReviewIssues: true,
+    memberCanViewCancelledHistory: true,
+    memberCanViewSourceContent: true,
+  });
+  assert.equal(updated.tripId, firstTripId);
+  assert.equal(updated.memberCanViewPending, false);
+  assert.equal(updated.memberCanViewCancelledHistory, true);
+  assert.equal(updated.memberCanViewSourceContent, true);
+  assert.equal(updated.updatedBy, "system-admin");
+  assert.ok(updated.updatedAt);
+  assert.equal(service.getTripAccessPolicy(secondTripId).memberCanViewPending, true);
+
+  service.archiveTrip("system-admin", firstTripId);
+  assert.throws(
+    () => service.updateTripAccessPolicy("system-admin", firstTripId, { memberCanViewPending: true }),
+    TripNotActiveError,
+  );
+  db.close();
+});
+
+test("backfills one default Trip Access Policy for legacy Trips", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-policy-migration-"));
+  const databasePath = join(directory, "legacy.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  const service = new TravelService(initial, "system-admin");
+  const firstTripId = bootstrapActiveTrip(service, "C-policy-legacy-first");
+  const secondTripId = bootstrapActiveTrip(service, "C-policy-legacy-second");
+  initial.connection.exec(`DROP TABLE trip_access_policies`);
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const upgradedService = new TravelService(upgraded, "system-admin");
+  assert.deepEqual(upgradedService.getTripAccessPolicy(firstTripId), {
+    tripId: firstTripId,
+    memberCanViewPending: true,
+    memberCanViewReviewIssues: true,
+    memberCanViewCancelledHistory: false,
+    memberCanViewSourceContent: false,
+    updatedBy: null,
+    updatedAt: null,
+  });
+  assert.equal(upgradedService.getTripAccessPolicy(secondTripId).tripId, secondTripId);
+  assert.equal(upgraded.connection.prepare(`SELECT COUNT(*) AS count FROM trip_access_policies`).get()?.count, 2);
+  upgraded.close();
+
+  const reopened = new TravelDatabase(databasePath);
+  assert.equal(reopened.connection.prepare(`SELECT COUNT(*) AS count FROM trip_access_policies`).get()?.count, 2);
+  reopened.close();
+  rmSync(directory, { recursive: true, force: true });
 });
 
 test("parses a native LINE mention display name before a Markdown candidate", () => {

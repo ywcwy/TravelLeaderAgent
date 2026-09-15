@@ -28,6 +28,16 @@ export class TravelDatabase {
         archived_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS trip_access_policies (
+        trip_id TEXT PRIMARY KEY REFERENCES trips(id) ON DELETE CASCADE,
+        member_can_view_pending INTEGER NOT NULL DEFAULT 1 CHECK (member_can_view_pending IN (0, 1)),
+        member_can_view_review_issues INTEGER NOT NULL DEFAULT 1 CHECK (member_can_view_review_issues IN (0, 1)),
+        member_can_view_cancelled_history INTEGER NOT NULL DEFAULT 0 CHECK (member_can_view_cancelled_history IN (0, 1)),
+        member_can_view_source_content INTEGER NOT NULL DEFAULT 0 CHECK (member_can_view_source_content IN (0, 1)),
+        updated_by TEXT,
+        updated_at TEXT
+      );
+
       CREATE UNIQUE INDEX IF NOT EXISTS one_active_trip_per_group
         ON trips(travel_group_id) WHERE status = 'active';
 
@@ -185,6 +195,7 @@ export class TravelDatabase {
     this.connection.exec(`UPDATE trip_items SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.connection.exec(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) SELECT id, kind FROM proposals WHERE kind IS NOT NULL`);
     this.connection.exec(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) SELECT id, kind FROM trip_items WHERE kind IS NOT NULL`);
+    this.connection.exec(`INSERT OR IGNORE INTO trip_access_policies (trip_id) SELECT id FROM trips`);
   }
 
   close(): void {

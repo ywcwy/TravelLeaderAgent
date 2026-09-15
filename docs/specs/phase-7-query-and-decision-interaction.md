@@ -73,6 +73,7 @@ Each Trip has its own policy. The default is:
 - System Administrators may change the Trip Access Policy.
 - Raw Source content is hidden from Group Members by default.
 - Archived Trips are not included in default queries.
+- Policy mutations are restricted to the Active Trip; archived policy records remain available for explicit historical queries.
 
 Policy changes apply to future queries and are attributable to an administrator;
 already sent LINE messages are not retroactively changed.
