@@ -26,7 +26,7 @@ test("import:trip CLI persists a Markdown batch and reports its review issues", 
   const result = JSON.parse(output) as { outcome: string; sourceId: string; proposalIds: string[]; reviewIssueCount: number };
   assert.equal(result.outcome, "created");
   assert.equal(result.proposalIds.length, 1);
-  assert.equal(result.reviewIssueCount, 2);
+  assert.equal(result.reviewIssueCount, 1);
   assert.ok(result.sourceId);
   rmSync(directory, { recursive: true, force: true });
 });

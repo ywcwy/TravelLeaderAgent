@@ -14,6 +14,14 @@ The IANA timezone chosen when a Trip is initialized. It governs Quiet Hours and
 date-only Trip Items; a timed Trip Item retains its own IANA timezone.
 _Avoid_: user timezone, browser timezone
 
+**Timezone Provenance**:
+The authority of a timed Proposal or Trip Item's IANA timezone: `explicit` when
+the Source supplies it, `inferred` when a supported deterministic location
+mapping supplies it, or `fallback` when the Trip Timezone is used because the
+item timezone is missing or invalid. Fallback remains queryable but creates a
+Review Issue.
+_Avoid_: timezone confidence, user timezone
+
 **Trip**:
 A bounded, independently managed group journey. Its sources, proposals, effective
 itinerary, members, and reminders do not mix with another trip.

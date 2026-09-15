@@ -10,6 +10,7 @@ export type TripItemStatus = (typeof tripItemStatuses)[number];
 export type TripItemKind = "flight" | "lodging" | "rental_car" | "transport" | "meal" | "activity" | "shopping" | "meeting" | "other";
 export type ProposalShape = "point" | "route";
 export type ProposalShapeSource = "explicit" | "inferred";
+export type TimezoneSource = "explicit" | "inferred" | "fallback";
 export type ProposalStatus = "pending" | "confirmed" | "rejected";
 export type MemberRole = "owner" | "member";
 export type TripStatus = "active" | "archived";
@@ -25,6 +26,7 @@ export interface ExtractedTripItem {
   startsAt?: string;
   endsAt?: string;
   timezone?: string;
+  timezoneSource?: TimezoneSource;
   location?: string;
   origin?: string;
   destination?: string;
@@ -85,7 +87,7 @@ export interface ProposalContext {
 }
 
 export interface ReviewIssue {
-  code: "missing_start_time" | "missing_timezone" | "missing_location" | "missing_route_endpoint" | "shape_conflict" | "unknown_kind" | "kind_clarification" | "schedule_collision" | "source_unparsed" | "unparseable_line";
+  code: "missing_start_time" | "missing_timezone" | "invalid_timezone" | "missing_location" | "missing_route_endpoint" | "shape_conflict" | "unknown_kind" | "kind_clarification" | "schedule_collision" | "source_unparsed" | "unparseable_line";
   message: string;
   sourceId?: string;
   sourceLine?: number;
