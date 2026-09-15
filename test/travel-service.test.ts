@@ -125,6 +125,21 @@ test("retains a Source and Review Issue when a Route Proposal lacks an endpoint"
   db.close();
 });
 
+test("imports multiple Proposal Kinds and reports unknown kinds", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-proposal-kinds");
+  const result = service.importMarkdown(tripId, "- [provisional] Sleeper train to Page | 2026-10-01T22:00:00-07:00 | | onboard dinner | shape=route | origin=Las Vegas | destination=Page | kinds=transport,lodging,meal,spaceship", { idempotencyKey: "test:proposal-kinds" });
+
+  const proposal = service.getProposal(tripId, result.proposalIds[0]);
+  assert.deepEqual(proposal?.kinds, ["lodging", "meal", "transport"]);
+  assert.equal(proposal?.kind, "transport");
+  const issue = service.reviewTrip(tripId).issues.find((candidate) => candidate.code === "unknown_kind");
+  assert.ok(issue);
+  assert.match(issue.message, /spaceship/);
+  db.close();
+});
+
 test("importing the same Source Idempotency Key reuses its Source and Proposals", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
@@ -309,16 +324,17 @@ test("an owner confirms a Replacement Proposal without losing itinerary history"
   const otherSource = service.importMarkdown(otherTripId, "- [provisional] 其他旅程住宿 | 2026-10-16T15:00:00-07:00 | Oakland", { idempotencyKey: "test:replacement:other-source" });
   const otherPredecessor = service.confirmProposal(otherTripId, "owner", otherSource.proposalIds[0]);
   assert.throws(
-    () => service.createReplacementProposal(tripId, otherSource.sourceId, predecessor.id, { kind: "lodging", shape: "point", shapeSource: "explicit", title: "跨旅程替代", status: "provisional" }),
+    () => service.createReplacementProposal(tripId, otherSource.sourceId, predecessor.id, { kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "explicit", title: "跨旅程替代", status: "provisional" }),
     ConflictError,
   );
   assert.throws(
-    () => service.createReplacementProposal(tripId, source.sourceId, otherPredecessor.id, { kind: "lodging", shape: "point", shapeSource: "explicit", title: "跨旅程替代", status: "provisional" }),
+    () => service.createReplacementProposal(tripId, source.sourceId, otherPredecessor.id, { kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "explicit", title: "跨旅程替代", status: "provisional" }),
     ConflictError,
   );
 
   const replacement = service.createReplacementProposal(tripId, source.sourceId, predecessor.id, {
     kind: "lodging",
+    kinds: ["lodging"],
     shape: "point",
     shapeSource: "explicit",
     title: "Monterey 住宿",

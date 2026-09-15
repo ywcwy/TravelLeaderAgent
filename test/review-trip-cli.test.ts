@@ -42,5 +42,6 @@ test("review:trip CLI renders stable JSON and human-readable Trip Review", () =>
   assert.match(humanOutput, /已確認行程/);
   assert.match(humanOutput, /待確認住宿/);
   assert.match(humanOutput, /\[route\].*Las Vegas.*St\. George/);
+  assert.match(humanOutput, /\[lodging\]/);
   rmSync(directory, { recursive: true, force: true });
 });

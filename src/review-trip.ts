@@ -56,12 +56,12 @@ function formatTripItem(item: TripItem): string {
   const place = item.shape === "route"
     ? `${item.origin ?? "?"} → ${item.destination ?? "?"}`
     : item.location;
-  return `- [${item.shape}] ${item.title}${item.startsAt ? ` | ${item.startsAt}` : ""}${place ? ` | ${place}` : ""}`;
+  return `- [${item.shape}] [${item.kinds.join(", ")}] ${item.title}${item.startsAt ? ` | ${item.startsAt}` : ""}${place ? ` | ${place}` : ""}`;
 }
 
 function formatProposal(proposal: Proposal): string {
   const place = proposal.shape === "route"
     ? `${proposal.origin ?? "?"} → ${proposal.destination ?? "?"}`
     : proposal.location;
-  return `- ${proposal.id} | [${proposal.shape}] ${proposal.itemStatus} / ${proposal.status} | ${proposal.title}${proposal.startsAt ? ` | ${proposal.startsAt}` : ""}${place ? ` | ${place}` : ""}`;
+  return `- ${proposal.id} | [${proposal.shape}] [${proposal.kinds.join(", ")}] ${proposal.itemStatus} / ${proposal.status} | ${proposal.title}${proposal.startsAt ? ` | ${proposal.startsAt}` : ""}${place ? ` | ${place}` : ""}`;
 }

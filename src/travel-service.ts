@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
-import type { Decision, ExtractedTripItem, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TravelGroup, Trip, TripItem, TripItemStatus, TripReview } from "./domain.ts";
+import type { Decision, ExtractedTripItem, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TravelGroup, Trip, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -197,24 +197,28 @@ export class TravelService {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, tripId, sourceId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null,
       item.timezone ?? null, item.location ?? null, item.notes ?? null, item.deadlineAt ?? null, item.sourceLine ?? null, item.sourceExcerpt ?? null, now());
+    const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) VALUES (?, ?)`);
+    for (const kind of item.kinds) insertKind.run(id, kind);
     return id;
   }
 
   getProposal(tripId: string, proposalId: string): Proposal | null {
     const row = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND id = ?`).get(tripId, proposalId) as ProposalRow | undefined;
-    return row ? toProposal(row) : null;
+    return row ? this.hydrateProposal(row) : null;
   }
 
   getProposalContext(tripId: string, proposalId: string): ProposalContext | null {
     const proposal = this.getProposal(tripId, proposalId);
     if (!proposal) return null;
     const trip = this.requireTrip(tripId);
-    const confirmed = (this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'confirmed' AND kind = ?`).all(tripId, proposal.kind) as Array<Record<string, unknown>>)
-      .map(toTripItem)
+    const confirmed = (this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'confirmed'`).all(tripId) as Array<Record<string, unknown>>)
+      .map((row) => this.hydrateTripItem(row))
+      .filter((item) => item.kinds.some((kind) => proposal.kinds.includes(kind)))
       .filter((item) => isSameDateOrOverlapping(proposal, item, trip.timezone));
     const overlappingConfirmed = confirmed.filter((item) => hasTimeOverlap(proposal, item));
-    const pending = (this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' AND id <> ? AND kind = ?`).all(tripId, proposalId, proposal.kind) as unknown as ProposalRow[])
-      .map(toProposal)
+    const pending = (this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' AND id <> ?`).all(tripId, proposalId) as unknown as ProposalRow[])
+      .map((row) => this.hydrateProposal(row))
+      .filter((item) => item.kinds.some((kind) => proposal.kinds.includes(kind)))
       .filter((item) => isSameDateOrOverlapping(proposal, item, trip.timezone));
     return { proposal, confirmed, overlappingConfirmed, pending };
   }
@@ -230,6 +234,8 @@ export class TravelService {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, tripId, sourceId, predecessorItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null,
       item.timezone ?? null, item.location ?? null, item.notes ?? null, item.deadlineAt ?? null, item.sourceLine ?? null, item.sourceExcerpt ?? null, now());
+    const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) VALUES (?, ?)`);
+    for (const kind of item.kinds) insertKind.run(id, kind);
     return id;
   }
 
@@ -268,12 +274,13 @@ export class TravelService {
       if (!decision) throw new NotFoundError(`Open Decision ${decisionId} was not found.`);
       const proposal = this.db.connection.prepare(`SELECT * FROM proposals WHERE id = ? AND trip_id = ? AND decision_id = ? AND proposal_status = 'pending'`).get(selectedProposalId, tripId, decisionId) as ProposalRow | undefined;
       if (!proposal) throw new ConflictError("The selected Proposal is not an open option for this Decision.");
+      const kinds = this.getProposalKinds(proposal.id);
 
       const item: TripItem = {
         id: `T-${randomUUID().slice(0, 8).toUpperCase()}`,
         sourceId: proposal.source_id,
         replacementForItemId: null,
-        kind: proposal.kind as TripItem["kind"], shape: proposal.shape ?? "point", shapeSource: proposal.shape_source ?? "inferred", origin: proposal.origin ?? undefined, destination: proposal.destination ?? undefined, title: proposal.title,
+        kind: proposal.kind as TripItem["kind"], kinds, shape: proposal.shape ?? "point", shapeSource: proposal.shape_source ?? "inferred", origin: proposal.origin ?? undefined, destination: proposal.destination ?? undefined, title: proposal.title,
         status: "confirmed", startsAt: proposal.starts_at ?? undefined, endsAt: proposal.ends_at ?? undefined,
         timezone: proposal.timezone ?? undefined, location: proposal.location ?? undefined, notes: proposal.notes ?? undefined,
         confirmedBy: ownerId,
@@ -281,6 +288,8 @@ export class TravelService {
       const resolvedAt = now();
       this.db.connection.prepare(`INSERT INTO trip_items (id, trip_id, source_id, replacement_for_item_id, kind, shape, shape_source, origin, destination, title, status, starts_at, ends_at, timezone, location, notes, confirmed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(item.id, tripId, item.sourceId, item.replacementForItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null, item.timezone ?? null, item.location ?? null, item.notes ?? null, ownerId, resolvedAt);
+      const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) VALUES (?, ?)`);
+      for (const kind of item.kinds) insertKind.run(item.id, kind);
       this.db.connection.prepare(`UPDATE proposals SET proposal_status = CASE WHEN id = ? THEN 'confirmed' ELSE 'rejected' END WHERE decision_id = ? AND proposal_status = 'pending'`)
         .run(selectedProposalId, decisionId);
       this.db.connection.prepare(`UPDATE decisions SET status = 'resolved', selected_proposal_id = ?, resolved_by = ?, resolved_at = ? WHERE id = ?`)
@@ -306,11 +315,12 @@ export class TravelService {
       if (proposal.item_status === "conflicted") {
         throw new ConflictError("A conflicted proposal must be resolved before it can be confirmed.");
       }
+      const kinds = this.getProposalKinds(proposal.id);
       const item: TripItem = {
         id: `T-${randomUUID().slice(0, 8).toUpperCase()}`,
         sourceId: proposal.source_id,
         replacementForItemId: proposal.replacement_for_item_id,
-        kind: proposal.kind as TripItem["kind"], shape: proposal.shape ?? "point", shapeSource: proposal.shape_source ?? "inferred", origin: proposal.origin ?? undefined, destination: proposal.destination ?? undefined, title: proposal.title,
+        kind: proposal.kind as TripItem["kind"], kinds, shape: proposal.shape ?? "point", shapeSource: proposal.shape_source ?? "inferred", origin: proposal.origin ?? undefined, destination: proposal.destination ?? undefined, title: proposal.title,
         status: "confirmed", startsAt: proposal.starts_at ?? undefined, endsAt: proposal.ends_at ?? undefined,
         timezone: proposal.timezone ?? undefined, location: proposal.location ?? undefined, notes: proposal.notes ?? undefined,
         confirmedBy: ownerId,
@@ -321,6 +331,8 @@ export class TravelService {
       }
       this.db.connection.prepare(`INSERT INTO trip_items (id, trip_id, source_id, replacement_for_item_id, kind, shape, shape_source, origin, destination, title, status, starts_at, ends_at, timezone, location, notes, confirmed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(item.id, tripId, item.sourceId, item.replacementForItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null, item.timezone ?? null, item.location ?? null, item.notes ?? null, ownerId, now());
+      const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) VALUES (?, ?)`);
+      for (const kind of item.kinds) insertKind.run(item.id, kind);
       if (proposal.replacement_for_item_id) {
         this.db.connection.prepare(`UPDATE trip_items SET status = 'cancelled' WHERE id = ? AND trip_id = ? AND status = 'confirmed'`).run(proposal.replacement_for_item_id, tripId);
       }
@@ -334,10 +346,10 @@ export class TravelService {
   }
 
   reviewTrip(tripId: string): TripReview {
-    const confirmed = this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'confirmed' ORDER BY starts_at, title`).all(tripId).map(toTripItem) as TripItem[];
-    const cancelled = this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'cancelled' ORDER BY starts_at, title`).all(tripId).map(toTripItem) as TripItem[];
+    const confirmed = this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'confirmed' ORDER BY starts_at, title`).all(tripId).map((row) => this.hydrateTripItem(row)) as TripItem[];
+    const cancelled = this.db.connection.prepare(`SELECT * FROM trip_items WHERE trip_id = ? AND status = 'cancelled' ORDER BY starts_at, title`).all(tripId).map((row) => this.hydrateTripItem(row)) as TripItem[];
     const pending = this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND proposal_status = 'pending' ORDER BY deadline_at, title`).all(tripId) as unknown as ProposalRow[];
-    const proposals = pending.map(toProposal);
+    const proposals = pending.map((row) => this.hydrateProposal(row));
     const sources = this.db.connection.prepare(`SELECT id, content FROM sources WHERE trip_id = ?`).all(tripId) as Array<{ id: string; content: string }>;
     const sourceIds = sources.map((source) => source.id);
     const proposalSourceIds = new Set(
@@ -366,6 +378,22 @@ export class TravelService {
   private getSourceImportResult(sourceId: string): { sourceId: string; proposalIds: string[] } {
     const proposalIds = (this.db.connection.prepare(`SELECT id FROM proposals WHERE source_id = ? ORDER BY source_line, id`).all(sourceId) as unknown as Array<{ id: string }>).map((proposal) => proposal.id);
     return { sourceId, proposalIds };
+  }
+
+  private hydrateProposal(row: ProposalRow): Proposal {
+    return toProposal(row, this.getProposalKinds(row.id));
+  }
+
+  private hydrateTripItem(row: Record<string, unknown>): TripItem {
+    return toTripItem(row, this.getTripItemKinds(row.id as string));
+  }
+
+  private getProposalKinds(proposalId: string): TripItemKind[] {
+    return (this.db.connection.prepare(`SELECT kind FROM proposal_kinds WHERE proposal_id = ? ORDER BY kind`).all(proposalId) as Array<{ kind: TripItemKind }>).map((row) => row.kind);
+  }
+
+  private getTripItemKinds(tripItemId: string): TripItemKind[] {
+    return (this.db.connection.prepare(`SELECT kind FROM trip_item_kinds WHERE trip_item_id = ? ORDER BY kind`).all(tripItemId) as Array<{ kind: TripItemKind }>).map((row) => row.kind);
   }
 
   private extractMarkdown(markdown: string): ExtractedTripItem[] {
@@ -426,33 +454,37 @@ interface DecisionRow {
   id: string; trip_id: string; title: string; status: "open" | "resolved"; selected_proposal_id: string | null;
 }
 
-function toProposal(row: ProposalRow): Proposal {
+function toProposal(row: ProposalRow, kinds = [row.kind as Proposal["kind"]]): Proposal {
   const shape = row.shape ?? (row.location ? "point" : "point");
-  return { id: row.id, sourceId: row.source_id, replacementForItemId: row.replacement_for_item_id, kind: row.kind as Proposal["kind"], shape, shapeSource: row.shape_source ?? "inferred", origin: row.origin ?? undefined, destination: row.destination ?? undefined, title: row.title, itemStatus: row.item_status, status: "pending", startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, timezone: row.timezone ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
+  return { id: row.id, sourceId: row.source_id, replacementForItemId: row.replacement_for_item_id, kind: row.kind as Proposal["kind"], kinds, shape, shapeSource: row.shape_source ?? "inferred", origin: row.origin ?? undefined, destination: row.destination ?? undefined, title: row.title, itemStatus: row.item_status, status: "pending", startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, timezone: row.timezone ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
 }
 
 function toTravelGroup(row: TravelGroupRow): TravelGroup {
   return { id: row.id, lineGroupId: row.line_group_id, displayName: row.display_name };
 }
 
-function toTripItem(row: Record<string, unknown>): TripItem {
-  return { id: row.id as string, sourceId: row.source_id as string, replacementForItemId: (row.replacement_for_item_id as string) ?? null, kind: row.kind as TripItem["kind"], shape: (row.shape as ProposalShape | null) ?? "point", shapeSource: (row.shape_source as ProposalShapeSource | null) ?? "inferred", origin: (row.origin as string) ?? undefined, destination: (row.destination as string) ?? undefined, title: row.title as string, status: row.status as TripItemStatus, startsAt: (row.starts_at as string) ?? undefined, endsAt: (row.ends_at as string) ?? undefined, timezone: (row.timezone as string) ?? undefined, location: (row.location as string) ?? undefined, notes: (row.notes as string) ?? undefined, confirmedBy: (row.confirmed_by as string) ?? null };
+function toTripItem(row: Record<string, unknown>, kinds = [row.kind as TripItem["kind"]]): TripItem {
+  return { id: row.id as string, sourceId: row.source_id as string, replacementForItemId: (row.replacement_for_item_id as string) ?? null, kind: row.kind as TripItem["kind"], kinds, shape: (row.shape as ProposalShape | null) ?? "point", shapeSource: (row.shape_source as ProposalShapeSource | null) ?? "inferred", origin: (row.origin as string) ?? undefined, destination: (row.destination as string) ?? undefined, title: row.title as string, status: row.status as TripItemStatus, startsAt: (row.starts_at as string) ?? undefined, endsAt: (row.ends_at as string) ?? undefined, timezone: (row.timezone as string) ?? undefined, location: (row.location as string) ?? undefined, notes: (row.notes as string) ?? undefined, confirmedBy: (row.confirmed_by as string) ?? null };
 }
 
-function inferKind(title: string): TripItem["kind"] {
+function inferKinds(title: string): TripItem["kind"][] {
   const lower = title.toLowerCase();
-  if (/flight|航班|飛機/.test(lower)) return "flight";
-  if (/hotel|住宿|飯店|住 /.test(lower)) return "lodging";
-  if (/car|租車|還車/.test(lower)) return "rental_car";
-  if (/tour|ticket|活動|門票|預約/.test(lower)) return "activity";
-  if (/train|bus|交通|接駁/.test(lower)) return "transport";
-  if (/meet|集合/.test(lower)) return "meeting";
-  return "other";
+  const kinds: TripItem["kind"][] = [];
+  if (/flight|航班|飛機/.test(lower)) kinds.push("flight");
+  if (/hotel|住宿|飯店|住 /.test(lower)) kinds.push("lodging");
+  if (/car|租車|還車/.test(lower)) kinds.push("rental_car");
+  if (/train|bus|交通|接駁|開車/.test(lower)) kinds.push("transport");
+  if (/breakfast|lunch|dinner|meal|早餐|午餐|晚餐|餐/.test(lower)) kinds.push("meal");
+  if (/tour|ticket|活動|門票|預約/.test(lower)) kinds.push("activity");
+  if (/shopping|supermarket|walmart|safeway|採買|購物|超市/.test(lower)) kinds.push("shopping");
+  if (/meet|集合/.test(lower)) kinds.push("meeting");
+  return kinds.length > 0 ? [...new Set(kinds)] : ["other"];
 }
 
 interface ParsedMarkdownCandidate {
   item?: ExtractedTripItem;
   issue?: Pick<ReviewIssue, "code" | "message">;
+  issues?: Array<Pick<ReviewIssue, "code" | "message">>;
 }
 
 function parseMarkdownCandidate(line: string, sourceLine: number): ParsedMarkdownCandidate {
@@ -482,13 +514,27 @@ function parseMarkdownCandidate(line: string, sourceLine: number): ParsedMarkdow
   if (shape === "route" && (!origin || !destination)) {
     return { issue: { code: "missing_route_endpoint", message: `第 ${sourceLine} 行的 Route Proposal 缺少起點或終點。` } };
   }
+  const hasExplicitKinds = Boolean(fields.kinds);
+  const parsedKinds = hasExplicitKinds ? fields.kinds.split(",").map((kind) => kind.trim()).filter(Boolean) : inferKinds(title);
+  const knownKinds = new Set<TripItem["kind"]>(["flight", "lodging", "rental_car", "transport", "meal", "activity", "shopping", "meeting", "other"]);
+  const unknownKinds = parsedKinds.filter((kind) => !knownKinds.has(kind as TripItem["kind"]));
+  const kinds = parsedKinds.filter((kind): kind is TripItem["kind"] => knownKinds.has(kind as TripItem["kind"]));
+  if (kinds.length === 0) kinds.push("other");
+  if (!hasExplicitKinds && shape === "route" && kinds.length === 1 && kinds[0] === "other") kinds[0] = "transport";
+  const issues: Array<Pick<ReviewIssue, "code" | "message">> = unknownKinds.length > 0
+    ? [{ code: "unknown_kind", message: `第 ${sourceLine} 行包含未知 Proposal Kind：${unknownKinds.join(", ")}。` }]
+    : [];
+  if (!hasExplicitKinds && kinds.length === 1 && kinds[0] === "other") {
+    issues.push({ code: "kind_clarification", message: `第 ${sourceLine} 行無法可靠判斷 Proposal Kind，請補充分類。` });
+  }
   return {
     item: {
-      kind: inferKind(title), shape, shapeSource, title, status: status as TripItemStatus,
+      kind: kinds[0], kinds, shape, shapeSource, title, status: status as TripItemStatus,
       startsAt: startsAt || undefined, location: location || undefined, origin, destination,
       notes: notes || undefined, timezone: fields.timezone || undefined, deadlineAt: fields.deadline || undefined,
       sourceLine, sourceExcerpt: line.trim(),
     },
+    issues,
   };
 }
 
@@ -511,6 +557,7 @@ function findUnparseableLineIssues(sourceId: string, markdown: string): ReviewIs
     if (!/^\s*-\s*\[/.test(line)) return [];
     const parsed = parseMarkdownCandidate(line, index + 1);
     if (parsed.issue) return [{ ...parsed.issue, sourceId, sourceLine: index + 1, sourceExcerpt: line.trim(), proposalIds: [] }];
+    if (parsed.issues?.length) return parsed.issues.map((issue) => ({ ...issue, sourceId, sourceLine: index + 1, sourceExcerpt: line.trim(), proposalIds: [] }));
     if (parsed.item) return [];
     return [{ code: "unparseable_line" as const, message: `第 ${index + 1} 行無法解析為有效行程候選。`, sourceId, sourceLine: index + 1, sourceExcerpt: line.trim(), proposalIds: [] }];
   });
@@ -558,7 +605,7 @@ function buildReviewIssues(proposals: Proposal[], confirmed: TripItem[]): Review
     for (let j = i + 1; j < scheduled.length; j += 1) {
       const left = scheduled[i];
       const right = scheduled[j];
-      if (left.kind === right.kind && left.startsAt === right.startsAt && left.location !== right.location) {
+      if (left.kinds.some((kind) => right.kinds.includes(kind)) && left.startsAt === right.startsAt && left.location !== right.location) {
         issues.push({ code: "schedule_collision", message: `「${left.title}」與「${right.title}」在同一時間有互斥安排。`, proposalIds: [left.id, right.id] });
       }
     }

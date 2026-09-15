@@ -112,6 +112,18 @@ export class TravelDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS proposal_kinds (
+        proposal_id TEXT NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        PRIMARY KEY (proposal_id, kind)
+      );
+
+      CREATE TABLE IF NOT EXISTS trip_item_kinds (
+        trip_item_id TEXT NOT NULL REFERENCES trip_items(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        PRIMARY KEY (trip_item_id, kind)
+      );
+
       CREATE TABLE IF NOT EXISTS reminders (
         id TEXT PRIMARY KEY,
         trip_id TEXT NOT NULL REFERENCES trips(id),
@@ -171,6 +183,8 @@ export class TravelDatabase {
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "destination")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN destination TEXT`);
     this.connection.exec(`UPDATE proposals SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.connection.exec(`UPDATE trip_items SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
+    this.connection.exec(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) SELECT id, kind FROM proposals WHERE kind IS NOT NULL`);
+    this.connection.exec(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) SELECT id, kind FROM trip_items WHERE kind IS NOT NULL`);
   }
 
   close(): void {
