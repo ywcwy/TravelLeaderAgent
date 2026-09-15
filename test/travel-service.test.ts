@@ -537,6 +537,38 @@ test("runs Decision needs-options, reopening, selection, and cancellation lifecy
   db.close();
 });
 
+test("isolates Archived Trip queries, Source visibility, and pagination tokens", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-query-archived");
+  service.addMember("system-admin", tripId, "owner", "Owner", "owner");
+  service.addMember("system-admin", tripId, "member", "Member", "member");
+  const lines = Array.from({ length: 12 }, (_, index) => `- [provisional] 行程 ${index + 1} | 2026-11-${String(index + 1).padStart(2, "0")} | Page | | timezone=Asia/Taipei`).join("\n");
+  const imported = service.importMarkdown(tripId, lines, { idempotencyKey: "query:archive-pagination" });
+  for (const proposalId of imported.proposalIds) service.confirmProposal(tripId, "owner", proposalId);
+  const firstPage = service.queryTrip(tripId, "member", { pageSize: 3 });
+  assert.equal(firstPage.confirmed.length, 3);
+  assert.ok(firstPage.nextPageToken);
+  const secondPage = service.queryTrip(tripId, "member", { pageSize: 3, continuationToken: firstPage.nextPageToken ?? undefined });
+  assert.equal(secondPage.confirmed.length, 3);
+  assert.notEqual(secondPage.confirmed[0]?.id, firstPage.confirmed[0]?.id);
+  assert.throws(() => service.queryTrip(tripId, "other-member", { pageSize: 3, continuationToken: firstPage.nextPageToken ?? undefined }), PermissionError);
+  const originalNow = Date.now;
+  Date.now = () => originalNow() + 6 * 60 * 1000;
+  try {
+    assert.throws(() => service.queryTrip(tripId, "member", { pageSize: 3, continuationToken: firstPage.nextPageToken ?? undefined }), ConflictError);
+  } finally {
+    Date.now = originalNow;
+  }
+  assert.equal(service.queryTrip(tripId, "member", { includeSourceContent: true }).sources.length, 0);
+  service.updateTripAccessPolicy("system-admin", tripId, { memberCanViewSourceContent: true });
+  assert.equal(service.queryTrip(tripId, "owner", { includeSourceContent: true }).sources.length, 1);
+  service.archiveTrip("system-admin", tripId);
+  assert.throws(() => service.queryActiveTrip(tripId, "member", {}), TripNotActiveError);
+  assert.equal(service.queryTrip(tripId, "member", { includeArchived: true }).trip.status, "archived");
+  db.close();
+});
+
 test("an owner confirms a Replacement Proposal without losing itinerary history", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

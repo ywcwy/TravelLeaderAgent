@@ -31,6 +31,7 @@ export interface MarkdownImportResult {
 export class TravelService {
   private readonly db: TravelDatabase;
   private readonly systemAdministratorId: string;
+  private readonly queryTokens = new Map<string, { tripId: string; memberId: string; query: Omit<ItineraryQuery, "continuationToken">; offset: number; expiresAt: number }>();
 
   constructor(db: TravelDatabase, systemAdministratorId: string) {
     this.db = db;
@@ -177,6 +178,14 @@ export class TravelService {
 
   isActiveTripMember(tripId: string, lineUserId: string): boolean {
     return Boolean(this.db.connection.prepare(`SELECT 1 FROM members WHERE trip_id = ? AND line_user_id = ? AND revoked_at IS NULL`).get(tripId, lineUserId));
+  }
+
+  private isTripMember(tripId: string, lineUserId: string): boolean {
+    return Boolean(this.db.connection.prepare(`SELECT 1 FROM members WHERE trip_id = ? AND line_user_id = ? AND revoked_at IS NULL`).get(tripId, lineUserId));
+  }
+
+  private isDecisionOwner(tripId: string, lineUserId: string): boolean {
+    return Boolean(this.db.connection.prepare(`SELECT 1 FROM members WHERE trip_id = ? AND line_user_id = ? AND role = 'owner' AND revoked_at IS NULL`).get(tripId, lineUserId));
   }
 
   importMarkdown(tripId: string, markdown: string, options: SourceImportOptions): { sourceId: string; proposalIds: string[] } {
@@ -524,33 +533,65 @@ export class TravelService {
   }
 
   queryActiveTrip(tripId: string, memberId: string, query: ItineraryQuery): ItineraryQueryResult {
-    const trip = toTrip(this.requireActiveTrip(tripId));
-    if (!this.isActiveTripMember(tripId, memberId)) throw new PermissionError("Only an Active Trip member can query itinerary data.");
+    return this.queryTrip(tripId, memberId, { ...query, includeArchived: false });
+  }
+
+  queryTrip(tripId: string, memberId: string, query: ItineraryQuery): ItineraryQueryResult {
+    const tripRow = this.requireTrip(tripId);
+    if (tripRow.status === "archived" && !query.includeArchived) throw new TripNotActiveError(`Trip ${tripId} is archived; request it explicitly.`);
+    const trip = toTrip(tripRow);
+    if (!this.isTripMember(tripId, memberId) && memberId !== this.systemAdministratorId) throw new PermissionError("Only a Trip member can query itinerary data.");
     const policy = this.getTripAccessPolicy(tripId);
     const review = this.reviewTrip(tripId);
+    const pageSize = Math.min(Math.max(query.pageSize ?? 10, 1), 10);
+    const continuation = this.readQueryToken(query.continuationToken, tripId, memberId);
+    const effectiveQuery = continuation?.query ?? query;
     const matches = (item: { id?: string; title: string; startsAt?: string; location?: string; origin?: string; destination?: string; kinds: TripItemKind[] }) => {
-      if (query.proposalId && item.id !== query.proposalId) return false;
-      if (query.date && (!item.startsAt || tripDate(item.startsAt, trip.timezone) !== query.date)) return false;
-      if (query.location && ![item.location, item.origin, item.destination].some((value) => value?.toLocaleLowerCase().includes(query.location!.toLocaleLowerCase()))) return false;
-      if (query.kind && !item.kinds.includes(query.kind)) return false;
+      if (effectiveQuery.proposalId && item.id !== effectiveQuery.proposalId) return false;
+      if (effectiveQuery.date && (!item.startsAt || tripDate(item.startsAt, trip.timezone) !== effectiveQuery.date)) return false;
+      if (effectiveQuery.location && ![item.location, item.origin, item.destination].some((value) => value?.toLocaleLowerCase().includes(effectiveQuery.location!.toLocaleLowerCase()))) return false;
+      if (effectiveQuery.kind && !item.kinds.includes(effectiveQuery.kind)) return false;
       return true;
     };
-    const confirmed = query.pendingOnly || query.reviewIssuesOnly ? [] : review.confirmed.filter(matches).sort(compareScheduledItems);
-    const pending = policy.memberCanViewPending && !query.reviewIssuesOnly ? review.pending.filter(matches).sort(compareScheduledItems) : [];
-    const hasItemFilter = Boolean(query.date || query.location || query.kind || query.proposalId);
-    const openDecisions = query.pendingOnly || query.reviewIssuesOnly ? [] : (this.db.connection.prepare(`SELECT * FROM decisions WHERE trip_id = ? AND status = 'open' ORDER BY title, id`).all(tripId) as unknown as DecisionRow[])
+    const allConfirmed = effectiveQuery.pendingOnly || effectiveQuery.reviewIssuesOnly ? [] : review.confirmed.filter(matches).sort(compareScheduledItems);
+    const allPending = policy.memberCanViewPending && !effectiveQuery.reviewIssuesOnly ? review.pending.filter(matches).sort(compareScheduledItems) : [];
+    const offset = continuation?.offset ?? 0;
+    const combined = [...allConfirmed.map((item) => ({ type: "confirmed" as const, item })), ...allPending.map((item) => ({ type: "pending" as const, item }))].sort((left, right) => compareScheduledItems(left.item, right.item));
+    const page = combined.slice(offset, offset + pageSize);
+    const confirmed = page.filter((entry) => entry.type === "confirmed").map((entry) => entry.item) as TripItem[];
+    const pending = page.filter((entry) => entry.type === "pending").map((entry) => entry.item) as Proposal[];
+    const hasItemFilter = Boolean(effectiveQuery.date || effectiveQuery.location || effectiveQuery.kind || effectiveQuery.proposalId);
+    const openDecisions = effectiveQuery.pendingOnly || effectiveQuery.reviewIssuesOnly ? [] : (this.db.connection.prepare(`SELECT * FROM decisions WHERE trip_id = ? AND status = 'open' ORDER BY title, id`).all(tripId) as unknown as DecisionRow[])
       .filter((decision) => {
         if (!hasItemFilter) return true;
         const options = (this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND decision_id = ? AND proposal_status = 'pending'`).all(tripId, decision.id) as unknown as ProposalRow[]).map((row) => this.hydrateProposal(row));
         return options.some(matches);
       })
       .map(toDecision);
-    const issues = policy.memberCanViewReviewIssues && !query.pendingOnly ? review.issues.filter((issue) => {
+    const issues = policy.memberCanViewReviewIssues && !effectiveQuery.pendingOnly ? review.issues.filter((issue) => {
       if (!hasItemFilter) return true;
       const related = review.pending.filter((proposal) => issue.proposalIds.includes(proposal.id));
       return related.some(matches);
     }) : [];
-    return { trip, confirmed, pending, openDecisions, issues };
+    const canReadSource = effectiveQuery.includeSourceContent === true && policy.memberCanViewSourceContent && (memberId === this.systemAdministratorId || this.isDecisionOwner(tripId, memberId));
+    const sources = canReadSource ? (this.db.connection.prepare(`SELECT * FROM sources WHERE trip_id = ? ORDER BY source_time, id`).all(tripId) as unknown as SourceRow[]).map(toSource) : [];
+    const nextPageToken = offset + pageSize < combined.length ? this.createQueryToken(tripId, memberId, effectiveQuery, offset + pageSize) : null;
+    return { trip, confirmed, pending, openDecisions, issues: offset === 0 ? issues : [], sources, nextPageToken };
+  }
+
+  private readQueryToken(token: string | undefined, tripId: string, memberId: string): { query: Omit<ItineraryQuery, "continuationToken">; offset: number } | null {
+    if (!token) return null;
+    const payload = this.queryTokens.get(token);
+    this.queryTokens.delete(token);
+    if (!payload || payload.expiresAt <= Date.now()) throw new ConflictError("The query continuation token has expired.");
+    if (payload.tripId !== tripId || payload.memberId !== memberId) throw new PermissionError("The query continuation token does not belong to this Trip or user.");
+    return { query: payload.query, offset: payload.offset };
+  }
+
+  private createQueryToken(tripId: string, memberId: string, query: Omit<ItineraryQuery, "continuationToken">, offset: number): string {
+    const token = `Q-${randomUUID().replaceAll("-", "").slice(0, 20).toUpperCase()}`;
+    this.queryTokens.set(token, { tripId, memberId, query, offset, expiresAt: Date.now() + 5 * 60 * 1000 });
+    return token;
   }
 
   private getSourceImportResult(sourceId: string): { sourceId: string; proposalIds: string[] } {
@@ -675,6 +716,18 @@ function toProposal(row: ProposalRow, kinds = [row.kind as Proposal["kind"]]): P
 
 function toTravelGroup(row: TravelGroupRow): TravelGroup {
   return { id: row.id, lineGroupId: row.line_group_id, displayName: row.display_name };
+}
+
+function toSource(row: SourceRow): Source {
+  return {
+    id: row.id,
+    tripId: row.trip_id,
+    type: row.type,
+    idempotencyKey: row.idempotency_key,
+    content: row.content,
+    sourceTime: row.source_time,
+    provenance: row.provider ? { provider: row.provider, messageId: row.provider_message_id ?? "", ...(row.provider_group_id ? { groupId: row.provider_group_id } : {}), ...(row.provider_user_id ? { userId: row.provider_user_id } : {}) } : null,
+  };
 }
 
 function toTripItem(row: Record<string, unknown>, kinds = [row.kind as TripItem["kind"]]): TripItem {

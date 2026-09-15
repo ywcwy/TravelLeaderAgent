@@ -26,6 +26,11 @@ export function parseItineraryMessage(text: string): ParsedItineraryMessage {
   if (!command) return null;
   const rest = command[2].trim();
   if (!rest || /^(行程|itinerary)$/i.test(rest)) return { type: "query", query: {} };
+  const history = rest.match(/^(?:歷史|history)\s+([A-Za-z0-9-]+)$/i);
+  if (history) return { type: "query", query: { tripId: history[1], includeArchived: true } };
+  const continuation = rest.match(/^(?:繼續|next)\s+(Q-[A-Z0-9]+)$/i);
+  if (continuation) return { type: "query", query: { continuationToken: continuation[1].toUpperCase() } };
+  if (/^(?:來源|source)$/i.test(rest)) return { type: "query", query: { includeSourceContent: true } };
   if (/^(待確認|待确认|pending)$/i.test(rest)) return { type: "query", query: { pendingOnly: true } };
   if (/^review\s*issues?$/i.test(rest)) return { type: "query", query: { reviewIssuesOnly: true } };
   const proposal = rest.match(/^(?:proposal\s+)?(P-[A-Z0-9]{8})$/i);
@@ -38,16 +43,18 @@ export function parseItineraryMessage(text: string): ParsedItineraryMessage {
 }
 
 export function renderItineraryQuery(result: ItineraryQueryResult): string {
-  const lines = [`${result.trip.title}｜Active Trip`];
+  const lines = [`${result.trip.title}｜${result.trip.status === "active" ? "Active" : "Archived"} Trip`];
   if (result.confirmed.length) lines.push(`Confirmed：${result.confirmed.map(formatItem).join("、")}`);
   if (result.pending.length) lines.push(`Pending：${result.pending.map((item) => `${item.id} ${formatItem(item)}`).join("、")}`);
   if (result.openDecisions.length) lines.push(`Open Decision：${result.openDecisions.map((decision) => `${decision.id} ${decision.title}`).join("、")}`);
   if (result.issues.length) lines.push(`Review Issues：${result.issues.length} 筆`);
+  if (result.sources.length) lines.push(`Source 原文：${result.sources.map((source) => `${source.id}｜${source.content}`).join("\n")}`);
+  if (result.nextPageToken) lines.push(`下一頁：查詢繼續 ${result.nextPageToken}`);
   if (lines.length === 1) return `${lines[0]}\n查無符合條件的行程資料。`;
   return lines.join("\n");
 }
 
-export const itineraryQueryHelp = "可用查詢：查詢行程、查詢 2026-10-01、查詢 Page、查詢待確認、查詢 Review Issues、查詢 Proposal P-12345678。";
+export const itineraryQueryHelp = "可用查詢：查詢行程、查詢歷史 <Trip ID>、查詢 2026-10-01、查詢 Page、查詢待確認、查詢 Review Issues、查詢來源、查詢繼續 Q-XXXXXXXX。";
 
 function formatItem(item: { title: string; startsAt?: string; location?: string }): string {
   return `${item.title}${item.startsAt ? `｜${item.startsAt}` : ""}${item.location ? `｜${item.location}` : ""}`;

@@ -63,7 +63,8 @@ export class LineSourceWorker {
         }
         if (parsed) {
           if (replyToken) {
-            const text = parsed.type === "help" ? itineraryQueryHelp : renderItineraryQuery(this.travel.queryActiveTrip(event.tripId, event.userId, parsed.query));
+            const targetTripId = parsed.type === "query" && parsed.query.tripId ? parsed.query.tripId : event.tripId;
+            const text = parsed.type === "help" ? itineraryQueryHelp : renderItineraryQuery(this.travel.queryTrip(targetTripId, event.userId, parsed.query));
             await this.reply(replyToken, text);
           }
           this.inbox.complete(event.eventId, leaseToken);

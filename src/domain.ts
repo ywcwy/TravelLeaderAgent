@@ -125,6 +125,11 @@ export interface TripAccessPolicyUpdate {
 }
 
 export interface ItineraryQuery {
+  tripId?: string;
+  includeArchived?: boolean;
+  includeSourceContent?: boolean;
+  continuationToken?: string;
+  pageSize?: number;
   date?: string;
   location?: string;
   kind?: TripItemKind;
@@ -139,6 +144,8 @@ export interface ItineraryQueryResult {
   pending: Proposal[];
   openDecisions: Decision[];
   issues: ReviewIssue[];
+  sources: Source[];
+  nextPageToken: string | null;
 }
 
 export interface Decision {
