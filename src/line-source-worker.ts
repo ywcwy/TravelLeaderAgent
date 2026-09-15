@@ -1,5 +1,6 @@
 import type { TravelService } from "./travel-service.ts";
 import type { WebhookInbox, WebhookInboxEvent } from "./webhook-inbox.ts";
+import { itineraryQueryHelp, parseItineraryMessage, renderItineraryQuery } from "./itinerary-query.ts";
 
 export type LineReplySender = (replyToken: string, text: string) => void | Promise<void>;
 
@@ -46,6 +47,15 @@ export class LineSourceWorker {
     const replyToken = this.inbox.consumeReplyToken(event.eventId, leaseToken);
     return (async () => {
       try {
+        const parsed = parseItineraryMessage(event.text);
+        if (parsed) {
+          if (replyToken) {
+            const text = parsed.type === "help" ? itineraryQueryHelp : renderItineraryQuery(this.travel.queryActiveTrip(event.tripId, event.userId, parsed.query));
+            await this.reply(replyToken, text);
+          }
+          this.inbox.complete(event.eventId, leaseToken);
+          return "processed" as const;
+        }
         const imported = this.importSource(event);
         if (replyToken) await this.reply(replyToken, this.contextualReply(event.tripId, imported.proposalIds));
         this.inbox.complete(event.eventId, leaseToken);

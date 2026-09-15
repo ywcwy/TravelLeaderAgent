@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
-import type { Decision, ExtractedTripItem, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import type { Decision, ExtractedTripItem, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -418,6 +418,36 @@ export class TravelService {
     };
   }
 
+  queryActiveTrip(tripId: string, memberId: string, query: ItineraryQuery): ItineraryQueryResult {
+    const trip = toTrip(this.requireActiveTrip(tripId));
+    if (!this.isActiveTripMember(tripId, memberId)) throw new PermissionError("Only an Active Trip member can query itinerary data.");
+    const policy = this.getTripAccessPolicy(tripId);
+    const review = this.reviewTrip(tripId);
+    const matches = (item: { id?: string; title: string; startsAt?: string; location?: string; origin?: string; destination?: string; kinds: TripItemKind[] }) => {
+      if (query.proposalId && item.id !== query.proposalId) return false;
+      if (query.date && (!item.startsAt || tripDate(item.startsAt, trip.timezone) !== query.date)) return false;
+      if (query.location && ![item.location, item.origin, item.destination].some((value) => value?.toLocaleLowerCase().includes(query.location!.toLocaleLowerCase()))) return false;
+      if (query.kind && !item.kinds.includes(query.kind)) return false;
+      return true;
+    };
+    const confirmed = query.pendingOnly || query.reviewIssuesOnly ? [] : review.confirmed.filter(matches).sort(compareScheduledItems);
+    const pending = policy.memberCanViewPending && !query.reviewIssuesOnly ? review.pending.filter(matches).sort(compareScheduledItems) : [];
+    const hasItemFilter = Boolean(query.date || query.location || query.kind || query.proposalId);
+    const openDecisions = query.pendingOnly || query.reviewIssuesOnly ? [] : (this.db.connection.prepare(`SELECT * FROM decisions WHERE trip_id = ? AND status = 'open' ORDER BY title, id`).all(tripId) as unknown as DecisionRow[])
+      .filter((decision) => {
+        if (!hasItemFilter) return true;
+        const options = (this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND decision_id = ? AND proposal_status = 'pending'`).all(tripId, decision.id) as unknown as ProposalRow[]).map((row) => this.hydrateProposal(row));
+        return options.some(matches);
+      })
+      .map(toDecision);
+    const issues = policy.memberCanViewReviewIssues && !query.pendingOnly ? review.issues.filter((issue) => {
+      if (!hasItemFilter) return true;
+      const related = review.pending.filter((proposal) => issue.proposalIds.includes(proposal.id));
+      return related.some(matches);
+    }) : [];
+    return { trip, confirmed, pending, openDecisions, issues };
+  }
+
   private getSourceImportResult(sourceId: string): { sourceId: string; proposalIds: string[] } {
     const proposalIds = (this.db.connection.prepare(`SELECT id FROM proposals WHERE source_id = ? ORDER BY source_line, id`).all(sourceId) as unknown as Array<{ id: string }>).map((proposal) => proposal.id);
     return { sourceId, proposalIds };
@@ -517,6 +547,20 @@ interface ProposalMembershipRow {
 
 interface DecisionRow {
   id: string; trip_id: string; title: string; status: "open" | "resolved"; selected_proposal_id: string | null;
+}
+
+function toDecision(row: DecisionRow): Decision {
+  return { id: row.id, tripId: row.trip_id, title: row.title, status: row.status, selectedProposalId: row.selected_proposal_id, resolvedBy: null, resolvedAt: null };
+}
+
+function tripDate(value: string, timezone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
+}
+
+function compareScheduledItems(left: { startsAt?: string; title: string; id: string }, right: { startsAt?: string; title: string; id: string }): number {
+  const leftTime = left.startsAt ? Date.parse(left.startsAt) : Number.POSITIVE_INFINITY;
+  const rightTime = right.startsAt ? Date.parse(right.startsAt) : Number.POSITIVE_INFINITY;
+  return leftTime - rightTime || left.title.localeCompare(right.title) || left.id.localeCompare(right.id);
 }
 
 function toProposal(row: ProposalRow, kinds = [row.kind as Proposal["kind"]]): Proposal {

@@ -163,6 +163,31 @@ test("backfills one default Trip Access Policy for legacy Trips", () => {
   rmSync(directory, { recursive: true, force: true });
 });
 
+test("queries policy-permitted Active Trip records with stable filters", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-query-service");
+  service.ensureGroupMember(tripId, "U-member", "Member");
+  service.addMember("system-admin", tripId, "U-owner", "Owner", "owner");
+  const confirmed = service.importMarkdown(tripId, "- [provisional] 住宿 | 2026-10-01T18:00:00+08:00 | Page | | timezone=Asia/Taipei", { idempotencyKey: "query:confirmed" });
+  const pending = service.importMarkdown(tripId, "- [provisional] 晚餐 | 2026-10-02T19:00:00+08:00 | Page | | timezone=Asia/Taipei", { idempotencyKey: "query:pending" });
+  service.importMarkdown(tripId, "- [provisional] 早點 | 2026-10-02T03:00:00-07:00 | Page | | timezone=America/Los_Angeles", { idempotencyKey: "query:early" });
+  service.confirmProposal(tripId, "U-owner", confirmed.proposalIds[0]);
+
+  const result = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-01", location: "page" });
+  assert.deepEqual(result.confirmed.map((item) => item.title), ["住宿"]);
+  assert.deepEqual(result.pending, []);
+  assert.equal(result.issues.length, 0);
+  const pendingResult = service.queryActiveTrip(tripId, "U-member", { pendingOnly: true });
+  assert.equal(pendingResult.pending[0]?.title, "早點");
+  assert.equal(pendingResult.pending[1]?.id, pending.proposalIds[0]);
+  service.updateTripAccessPolicy("system-admin", tripId, { memberCanViewPending: false, memberCanViewReviewIssues: false });
+  const hidden = service.queryActiveTrip(tripId, "U-member", {});
+  assert.deepEqual(hidden.pending, []);
+  assert.deepEqual(hidden.issues, []);
+  db.close();
+});
+
 test("parses a native LINE mention display name before a Markdown candidate", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

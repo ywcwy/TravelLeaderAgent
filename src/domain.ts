@@ -121,6 +121,23 @@ export interface TripAccessPolicyUpdate {
   memberCanViewSourceContent?: boolean;
 }
 
+export interface ItineraryQuery {
+  date?: string;
+  location?: string;
+  kind?: TripItemKind;
+  pendingOnly?: boolean;
+  reviewIssuesOnly?: boolean;
+  proposalId?: string;
+}
+
+export interface ItineraryQueryResult {
+  trip: Trip;
+  confirmed: TripItem[];
+  pending: Proposal[];
+  openDecisions: Decision[];
+  issues: ReviewIssue[];
+}
+
 export interface Decision {
   id: string;
   tripId: string;

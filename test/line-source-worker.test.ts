@@ -52,6 +52,27 @@ test("keeps non-Markdown LINE text as a Source with a review issue", async () =>
   db.close();
 });
 
+test("handles a mentioned itinerary query without creating a Source", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-line", "查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "查詢旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [provisional] 住宿 | 2026-10-01T18:00:00+08:00 | Page | | timezone=Asia/Taipei", { idempotencyKey: "query:line" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEQUERY0000000000000000", messageId: "message-query", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢行程", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-query" });
+  inbox.enqueue({ eventId: "01JLINEQUERY0000000000000001", messageId: "message-query-2", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 Las Vegas", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-query-2" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /住宿/);
+  assert.match(replies[1] ?? "", /查無符合條件/);
+  assert.equal(db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id)?.count, 1);
+  assert.equal(inbox.get("01JLINEQUERY0000000000000000")?.status, "completed");
+  db.close();
+});
+
 test("parses LINE free-form lodging and multi-leg route statements with shared Sources", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
