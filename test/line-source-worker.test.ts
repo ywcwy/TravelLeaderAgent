@@ -137,6 +137,35 @@ test("supports English dining and rental-car free-form statements", async () => 
   db.close();
 });
 
+test("produces equivalent structured records for equivalent Markdown and LINE inputs", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const markdownGroup = travel.createTravelGroup("system-admin", "C-equivalent-markdown", "Markdown 等價群組");
+  const markdownTrip = travel.createActiveTrip("system-admin", markdownGroup.id, "Markdown 等價旅程", "Asia/Taipei");
+  const markdown = travel.importMarkdown(markdownTrip.id, [
+    "- [provisional] Page 住宿 | 2026-10-01 | Page",
+    "- [provisional] Las Vegas → Page | 2026-10-01 | | | shape=route | origin=Las Vegas | destination=Page",
+  ].join("\n"), { idempotencyKey: "equivalent:markdown" });
+  const markdownReview = travel.reviewTrip(markdownTrip.id).provisional;
+
+  const lineGroup = travel.createTravelGroup("system-admin", "C-equivalent-line", "LINE 等價群組");
+  const lineTrip = travel.createActiveTrip("system-admin", lineGroup.id, "LINE 等價旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEEQUIVALENT0000000000", messageId: "message-equivalent", groupId: lineGroup.lineGroupId, userId: "U-member", tripId: lineTrip.id, text: "2026-10-01 staying at Page\n2026-10-01 Las Vegas → Page", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "" });
+  const worker = new LineSourceWorker(inbox, travel, () => undefined);
+  assert.equal(await worker.processNext(), "processed");
+  const lineReview = travel.reviewTrip(lineTrip.id).provisional;
+
+  const comparable = (proposal: (typeof markdownReview)[number]) => ({
+    kind: proposal.kind, kinds: proposal.kinds, shape: proposal.shape,
+    startsAt: proposal.startsAt, location: proposal.location, origin: proposal.origin, destination: proposal.destination,
+  });
+  assert.deepEqual(lineReview.map(comparable).sort((left, right) => `${left.shape}${left.location ?? left.origin}`.localeCompare(`${right.shape}${right.location ?? right.origin}`)), markdownReview.map(comparable).sort((left, right) => `${left.shape}${left.location ?? left.origin}`.localeCompare(`${right.shape}${right.location ?? right.origin}`)));
+  assert.equal(lineReview.find((proposal) => proposal.shape === "route")?.shapeSource, "inferred");
+  assert.equal(markdownReview.find((proposal) => proposal.shape === "route")?.shapeSource, "explicit");
+  db.close();
+});
+
 test("does not turn a LINE question into a Proposal and acknowledges its Source", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");

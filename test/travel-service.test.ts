@@ -443,3 +443,24 @@ test("an existing SQLite database backfills legacy location Proposals as inferre
   upgraded.close();
   rmSync(directory, { recursive: true, force: true });
 });
+
+test("an existing SQLite database backfills legacy scalar Kinds into normalized associations", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-kind-migration-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  const service = new TravelService(initial, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-kind-migration");
+  service.addMember("system-admin", tripId, "owner", "Owner", "owner");
+  const imported = service.importMarkdown(tripId, "- [provisional] 舊住宿 | 2026-10-16 | 台北", { idempotencyKey: "migration:kinds" });
+  const confirmed = service.confirmProposal(tripId, "owner", imported.proposalIds[0]);
+  initial.connection.exec(`DROP TABLE proposal_kinds; DROP TABLE trip_item_kinds;`);
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const migratedService = new TravelService(upgraded, "system-admin");
+  assert.deepEqual(migratedService.getProposal(tripId, imported.proposalIds[0])?.kinds, ["lodging"]);
+  assert.deepEqual(migratedService.reviewTrip(tripId).confirmed.find((item) => item.id === confirmed.id)?.kinds, ["lodging"]);
+  assert.equal(migratedService.getSource(imported.sourceId)?.content, "- [provisional] 舊住宿 | 2026-10-16 | 台北");
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
