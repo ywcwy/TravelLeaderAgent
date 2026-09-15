@@ -90,6 +90,41 @@ test("parses a native LINE mention display name before a Markdown candidate", ()
   db.close();
 });
 
+test("imports explicit Point and Route Proposal structure and infers legacy Points", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-proposal-shapes");
+  const result = service.importMarkdown(tripId, [
+    "- [provisional] Page 住宿 | 2026-10-01T18:45:00-07:00 | Page | | timezone=America/Phoenix",
+    "- [provisional] Las Vegas → St. George | 2026-10-01T12:00:00-07:00 | | 車程約 2 小時 | timezone=America/Los_Angeles | shape=route | origin=Las Vegas | destination=St. George",
+  ].join("\n"), { idempotencyKey: "test:proposal-shapes" });
+
+  const lodging = service.getProposal(tripId, result.proposalIds[0]);
+  const route = service.getProposal(tripId, result.proposalIds[1]);
+  assert.equal(lodging?.shape, "point");
+  assert.equal(lodging?.shapeSource, "inferred");
+  assert.equal(route?.shape, "route");
+  assert.equal(route?.shapeSource, "explicit");
+  assert.equal(route?.origin, "Las Vegas");
+  assert.equal(route?.destination, "St. George");
+  assert.equal(service.reviewTrip(tripId).issues.length, 0);
+  db.close();
+});
+
+test("retains a Source and Review Issue when a Route Proposal lacks an endpoint", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-invalid-route");
+  const result = service.importMarkdown(tripId, "- [provisional] Las Vegas → St. George | 2026-10-01T12:00:00-07:00 | | | shape=route | origin=Las Vegas", { idempotencyKey: "test:invalid-route" });
+
+  assert.deepEqual(result.proposalIds, []);
+  const issues = service.reviewTrip(tripId).issues;
+  const routeIssue = issues.find((issue) => issue.code === "missing_route_endpoint");
+  assert.ok(routeIssue);
+  assert.equal(routeIssue.sourceId, result.sourceId);
+  db.close();
+});
+
 test("importing the same Source Idempotency Key reuses its Source and Proposals", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
@@ -274,16 +309,18 @@ test("an owner confirms a Replacement Proposal without losing itinerary history"
   const otherSource = service.importMarkdown(otherTripId, "- [provisional] 其他旅程住宿 | 2026-10-16T15:00:00-07:00 | Oakland", { idempotencyKey: "test:replacement:other-source" });
   const otherPredecessor = service.confirmProposal(otherTripId, "owner", otherSource.proposalIds[0]);
   assert.throws(
-    () => service.createReplacementProposal(tripId, otherSource.sourceId, predecessor.id, { kind: "lodging", title: "跨旅程替代", status: "provisional" }),
+    () => service.createReplacementProposal(tripId, otherSource.sourceId, predecessor.id, { kind: "lodging", shape: "point", shapeSource: "explicit", title: "跨旅程替代", status: "provisional" }),
     ConflictError,
   );
   assert.throws(
-    () => service.createReplacementProposal(tripId, source.sourceId, otherPredecessor.id, { kind: "lodging", title: "跨旅程替代", status: "provisional" }),
+    () => service.createReplacementProposal(tripId, source.sourceId, otherPredecessor.id, { kind: "lodging", shape: "point", shapeSource: "explicit", title: "跨旅程替代", status: "provisional" }),
     ConflictError,
   );
 
   const replacement = service.createReplacementProposal(tripId, source.sourceId, predecessor.id, {
     kind: "lodging",
+    shape: "point",
+    shapeSource: "explicit",
     title: "Monterey 住宿",
     status: "provisional",
     startsAt: "2026-10-16T15:00:00-07:00",
@@ -311,6 +348,24 @@ test("an existing SQLite database gains the replacement relationship column", ()
   const upgraded = new TravelDatabase(databasePath);
   const columns = upgraded.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
   assert.equal(columns.some((column) => column.name === "replacement_for_item_id"), true);
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test("an existing SQLite database backfills legacy location Proposals as inferred Points", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-shape-migration-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  const service = new TravelService(initial, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-shape-migration");
+  const imported = service.importMarkdown(tripId, "- [provisional] 舊住宿 | 2026-10-16 | 台北", { idempotencyKey: "migration:shape" });
+  initial.connection.prepare(`UPDATE proposals SET shape = NULL, shape_source = NULL WHERE id = ?`).run(imported.proposalIds[0]);
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const migrated = new TravelService(upgraded, "system-admin").getProposal(tripId, imported.proposalIds[0]);
+  assert.equal(migrated?.shape, "point");
+  assert.equal(migrated?.shapeSource, "inferred");
   upgraded.close();
   rmSync(directory, { recursive: true, force: true });
 });

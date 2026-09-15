@@ -53,9 +53,15 @@ function renderHuman(result: ReturnType<typeof toResult>): string {
 }
 
 function formatTripItem(item: TripItem): string {
-  return `- ${item.title}${item.startsAt ? ` | ${item.startsAt}` : ""}${item.location ? ` | ${item.location}` : ""}`;
+  const place = item.shape === "route"
+    ? `${item.origin ?? "?"} → ${item.destination ?? "?"}`
+    : item.location;
+  return `- [${item.shape}] ${item.title}${item.startsAt ? ` | ${item.startsAt}` : ""}${place ? ` | ${place}` : ""}`;
 }
 
 function formatProposal(proposal: Proposal): string {
-  return `- ${proposal.id} | ${proposal.itemStatus} / ${proposal.status} | ${proposal.title}${proposal.startsAt ? ` | ${proposal.startsAt}` : ""}${proposal.location ? ` | ${proposal.location}` : ""}`;
+  const place = proposal.shape === "route"
+    ? `${proposal.origin ?? "?"} → ${proposal.destination ?? "?"}`
+    : proposal.location;
+  return `- ${proposal.id} | [${proposal.shape}] ${proposal.itemStatus} / ${proposal.status} | ${proposal.title}${proposal.startsAt ? ` | ${proposal.startsAt}` : ""}${place ? ` | ${place}` : ""}`;
 }

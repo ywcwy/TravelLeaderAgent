@@ -67,6 +67,69 @@ A candidate itinerary change derived from a Source that has not yet become part 
 the effective itinerary.
 _Avoid_: draft itinerary, pending trip item
 
+**Proposal Shape**:
+The spatial structure of a Proposal. A `point` Proposal describes an activity or
+fact at one location; a `route` Proposal describes movement from an origin to a
+destination. The Source may provide the shape explicitly, or the deterministic
+extractor may infer it from a supported route or point pattern. An uncertain
+inference remains a Review Issue rather than becoming an effective fact.
+_Avoid_: itinerary status, transport kind
+
+**Proposal Kinds**:
+A set of travel categories attached to one Proposal. A Proposal may have more
+than one kind, such as `transport`, `lodging`, and `meal` for a sleeper train
+with onboard dining. Kinds describe facets of one candidate and do not create
+multiple confirmation actions or multiple Trip Items by themselves.
+The initial vocabulary is `flight`, `lodging`, `rental_car`, `transport`,
+`meal`, `activity`, `shopping`, `meeting`, and `other`. A Proposal has at least
+one kind; an uncertain but recognizable item may temporarily use `other` with a
+Review Issue requesting clarification.
+_Avoid_: multiple proposals, Decision options
+
+**Shape Source**:
+The provenance of a Proposal Shape: `explicit` when the Source names the shape
+or supplies its structural fields, and `inferred` when a supported deterministic
+pattern supplies it. Shape Source does not grant authority; a Proposal still
+requires Decision Owner confirmation.
+_Avoid_: model confidence, confirmation status
+
+**Supported Itinerary Statement**:
+A free-form user statement that matches a deterministic itinerary pattern, such
+as movement from one named place to another, staying at a named place, dining at
+a named place, or picking up a rental car at a named place. A general question
+or recommendation request is not an itinerary statement.
+_Avoid_: natural-language command, chat question
+
+**Shape Conflict**:
+A Review Issue raised when an explicitly supplied Proposal Shape contradicts the
+structure of the Source text, such as declaring a movement statement to be a
+`point`. The Source is retained, but no Proposal is created until the conflict
+is corrected.
+_Avoid_: schedule collision, status conflict
+
+**Incomplete Itinerary Statement**:
+A supported itinerary statement that has a missing non-structural fact. A route
+without a date may become a Proposal with a Review Issue; a route without an
+origin or destination is retained only as a Source and Review Issue.
+_Avoid_: invalid Source, discarded message
+
+**Route Segment**:
+One movement between exactly one origin and one destination. A multi-leg statement
+is represented by multiple Route Proposals that retain the same Source; the
+system does not collapse several legs into one ambiguous route.
+_Avoid_: multi-stop Proposal, itinerary paragraph
+
+**Point Proposal**:
+A Proposal with one primary location and no required origin or destination. A
+transport-related event such as rental-car pickup may still be a Point Proposal.
+_Avoid_: stationary trip, location-only item
+
+**Route Proposal**:
+A Proposal describing movement between an explicit origin and destination. Its
+origin and destination are required route facts; a single `location` is not a
+substitute for them.
+_Avoid_: multi-stop itinerary, transport status
+
 **Contextual Proposal Summary**:
 A deterministic, group-visible acknowledgement of a newly accepted Proposal and
 its relevant Active Trip context. It reports nearby confirmed and pending items

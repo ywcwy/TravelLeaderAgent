@@ -61,6 +61,10 @@ export class TravelDatabase {
         source_id TEXT NOT NULL REFERENCES sources(id),
         replacement_for_item_id TEXT REFERENCES trip_items(id),
         kind TEXT NOT NULL,
+        shape TEXT,
+        shape_source TEXT,
+        origin TEXT,
+        destination TEXT,
         title TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('confirmed', 'provisional', 'open_decision', 'conflicted', 'cancelled')),
         starts_at TEXT,
@@ -90,6 +94,10 @@ export class TravelDatabase {
         decision_id TEXT REFERENCES decisions(id),
         replacement_for_item_id TEXT REFERENCES trip_items(id),
         kind TEXT NOT NULL,
+        shape TEXT,
+        shape_source TEXT,
+        origin TEXT,
+        destination TEXT,
         title TEXT NOT NULL,
         item_status TEXT NOT NULL CHECK (item_status IN ('confirmed', 'provisional', 'open_decision', 'conflicted', 'cancelled')),
         proposal_status TEXT NOT NULL CHECK (proposal_status IN ('pending', 'confirmed', 'rejected')),
@@ -151,6 +159,18 @@ export class TravelDatabase {
     if (!sourceColumns.some((column) => column.name === "provider_message_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_message_id TEXT`);
     if (!sourceColumns.some((column) => column.name === "provider_group_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_group_id TEXT`);
     if (!sourceColumns.some((column) => column.name === "provider_user_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_user_id TEXT`);
+    const proposalColumns = this.connection.prepare(`PRAGMA table_info(proposals)`).all() as Array<{ name: string }>;
+    if (!proposalColumns.some((column) => column.name === "shape")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN shape TEXT`);
+    if (!proposalColumns.some((column) => column.name === "shape_source")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN shape_source TEXT`);
+    if (!proposalColumns.some((column) => column.name === "origin")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN origin TEXT`);
+    if (!proposalColumns.some((column) => column.name === "destination")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN destination TEXT`);
+    const tripItemColumnsAfterMigration = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape TEXT`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape_source")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape_source TEXT`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "origin")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN origin TEXT`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "destination")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN destination TEXT`);
+    this.connection.exec(`UPDATE proposals SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
+    this.connection.exec(`UPDATE trip_items SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
   }
 
   close(): void {

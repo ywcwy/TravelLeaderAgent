@@ -8,6 +8,8 @@ export const tripItemStatuses = [
 
 export type TripItemStatus = (typeof tripItemStatuses)[number];
 export type TripItemKind = "flight" | "lodging" | "rental_car" | "activity" | "transport" | "meeting" | "other";
+export type ProposalShape = "point" | "route";
+export type ProposalShapeSource = "explicit" | "inferred";
 export type ProposalStatus = "pending" | "confirmed" | "rejected";
 export type MemberRole = "owner" | "member";
 export type TripStatus = "active" | "archived";
@@ -15,12 +17,16 @@ export type DecisionStatus = "open" | "resolved";
 
 export interface ExtractedTripItem {
   kind: TripItemKind;
+  shape: ProposalShape;
+  shapeSource: ProposalShapeSource;
   title: string;
   status: TripItemStatus;
   startsAt?: string;
   endsAt?: string;
   timezone?: string;
   location?: string;
+  origin?: string;
+  destination?: string;
   notes?: string;
   deadlineAt?: string;
   sourceLine?: number;
@@ -75,7 +81,7 @@ export interface ProposalContext {
 }
 
 export interface ReviewIssue {
-  code: "missing_start_time" | "missing_timezone" | "missing_location" | "schedule_collision" | "source_unparsed" | "unparseable_line";
+  code: "missing_start_time" | "missing_timezone" | "missing_location" | "missing_route_endpoint" | "shape_conflict" | "schedule_collision" | "source_unparsed" | "unparseable_line";
   message: string;
   sourceId?: string;
   sourceLine?: number;

@@ -15,7 +15,7 @@ test("review:trip CLI renders stable JSON and human-readable Trip Review", () =>
   const group = travel.createTravelGroup("system-admin", "C-review-cli", "CLI Review");
   const trip = travel.createActiveTrip("system-admin", group.id, "Review 旅程", "Asia/Taipei");
   travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
-  const imported = travel.importMarkdown(trip.id, "- [confirmed] 已確認行程 | 2026-10-16 | 台北\n- [provisional] 待確認住宿 | 2026-10-17 | 台中", { idempotencyKey: "review:cli" });
+  const imported = travel.importMarkdown(trip.id, "- [confirmed] 已確認行程 | 2026-10-16 | 台北\n- [provisional] 待確認住宿 | 2026-10-17 | 台中\n- [provisional] Las Vegas → St. George | 2026-10-18 | | | shape=route | origin=Las Vegas | destination=St. George", { idempotencyKey: "review:cli" });
   travel.confirmProposal(trip.id, "U-owner", imported.proposalIds[0]);
   database.close();
 
@@ -28,9 +28,9 @@ test("review:trip CLI renders stable JSON and human-readable Trip Review", () =>
   assert.equal(json.trip.id, trip.id);
   assert.equal(json.trip.title, "Review 旅程");
   assert.deepEqual(json.effectiveItinerary.map((item) => item.title), ["已確認行程"]);
-  assert.deepEqual(json.pendingProposals.map((proposal) => proposal.title), ["待確認住宿"]);
+  assert.deepEqual(json.pendingProposals.map((proposal) => proposal.title), ["Las Vegas → St. George", "待確認住宿"]);
   assert.equal(json.counts.confirmed, 1);
-  assert.equal(json.counts.pending, 1);
+  assert.equal(json.counts.pending, 2);
 
   const humanOutput = execFileSync(process.execPath, ["--experimental-strip-types", "src/review-trip.ts", trip.id], {
     cwd: process.cwd(),
@@ -41,5 +41,6 @@ test("review:trip CLI renders stable JSON and human-readable Trip Review", () =>
   assert.match(humanOutput, /Pending Proposals/);
   assert.match(humanOutput, /已確認行程/);
   assert.match(humanOutput, /待確認住宿/);
+  assert.match(humanOutput, /\[route\].*Las Vegas.*St\. George/);
   rmSync(directory, { recursive: true, force: true });
 });
