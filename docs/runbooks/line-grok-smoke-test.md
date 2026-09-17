@@ -1,4 +1,4 @@
-# LINE OpenAI provider smoke test
+# LINE Grok provider smoke test
 
 This is the production-like Phase 9.5 check. Use a dedicated LINE Official
 Account, test group, isolated SQLite file, and a short-lived API key. Never
@@ -10,11 +10,11 @@ test result.
 Add the existing LINE variables plus these local `.env` values:
 
 ```env
-TRAVEL_EXTRACTION_ADAPTER=openai
-OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-4o-mini
-OPENAI_TIMEOUT_MS=20000
-TRAVEL_DATABASE_PATH=./data/line-openai-smoke.sqlite
+TRAVEL_EXTRACTION_ADAPTER=grok
+XAI_API_KEY=...
+XAI_MODEL=grok-4.6
+XAI_TIMEOUT_MS=20000
+TRAVEL_DATABASE_PATH=./data/line-grok-smoke.sqlite
 ```
 
 Start the service and tunnel, set LINE's Webhook URL to
@@ -35,9 +35,9 @@ contain a Proposal ID yet. Check that the Inbox event is completed and that
 there is exactly one Source, one Draft, and zero Proposals:
 
 ```sh
-sqlite3 ./data/line-openai-smoke.sqlite \
+sqlite3 ./data/line-grok-smoke.sqlite \
   "select event_id,status,outcome,attempts from webhook_inbox_events order by created_at desc limit 5;"
-sqlite3 ./data/line-openai-smoke.sqlite \
+sqlite3 ./data/line-grok-smoke.sqlite \
   "select count(*) from sources; select count(*) from extraction_drafts; select count(*) from proposals;"
 ```
 
@@ -57,11 +57,11 @@ The confirmation reply contains the resulting `P-XXXXXXXX` ID(s). Verify the
 Draft is `confirmed`, the Proposal is `pending`, and no Trip Item was created:
 
 ```sh
-sqlite3 ./data/line-openai-smoke.sqlite \
+sqlite3 ./data/line-grok-smoke.sqlite \
   "select id,status,revision,proposal_ids_json from extraction_drafts order by updated_at desc limit 5;"
-sqlite3 ./data/line-openai-smoke.sqlite \
+sqlite3 ./data/line-grok-smoke.sqlite \
   "select id,proposal_status,item_status from proposals order by created_at desc limit 5;"
-sqlite3 ./data/line-openai-smoke.sqlite \
+sqlite3 ./data/line-grok-smoke.sqlite \
   "select count(*) from trip_items;"
 ```
 

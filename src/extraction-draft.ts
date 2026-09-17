@@ -23,7 +23,7 @@ export interface LlmAdapter {
 export class ExtractionDraftValidationError extends Error {}
 export class LlmProviderError extends Error {}
 
-export interface OpenAiLlmAdapterOptions {
+export interface OpenAiCompatibleLlmAdapterOptions {
   apiKey: string;
   model: string;
   timeoutMs?: number;
@@ -32,12 +32,12 @@ export interface OpenAiLlmAdapterOptions {
 }
 
 /** OpenAI Responses API adapter. The provider output is still validated at the domain boundary. */
-export class OpenAiLlmAdapter implements LlmAdapter {
-  private readonly options: Required<Pick<OpenAiLlmAdapterOptions, "apiKey" | "model" | "timeoutMs" | "endpoint">> & Pick<OpenAiLlmAdapterOptions, "fetchImpl">;
+export class OpenAiCompatibleLlmAdapter implements LlmAdapter {
+  private readonly options: Required<Pick<OpenAiCompatibleLlmAdapterOptions, "apiKey" | "model" | "timeoutMs" | "endpoint">> & Pick<OpenAiCompatibleLlmAdapterOptions, "fetchImpl">;
 
-  constructor(options: OpenAiLlmAdapterOptions) {
-    if (!options.apiKey.trim()) throw new LlmProviderError("OPENAI_API_KEY is required.");
-    if (!options.model.trim()) throw new LlmProviderError("OPENAI_MODEL is required.");
+  constructor(options: OpenAiCompatibleLlmAdapterOptions) {
+    if (!options.apiKey.trim()) throw new LlmProviderError("Provider API key is required.");
+    if (!options.model.trim()) throw new LlmProviderError("Provider model is required.");
     const timeoutMs = options.timeoutMs ?? 20_000;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new LlmProviderError("OpenAI provider timeout must be a positive integer.");
     this.options = { apiKey: options.apiKey, model: options.model, timeoutMs, endpoint: options.endpoint ?? "https://api.openai.com/v1/responses", fetchImpl: options.fetchImpl };
@@ -59,24 +59,27 @@ export class OpenAiLlmAdapter implements LlmAdapter {
         }),
         signal: controller.signal,
       });
-      if (!response.ok) throw new LlmProviderError(`OpenAI provider request failed (HTTP ${response.status}).`);
+      if (!response.ok) throw new LlmProviderError(`LLM provider request failed (HTTP ${response.status}).`);
       let body: unknown;
-      try { body = await response.json(); } catch { throw new LlmProviderError("OpenAI provider returned malformed JSON."); }
+      try { body = await response.json(); } catch { throw new LlmProviderError("LLM provider returned malformed JSON."); }
       const text = responseText(body);
-      if (!text) throw new LlmProviderError("OpenAI provider returned no structured output.");
+      if (!text) throw new LlmProviderError("LLM provider returned no structured output.");
       let parsed: unknown;
-      try { parsed = JSON.parse(text); } catch { throw new LlmProviderError("OpenAI provider returned malformed structured JSON."); }
+      try { parsed = JSON.parse(text); } catch { throw new LlmProviderError("LLM provider returned malformed structured JSON."); }
       return validateExtractionDraftPayload(removeNulls(parsed));
     } catch (error) {
       if (error instanceof LlmProviderError) throw error;
-      if (error instanceof ExtractionDraftValidationError) throw new LlmProviderError("OpenAI provider returned invalid structured output.");
-      if (error instanceof DOMException && error.name === "AbortError") throw new LlmProviderError("OpenAI provider request timed out.");
-      throw new LlmProviderError("OpenAI provider request failed.");
+      if (error instanceof ExtractionDraftValidationError) throw new LlmProviderError("LLM provider returned invalid structured output.");
+      if (error instanceof DOMException && error.name === "AbortError") throw new LlmProviderError("LLM provider request timed out.");
+      throw new LlmProviderError("LLM provider request failed.");
     } finally {
       clearTimeout(timer);
     }
   }
 }
+
+/** @deprecated Use OpenAiCompatibleLlmAdapter; retained for existing callers. */
+export const OpenAiLlmAdapter = OpenAiCompatibleLlmAdapter;
 
 export function validateExtractionDraftPayload(payload: unknown): ExtractionDraftPayload {
   if (!isRecord(payload)) throw new ExtractionDraftValidationError("Extraction Draft output must be a JSON object.");
