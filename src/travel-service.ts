@@ -263,7 +263,7 @@ export class TravelService {
     if (!source) throw new InvalidSourceError("The Source could not be persisted.");
     if (source.content !== content) throw new ConflictError(`Source Idempotency Key ${idempotencyKey} already contains different content.`);
 
-    const existing = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ?`).get(source.id) as ExtractionDraftRow | undefined;
+    const existing = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(source.id) as ExtractionDraftRow | undefined;
     if (existing) return toExtractionDraft(existing);
 
     const currentDate = options.currentDate ?? currentDateInTimezone(trip.timezone);
@@ -284,10 +284,10 @@ export class TravelService {
     }
     const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
     const timestamp = now();
-    this.db.connection.prepare(`INSERT OR IGNORE INTO extraction_drafts (id, trip_id, source_id, originating_user_id, status, payload_json, proposal_ids_json, confirmed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '[]', NULL, ?, ?)`).run(
+    this.db.connection.prepare(`INSERT OR IGNORE INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, '[]', NULL, NULL, NULL, ?, ?)`).run(
       draftId, tripId, source.id, source.provider_user_id, status, JSON.stringify(payload), timestamp, timestamp,
     );
-    const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ?`).get(source.id) as ExtractionDraftRow | undefined;
+    const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(source.id) as ExtractionDraftRow | undefined;
     if (!persisted) throw new InvalidSourceError("The Extraction Draft could not be persisted.");
     return toExtractionDraft(persisted);
   }
@@ -295,6 +295,51 @@ export class TravelService {
   getExtractionDraft(tripId: string, draftId: string): ExtractionDraft | null {
     const row = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND id = ?`).get(tripId, draftId) as ExtractionDraftRow | undefined;
     return row ? toExtractionDraft(row) : null;
+  }
+
+  reviseExtractionDraft(tripId: string, userId: string, draftId: string, payload: ExtractionDraftPayload): ExtractionDraft {
+    this.requireActiveTrip(tripId);
+    const current = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND id = ?`).get(tripId, draftId) as ExtractionDraftRow | undefined;
+    if (!current) throw new NotFoundError(`Extraction Draft ${draftId} was not found.`);
+    if (current.originating_user_id !== userId) throw new PermissionError("Only the originating user can edit an Extraction Draft.");
+    const draft = toExtractionDraft(current);
+    if (draft.status === "confirmed" || draft.status === "cancelled") throw new ConflictError(`Extraction Draft ${draftId} is locked.`);
+    const validated = validateExtractionDraftPayload(payload);
+    return this.insertDraftRevision(tripId, current, "pending_confirmation", validated);
+  }
+
+  cancelExtractionDraft(tripId: string, userId: string, draftId: string): ExtractionDraft {
+    this.requireActiveTrip(tripId);
+    const current = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND id = ?`).get(tripId, draftId) as ExtractionDraftRow | undefined;
+    if (!current) throw new NotFoundError(`Extraction Draft ${draftId} was not found.`);
+    if (current.originating_user_id !== userId) throw new PermissionError("Only the originating user can cancel an Extraction Draft.");
+    if (current.status === "confirmed") throw new ConflictError(`Extraction Draft ${draftId} is locked.`);
+    if (current.status === "cancelled") return toExtractionDraft(current);
+    const cancelledAt = now();
+    this.db.connection.prepare(`UPDATE extraction_drafts SET status = 'cancelled', cancelled_at = ?, cancelled_by = ?, updated_at = ? WHERE id = ? AND status IN ('pending_confirmation', 'failed')`).run(cancelledAt, userId, cancelledAt, draftId);
+    const cancelled = this.getExtractionDraft(tripId, draftId);
+    if (!cancelled) throw new InvalidSourceError(`Extraction Draft ${draftId} disappeared after cancellation.`);
+    return cancelled;
+  }
+
+  async retryExtractionDraft(tripId: string, userId: string, draftId: string, adapter: LlmAdapter): Promise<ExtractionDraft> {
+    this.requireActiveTrip(tripId);
+    const current = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND id = ?`).get(tripId, draftId) as ExtractionDraftRow | undefined;
+    if (!current) throw new NotFoundError(`Extraction Draft ${draftId} was not found.`);
+    if (current.originating_user_id !== userId) throw new PermissionError("Only the originating user can retry an Extraction Draft.");
+    if (current.status !== "failed") throw new ConflictError(`Extraction Draft ${draftId} is not failed and cannot be retried.`);
+    const source = this.getSource(current.source_id);
+    if (!source) throw new InvalidSourceError(`Source ${current.source_id} was not found.`);
+    const trip = this.requireTrip(tripId);
+    let status: ExtractionDraft["status"] = "pending_confirmation";
+    let payload: ExtractionDraftPayload;
+    try {
+      payload = validateExtractionDraftPayload(await adapter.extract({ sourceContent: source.content, tripTimezone: trip.timezone, currentDate: currentDateInTimezone(trip.timezone), inputType: source.type }));
+    } catch (error) {
+      status = "failed";
+      payload = { items: [], missing: [], assumptions: [], issues: [{ code: "adapter_failure", message: error instanceof Error ? error.message : "LLM extraction failed." }], sourceExcerpt: source.content.trim().slice(0, 500) };
+    }
+    return this.insertDraftRevision(tripId, current, status, payload);
   }
 
   confirmExtractionDraft(tripId: string, userId: string, draftId: string): { draft: ExtractionDraft; proposalIds: string[] } {
@@ -320,6 +365,8 @@ export class TravelService {
     try {
       const lockedRow = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND id = ?`).get(tripId, draftId) as ExtractionDraftRow | undefined;
       if (!lockedRow) throw new NotFoundError(`Extraction Draft ${draftId} was not found.`);
+      const latestRow = this.db.connection.prepare(`SELECT id FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(lockedRow.source_id) as { id: string } | undefined;
+      if (latestRow?.id !== draftId) throw new ConflictError(`Extraction Draft ${draftId} is not the latest revision.`);
       const lockedDraft = toExtractionDraft(lockedRow);
       if (lockedDraft.status === "confirmed") {
         this.db.connection.exec("COMMIT");
@@ -731,6 +778,27 @@ export class TravelService {
     });
   }
 
+  private insertDraftRevision(tripId: string, current: ExtractionDraftRow, status: ExtractionDraft["status"], payload: ExtractionDraftPayload): ExtractionDraft {
+    this.db.connection.exec("BEGIN IMMEDIATE");
+    try {
+      const latest = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(current.source_id) as ExtractionDraftRow | undefined;
+      if (!latest || latest.id !== current.id) throw new ConflictError(`Extraction Draft ${current.id} is not the latest revision.`);
+      const revision = latest.revision + 1;
+      const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
+      const timestamp = now();
+      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', NULL, NULL, NULL, ?, ?)`).run(
+        draftId, tripId, current.source_id, current.originating_user_id, revision, current.id, status, JSON.stringify(payload), timestamp, timestamp,
+      );
+      const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE id = ?`).get(draftId) as ExtractionDraftRow | undefined;
+      if (!persisted) throw new InvalidSourceError(`Extraction Draft ${draftId} could not be persisted.`);
+      this.db.connection.exec("COMMIT");
+      return toExtractionDraft(persisted);
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   private requireTrip(tripId: string): TripRow {
     const trip = this.db.connection.prepare(`SELECT * FROM trips WHERE id = ?`).get(tripId) as TripRow | undefined;
     if (!trip) throw new NotFoundError(`Trip ${tripId} was not found.`);
@@ -766,10 +834,14 @@ interface ExtractionDraftRow {
   trip_id: string;
   source_id: string;
   originating_user_id: string | null;
+  revision: number;
+  previous_draft_id: string | null;
   status: ExtractionDraft["status"];
   payload_json: string;
   proposal_ids_json: string;
   confirmed_at: string | null;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -886,7 +958,7 @@ function toExtractionDraft(row: ExtractionDraftRow): ExtractionDraft {
   } catch (error) {
     throw new InvalidSourceError(`Extraction Draft ${row.id} contains invalid Proposal IDs: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return { id: row.id, tripId: row.trip_id, sourceId: row.source_id, originatingUserId: row.originating_user_id ?? null, status: row.status, proposalIds, confirmedAt: row.confirmed_at ?? null, ...payload, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, tripId: row.trip_id, sourceId: row.source_id, originatingUserId: row.originating_user_id ?? null, revision: row.revision, previousDraftId: row.previous_draft_id ?? null, status: row.status, proposalIds, confirmedAt: row.confirmed_at ?? null, cancelledAt: row.cancelled_at ?? null, cancelledBy: row.cancelled_by ?? null, ...payload, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 function toTripItem(row: Record<string, unknown>, kinds = [row.kind as TripItem["kind"]]): TripItem {

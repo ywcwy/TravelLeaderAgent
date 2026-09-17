@@ -13,7 +13,8 @@ export const proposalShapes = ["point", "route"] as const;
 export type ProposalShape = (typeof proposalShapes)[number];
 export const proposalShapeSources = ["explicit", "inferred"] as const;
 export type ProposalShapeSource = (typeof proposalShapeSources)[number];
-export type TimezoneSource = "explicit" | "inferred" | "fallback";
+export const timezoneSources = ["explicit", "inferred", "fallback"] as const;
+export type TimezoneSource = (typeof timezoneSources)[number];
 export type ProposalStatus = "pending" | "confirmed" | "rejected";
 export type MemberRole = "owner" | "member";
 export type TripStatus = "active" | "archived";
@@ -81,9 +82,13 @@ export interface ExtractionDraft extends ExtractionDraftPayload {
   tripId: string;
   sourceId: string;
   originatingUserId: string | null;
+  revision: number;
+  previousDraftId: string | null;
   status: ExtractionDraftStatus;
   proposalIds: string[];
   confirmedAt: string | null;
+  cancelledAt: string | null;
+  cancelledBy: string | null;
   createdAt: string;
   updatedAt: string;
 }

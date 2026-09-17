@@ -59,15 +59,21 @@ export class TravelDatabase {
       CREATE TABLE IF NOT EXISTS extraction_drafts (
         id TEXT PRIMARY KEY,
         trip_id TEXT NOT NULL REFERENCES trips(id),
-        source_id TEXT NOT NULL UNIQUE REFERENCES sources(id),
+        source_id TEXT NOT NULL REFERENCES sources(id),
         originating_user_id TEXT,
+        revision INTEGER NOT NULL DEFAULT 1,
+        previous_draft_id TEXT REFERENCES extraction_drafts(id),
         status TEXT NOT NULL CHECK (status IN ('pending_confirmation', 'confirmed', 'cancelled', 'failed')),
         payload_json TEXT NOT NULL,
         proposal_ids_json TEXT NOT NULL DEFAULT '[]',
         confirmed_at TEXT,
+        cancelled_at TEXT,
+        cancelled_by TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS extraction_draft_source_revision ON extraction_drafts(source_id, revision);
 
       CREATE TABLE IF NOT EXISTS members (
         trip_id TEXT NOT NULL REFERENCES trips(id),
@@ -214,10 +220,36 @@ export class TravelDatabase {
     if (!sourceColumns.some((column) => column.name === "provider_message_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_message_id TEXT`);
     if (!sourceColumns.some((column) => column.name === "provider_group_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_group_id TEXT`);
     if (!sourceColumns.some((column) => column.name === "provider_user_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_user_id TEXT`);
+    const extractionDraftTable = this.connection.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'extraction_drafts'`).get() as { sql: string } | undefined;
+    if (extractionDraftTable?.sql.includes("source_id TEXT NOT NULL UNIQUE")) {
+      const legacyDraftColumns = new Set((this.connection.prepare(`PRAGMA table_info(extraction_drafts)`).all() as Array<{ name: string }>).map((column) => column.name));
+      const legacyOriginatingUser = legacyDraftColumns.has("originating_user_id") ? "originating_user_id" : "NULL";
+      const legacyProposalIds = legacyDraftColumns.has("proposal_ids_json") ? "proposal_ids_json" : "'[]'";
+      const legacyConfirmedAt = legacyDraftColumns.has("confirmed_at") ? "confirmed_at" : "NULL";
+      this.connection.exec(`PRAGMA foreign_keys = OFF`);
+      try {
+        this.connection.exec("BEGIN IMMEDIATE");
+        this.connection.exec(`CREATE TABLE extraction_drafts_v2 (id TEXT PRIMARY KEY, trip_id TEXT NOT NULL REFERENCES trips(id), source_id TEXT NOT NULL REFERENCES sources(id), originating_user_id TEXT, revision INTEGER NOT NULL DEFAULT 1, previous_draft_id TEXT REFERENCES extraction_drafts(id), status TEXT NOT NULL CHECK (status IN ('pending_confirmation', 'confirmed', 'cancelled', 'failed')), payload_json TEXT NOT NULL, proposal_ids_json TEXT NOT NULL DEFAULT '[]', confirmed_at TEXT, cancelled_at TEXT, cancelled_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+        this.connection.exec(`INSERT INTO extraction_drafts_v2 (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) SELECT id, trip_id, source_id, ${legacyOriginatingUser}, 1, NULL, status, payload_json, ${legacyProposalIds}, ${legacyConfirmedAt}, NULL, NULL, created_at, updated_at FROM extraction_drafts`);
+        this.connection.exec(`DROP TABLE extraction_drafts`);
+        this.connection.exec(`ALTER TABLE extraction_drafts_v2 RENAME TO extraction_drafts`);
+        this.connection.exec("COMMIT");
+      } catch (error) {
+        this.connection.exec("ROLLBACK");
+        throw error;
+      } finally {
+        this.connection.exec(`PRAGMA foreign_keys = ON`);
+      }
+    }
     const extractionDraftColumns = this.connection.prepare(`PRAGMA table_info(extraction_drafts)`).all() as Array<{ name: string }>;
     if (!extractionDraftColumns.some((column) => column.name === "originating_user_id")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN originating_user_id TEXT`);
     if (!extractionDraftColumns.some((column) => column.name === "proposal_ids_json")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN proposal_ids_json TEXT NOT NULL DEFAULT '[]'`);
     if (!extractionDraftColumns.some((column) => column.name === "confirmed_at")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN confirmed_at TEXT`);
+    if (!extractionDraftColumns.some((column) => column.name === "revision")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN revision INTEGER NOT NULL DEFAULT 1`);
+    if (!extractionDraftColumns.some((column) => column.name === "previous_draft_id")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN previous_draft_id TEXT REFERENCES extraction_drafts(id)`);
+    if (!extractionDraftColumns.some((column) => column.name === "cancelled_at")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN cancelled_at TEXT`);
+    if (!extractionDraftColumns.some((column) => column.name === "cancelled_by")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN cancelled_by TEXT`);
+    this.connection.exec(`CREATE UNIQUE INDEX IF NOT EXISTS extraction_draft_source_revision ON extraction_drafts(source_id, revision)`);
     const decisionColumns = this.connection.prepare(`PRAGMA table_info(decisions)`).all() as Array<{ name: string }>;
     const decisionTable = this.connection.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'decisions'`).get() as { sql: string } | undefined;
     if (decisionTable && !decisionTable.sql.includes("needs_options")) {

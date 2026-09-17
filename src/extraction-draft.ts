@@ -5,6 +5,7 @@ import {
   timeWindows,
   tripItemKinds,
   tripItemStatuses,
+  timezoneSources,
 } from "./domain.ts";
 import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftPayload } from "./domain.ts";
 
@@ -109,6 +110,19 @@ function validateItem(value: unknown, index: number): ExtractionDraftItem {
   validateEnum(base.status, tripItemStatuses, `items[${index}].status`);
   for (const field of ["startsAt", "endsAt", "title", "sourceExcerpt"] as const) {
     if (value[field] !== undefined && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
+  }
+  for (const field of ["origin", "destination", "location", "notes", "deadlineAt"] as const) {
+    if (value[field] !== undefined && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
+  }
+  for (const field of ["timezone", "originTimezone", "destinationTimezone"] as const) {
+    if (value[field] !== undefined && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
+  }
+  if (value.timezoneSource !== undefined) validateEnum(value.timezoneSource, timezoneSources, `items[${index}].timezoneSource`);
+  if (value.sourceLine !== undefined && (typeof value.sourceLine !== "number" || !Number.isInteger(value.sourceLine) || value.sourceLine < 1)) {
+    throw new ExtractionDraftValidationError(`items[${index}].sourceLine must be a positive integer.`);
+  }
+  if (value.assumptions !== undefined && (!Array.isArray(value.assumptions) || value.assumptions.some((assumption) => typeof assumption !== "string"))) {
+    throw new ExtractionDraftValidationError(`items[${index}].assumptions must be an array of strings.`);
   }
   const timeWindow = value.timeWindow === undefined ? undefined : validateEnum(value.timeWindow, timeWindows, `items[${index}].timeWindow`);
   return { ...base, startTimeFlexibility, endTimeFlexibility, ...(timeWindow ? { timeWindow } : {}) } as ExtractionDraftItem;

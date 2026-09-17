@@ -80,7 +80,7 @@ test("invalid Fake Adapter output is retained as a failed Draft and keeps the So
   const group = service.createTravelGroup("system-admin", "C-draft-failure", "Draft 群組");
   const trip = service.createActiveTrip("system-admin", group.id, "Draft 旅程", "Asia/Taipei");
   const draft = await service.createExtractionDraft(trip.id, "unparseable source", { idempotencyKey: "draft:failure" }, {
-    extract: () => ({ items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: 42 } as never),
+    extract: () => ({ items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "bad", status: "provisional", location: 42, timezone: 42 }], missing: [], assumptions: [], issues: [], sourceExcerpt: "bad" } as never),
   });
 
   assert.equal(draft.status, "failed");
@@ -204,5 +204,60 @@ test("concurrent Source redelivery reuses one persisted Draft", async () => {
   ]);
   assert.equal(drafts[0]!.id, drafts[1]!.id);
   assert.equal(service.getExtractionDraft(trip.id, drafts[0]!.id)?.id, drafts[0]!.id);
+  db.close();
+});
+
+test("editing a Draft creates an immutable revision and confirmed revisions are locked", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-revision", "Draft 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Draft 旅程", "Asia/Taipei");
+  const source = "2026-10-01 Page lodging";
+  const payload = fixture(source);
+  payload.missing = [];
+  payload.items[0]!.endTimeFlexibility = "flexible";
+  const original = await service.createExtractionDraft(trip.id, source, {
+    idempotencyKey: "draft:revision",
+    provenance: { provider: "line", messageId: "message-revision", userId: "U-origin" },
+  }, new FakeLlmAdapter({ [source]: payload }));
+  const editedPayload = structuredClone(payload);
+  editedPayload.items[0]!.title = "Updated Page lodging";
+  const revision = service.reviseExtractionDraft(trip.id, "U-origin", original.id, editedPayload);
+
+  assert.equal(revision.revision, 2);
+  assert.equal(revision.previousDraftId, original.id);
+  assert.equal(service.getExtractionDraft(trip.id, original.id)?.items[0]?.title, "Holiday Inn Express");
+  assert.equal(service.getExtractionDraft(trip.id, revision.id)?.items[0]?.title, "Updated Page lodging");
+  assert.throws(() => service.confirmExtractionDraft(trip.id, "U-origin", original.id), ConflictError);
+  const confirmed = service.confirmExtractionDraft(trip.id, "U-origin", revision.id);
+  assert.equal(confirmed.proposalIds.length, 1);
+  assert.throws(() => service.reviseExtractionDraft(trip.id, "U-origin", revision.id, editedPayload), ConflictError);
+  db.close();
+});
+
+test("cancelling a Draft creates no Proposal and retry creates a new revision", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-cancel-retry", "Draft 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Draft 旅程", "Asia/Taipei");
+  const cancelledSource = "2026-10-01 cancelled";
+  const cancelled = await service.createExtractionDraft(trip.id, cancelledSource, {
+    idempotencyKey: "draft:cancel",
+    provenance: { provider: "line", messageId: "message-cancel", userId: "U-origin" },
+  }, new FakeLlmAdapter({ [cancelledSource]: fixture(cancelledSource) }));
+  const cancelledResult = service.cancelExtractionDraft(trip.id, "U-origin", cancelled.id);
+  assert.equal(cancelledResult.status, "cancelled");
+  assert.equal(service.reviewTrip(trip.id).pending.length, 0);
+
+  const failedSource = "2026-10-02 retry me";
+  const failed = await service.createExtractionDraft(trip.id, failedSource, {
+    idempotencyKey: "draft:retry",
+    provenance: { provider: "line", messageId: "message-retry", userId: "U-origin" },
+  }, { extract: () => ({ invalid: true } as never) });
+  assert.equal(failed.status, "failed");
+  const retried = await service.retryExtractionDraft(trip.id, "U-origin", failed.id, new FakeLlmAdapter({ [failedSource]: fixture(failedSource) }));
+  assert.equal(retried.status, "pending_confirmation");
+  assert.equal(retried.revision, 2);
+  assert.equal(retried.previousDraftId, failed.id);
   db.close();
 });
