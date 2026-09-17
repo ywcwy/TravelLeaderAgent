@@ -45,6 +45,10 @@ export interface ExtractedTripItem {
   deadlineAt?: string;
   sourceLine?: number;
   sourceExcerpt?: string;
+  startTimeFlexibility?: TimeFlexibility;
+  endTimeFlexibility?: TimeFlexibility;
+  timeWindow?: TimeWindow;
+  assumptions?: string[];
 }
 
 export interface ExtractionDraftItem extends ExtractedTripItem {
@@ -76,7 +80,10 @@ export interface ExtractionDraft extends ExtractionDraftPayload {
   id: string;
   tripId: string;
   sourceId: string;
+  originatingUserId: string | null;
   status: ExtractionDraftStatus;
+  proposalIds: string[];
+  confirmedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

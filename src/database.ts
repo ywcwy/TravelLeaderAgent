@@ -60,8 +60,11 @@ export class TravelDatabase {
         id TEXT PRIMARY KEY,
         trip_id TEXT NOT NULL REFERENCES trips(id),
         source_id TEXT NOT NULL UNIQUE REFERENCES sources(id),
+        originating_user_id TEXT,
         status TEXT NOT NULL CHECK (status IN ('pending_confirmation', 'confirmed', 'cancelled', 'failed')),
         payload_json TEXT NOT NULL,
+        proposal_ids_json TEXT NOT NULL DEFAULT '[]',
+        confirmed_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -91,6 +94,10 @@ export class TravelDatabase {
         status TEXT NOT NULL CHECK (status IN ('confirmed', 'provisional', 'open_decision', 'conflicted', 'cancelled')),
         starts_at TEXT,
         ends_at TEXT,
+        start_time_flexibility TEXT CHECK (start_time_flexibility IN ('required', 'estimated', 'flexible') OR start_time_flexibility IS NULL),
+        end_time_flexibility TEXT CHECK (end_time_flexibility IN ('required', 'estimated', 'flexible') OR end_time_flexibility IS NULL),
+        time_window TEXT CHECK (time_window IN ('morning', 'afternoon', 'evening', 'night') OR time_window IS NULL),
+        assumptions_json TEXT NOT NULL DEFAULT '[]',
         timezone TEXT,
         timezone_source TEXT,
         location TEXT,
@@ -130,6 +137,10 @@ export class TravelDatabase {
         proposal_status TEXT NOT NULL CHECK (proposal_status IN ('pending', 'confirmed', 'rejected')),
         starts_at TEXT,
         ends_at TEXT,
+        start_time_flexibility TEXT CHECK (start_time_flexibility IN ('required', 'estimated', 'flexible') OR start_time_flexibility IS NULL),
+        end_time_flexibility TEXT CHECK (end_time_flexibility IN ('required', 'estimated', 'flexible') OR end_time_flexibility IS NULL),
+        time_window TEXT CHECK (time_window IN ('morning', 'afternoon', 'evening', 'night') OR time_window IS NULL),
+        assumptions_json TEXT NOT NULL DEFAULT '[]',
         timezone TEXT,
         timezone_source TEXT,
         location TEXT,
@@ -203,6 +214,10 @@ export class TravelDatabase {
     if (!sourceColumns.some((column) => column.name === "provider_message_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_message_id TEXT`);
     if (!sourceColumns.some((column) => column.name === "provider_group_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_group_id TEXT`);
     if (!sourceColumns.some((column) => column.name === "provider_user_id")) this.connection.exec(`ALTER TABLE sources ADD COLUMN provider_user_id TEXT`);
+    const extractionDraftColumns = this.connection.prepare(`PRAGMA table_info(extraction_drafts)`).all() as Array<{ name: string }>;
+    if (!extractionDraftColumns.some((column) => column.name === "originating_user_id")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN originating_user_id TEXT`);
+    if (!extractionDraftColumns.some((column) => column.name === "proposal_ids_json")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN proposal_ids_json TEXT NOT NULL DEFAULT '[]'`);
+    if (!extractionDraftColumns.some((column) => column.name === "confirmed_at")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN confirmed_at TEXT`);
     const decisionColumns = this.connection.prepare(`PRAGMA table_info(decisions)`).all() as Array<{ name: string }>;
     const decisionTable = this.connection.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'decisions'`).get() as { sql: string } | undefined;
     if (decisionTable && !decisionTable.sql.includes("needs_options")) {
@@ -236,6 +251,10 @@ export class TravelDatabase {
     if (!proposalColumns.some((column) => column.name === "origin_timezone")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN origin_timezone TEXT`);
     if (!proposalColumns.some((column) => column.name === "destination_timezone")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN destination_timezone TEXT`);
     if (!proposalColumns.some((column) => column.name === "timezone_source")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN timezone_source TEXT`);
+    if (!proposalColumns.some((column) => column.name === "start_time_flexibility")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN start_time_flexibility TEXT`);
+    if (!proposalColumns.some((column) => column.name === "end_time_flexibility")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN end_time_flexibility TEXT`);
+    if (!proposalColumns.some((column) => column.name === "time_window")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN time_window TEXT`);
+    if (!proposalColumns.some((column) => column.name === "assumptions_json")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN assumptions_json TEXT NOT NULL DEFAULT '[]'`);
     const tripItemColumnsAfterMigration = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape_source")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape_source TEXT`);
@@ -244,6 +263,10 @@ export class TravelDatabase {
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "origin_timezone")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN origin_timezone TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "destination_timezone")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN destination_timezone TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "timezone_source")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN timezone_source TEXT`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "start_time_flexibility")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN start_time_flexibility TEXT`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "end_time_flexibility")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN end_time_flexibility TEXT`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "time_window")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN time_window TEXT`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "assumptions_json")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN assumptions_json TEXT NOT NULL DEFAULT '[]'`);
     this.connection.exec(`UPDATE proposals SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.connection.exec(`UPDATE trip_items SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.backfillTimezoneMetadata("proposals");

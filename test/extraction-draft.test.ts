@@ -3,7 +3,7 @@ import test from "node:test";
 import { FakeLlmAdapter, renderExtractionDraft } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
 import { TravelDatabase } from "../src/database.ts";
-import { TravelService } from "../src/travel-service.ts";
+import { ConflictError, PermissionError, TravelService } from "../src/travel-service.ts";
 
 function fixture(sourceExcerpt: string): ExtractionDraftPayload {
   return {
@@ -67,6 +67,10 @@ test("replaying a Source Idempotency Key reuses the same Source and Draft", asyn
   assert.equal(second.sourceId, first.sourceId);
   assert.equal(service.getSource(first.sourceId)?.id, first.sourceId);
   assert.equal(service.getExtractionDraft(trip.id, first.id)?.id, first.id);
+  await assert.rejects(
+    () => service.createExtractionDraft(trip.id, "changed content", { idempotencyKey: "draft:replay" }, adapter),
+    ConflictError,
+  );
   db.close();
 });
 
@@ -102,5 +106,103 @@ test("unsupported itinerary enum output is retained as a failed Draft", async ()
   assert.equal(draft.issues[0]?.code, "adapter_failure");
   assert.ok(service.getSource(draft.sourceId));
   assert.equal(service.reviewTrip(trip.id).pending.length, 0);
+  db.close();
+});
+
+test("only the originating user can confirm a Draft into pending Proposals", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-confirm", "Draft 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Draft 旅程", "Asia/Taipei");
+  const source = "已確認住宿 Page";
+  const payload = fixture(source);
+  payload.missing = [];
+  payload.items[0]!.endTimeFlexibility = "flexible";
+  const draft = await service.createExtractionDraft(trip.id, source, {
+    idempotencyKey: "draft:confirm",
+    provenance: { provider: "line", messageId: "message-confirm", userId: "U-origin", groupId: "C-draft-confirm" },
+  }, new FakeLlmAdapter({ [source]: payload }));
+
+  assert.throws(() => service.confirmExtractionDraft(trip.id, "U-other", draft.id), PermissionError);
+  const confirmed = service.confirmExtractionDraft(trip.id, "U-origin", draft.id);
+  assert.equal(confirmed.draft.status, "confirmed");
+  assert.equal(confirmed.proposalIds.length, 1);
+  assert.deepEqual(confirmed.draft.proposalIds, confirmed.proposalIds);
+  const proposal = service.getProposal(trip.id, confirmed.proposalIds[0]!);
+  assert.equal(proposal?.status, "pending");
+  assert.equal(proposal?.startTimeFlexibility, "flexible");
+  assert.equal(proposal?.endTimeFlexibility, "flexible");
+  assert.equal(proposal?.timeWindow, "evening");
+  assert.deepEqual(proposal?.assumptions, payload.assumptions);
+  assert.equal(service.reviewTrip(trip.id).confirmed.length, 0);
+  assert.equal(service.reviewTrip(trip.id).pending.length, 1);
+
+  const replay = service.confirmExtractionDraft(trip.id, "U-origin", draft.id);
+  assert.deepEqual(replay.proposalIds, confirmed.proposalIds);
+  assert.equal(service.reviewTrip(trip.id).pending.length, 1);
+  db.close();
+});
+
+test("required missing Draft information blocks confirmation", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-blocked", "Draft 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Draft 旅程", "Asia/Taipei");
+  const source = "需要時間的 tour";
+  const payload = fixture(source);
+  payload.items[0]!.startsAt = undefined;
+  payload.items[0]!.startTimeFlexibility = "required";
+  payload.missing = [];
+  const draft = await service.createExtractionDraft(trip.id, source, {
+    idempotencyKey: "draft:blocked",
+    provenance: { provider: "line", messageId: "message-blocked", userId: "U-origin" },
+  }, new FakeLlmAdapter({ [source]: payload }));
+
+  assert.throws(() => service.confirmExtractionDraft(trip.id, "U-origin", draft.id), ConflictError);
+  assert.equal(service.getExtractionDraft(trip.id, draft.id)?.status, "pending_confirmation");
+  assert.equal(service.reviewTrip(trip.id).pending.length, 0);
+  db.close();
+});
+
+test("a date-less Draft remains unconfirmed even when time-of-day is flexible", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-date", "Draft 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Draft 旅程", "Asia/Taipei");
+  const source = "晚上去 Page";
+  const payload = fixture(source);
+  payload.items[0]!.startsAt = undefined;
+  payload.items[0]!.startTimeFlexibility = "flexible";
+  payload.items[0]!.endTimeFlexibility = "flexible";
+  payload.missing = [];
+  const draft = await service.createExtractionDraft(trip.id, source, {
+    idempotencyKey: "draft:date-required",
+    provenance: { provider: "line", messageId: "message-date", userId: "U-origin" },
+  }, new FakeLlmAdapter({ [source]: payload }));
+
+  assert.throws(() => service.confirmExtractionDraft(trip.id, "U-origin", draft.id), ConflictError);
+  assert.equal(service.getExtractionDraft(trip.id, draft.id)?.status, "pending_confirmation");
+  db.close();
+});
+
+test("concurrent Source redelivery reuses one persisted Draft", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-concurrent", "Draft 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Draft 旅程", "Asia/Taipei");
+  const source = "2026-10-01 concurrent Page";
+  const adapter = {
+    extract: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return fixture(source);
+    },
+  };
+
+  const drafts = await Promise.all([
+    service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:concurrent" }, adapter),
+    service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:concurrent" }, adapter),
+  ]);
+  assert.equal(drafts[0]!.id, drafts[1]!.id);
+  assert.equal(service.getExtractionDraft(trip.id, drafts[0]!.id)?.id, drafts[0]!.id);
   db.close();
 });
