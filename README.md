@@ -23,8 +23,8 @@ settings include `TRAVEL_DATABASE_PATH` (default `./data/travel.sqlite`),
 `WEBHOOK_REQUEST_TIMEOUT_MS` (default `10000`), and `TRAVEL_WORKER_POLL_MS`
 (default `1000`). `TRAVEL_EXTRACTION_ADAPTER` selects the extraction seam and
 currently defaults to `fake` for local Draft testing. Set it to `grok` with
-`XAI_API_KEY` (and optionally `XAI_MODEL` and `XAI_TIMEOUT_MS`) for Grok. The
-runtime exposes `POST /line/webhook` (with
+`XAI_API_KEY`, or `openai` with `OPENAI_API_KEY` (and the corresponding model
+and timeout variables). The runtime exposes `POST /line/webhook` (with
 `/webhooks/line` retained as a compatibility alias) and `GET /healthz`.
 
 For local development, put these variables in a root `.env` file. `npm run start`

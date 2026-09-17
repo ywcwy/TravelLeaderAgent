@@ -13,7 +13,7 @@ const required = {
 
 test("loads required runtime configuration without exposing secrets", () => {
   const config = loadRuntimeConfig({ ...required, TRAVEL_DATABASE_PATH: "./data/test.sqlite", PORT: "3100", WEBHOOK_BODY_LIMIT_BYTES: "128" });
-  assert.deepEqual(config, { channelSecret: "secret", channelAccessToken: "access", officialAccountUserId: "U-bot", systemAdministratorId: "system-admin", databasePath: "./data/test.sqlite", port: 3100, bodyLimitBytes: 128, requestTimeoutMs: 10_000, workerPollMs: 1_000, extractionAdapter: "fake", xAiApiKey: null, xAiModel: "grok-4.6", xAiTimeoutMs: 20_000 });
+  assert.deepEqual(config, { channelSecret: "secret", channelAccessToken: "access", officialAccountUserId: "U-bot", systemAdministratorId: "system-admin", databasePath: "./data/test.sqlite", port: 3100, bodyLimitBytes: 128, requestTimeoutMs: 10_000, workerPollMs: 1_000, extractionAdapter: "fake", openAiApiKey: null, openAiModel: "gpt-4o-mini", openAiTimeoutMs: 20_000, xAiApiKey: null, xAiModel: "grok-4.6", xAiTimeoutMs: 20_000 });
 });
 
 test("selects the Fake extraction adapter for local runtime", () => {
@@ -21,7 +21,10 @@ test("selects the Fake extraction adapter for local runtime", () => {
   const grok = loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "grok", XAI_API_KEY: "test-key", XAI_MODEL: "test-model", XAI_TIMEOUT_MS: "5000" });
   assert.deepEqual({ adapter: grok.extractionAdapter, key: grok.xAiApiKey, model: grok.xAiModel, timeout: grok.xAiTimeoutMs }, { adapter: "grok", key: "test-key", model: "test-model", timeout: 5000 });
   assert.throws(() => loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "grok" }), /XAI_API_KEY/);
-  assert.throws(() => loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "openai" }), /TRAVEL_EXTRACTION_ADAPTER/);
+  const openai = loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "openai", OPENAI_API_KEY: "test-key", OPENAI_MODEL: "test-model", OPENAI_TIMEOUT_MS: "5000" });
+  assert.deepEqual({ adapter: openai.extractionAdapter, key: openai.openAiApiKey, model: openai.openAiModel, timeout: openai.openAiTimeoutMs }, { adapter: "openai", key: "test-key", model: "test-model", timeout: 5000 });
+  assert.throws(() => loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "openai" }), /OPENAI_API_KEY/);
+  assert.throws(() => loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "other" }), /TRAVEL_EXTRACTION_ADAPTER/);
 });
 
 test("fails fast and names missing variables without including secret values", () => {

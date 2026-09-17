@@ -34,7 +34,9 @@ export class TravelLeaderRuntime {
     const replyClient = new LineReplyApiClient(config.channelAccessToken);
     const extractionAdapter = config.extractionAdapter === "fake"
       ? new FakeLlmAdapter()
-      : new OpenAiCompatibleLlmAdapter({ apiKey: config.xAiApiKey!, model: config.xAiModel, timeoutMs: config.xAiTimeoutMs, endpoint: "https://api.x.ai/v1/responses" });
+      : config.extractionAdapter === "grok"
+        ? new OpenAiCompatibleLlmAdapter({ apiKey: config.xAiApiKey!, model: config.xAiModel, timeoutMs: config.xAiTimeoutMs, endpoint: "https://api.x.ai/v1/responses" })
+        : new OpenAiCompatibleLlmAdapter({ apiKey: config.openAiApiKey!, model: config.openAiModel, timeoutMs: config.openAiTimeoutMs, endpoint: "https://api.openai.com/v1/responses" });
     this.worker = new LineSourceWorker(this.inbox, this.service, (replyToken, text) => replyClient.reply(replyToken, text), extractionAdapter);
     this.poller = poller ?? { start: () => this.worker.start(config.workerPollMs), stop: () => this.worker.stop() };
     this.server = new LineWebhookHttpServer({ ingress, bodyLimitBytes: config.bodyLimitBytes, requestTimeoutMs: config.requestTimeoutMs, health: () => this.database.connection.prepare("SELECT 1").get() !== undefined });
