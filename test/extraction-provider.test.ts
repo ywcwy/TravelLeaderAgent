@@ -23,6 +23,8 @@ test("Grok-compatible adapter sends the contract and validates structured output
 test("Grok-compatible adapter turns provider failures and malformed output into safe errors", async () => {
   const failed = new OpenAiCompatibleLlmAdapter({ apiKey: "secret-key", model: "test-model", fetchImpl: async () => new Response("provider secret details", { status: 503 }) });
   await assert.rejects(failed.extract(input), (error: unknown) => error instanceof LlmProviderError && error.message === "LLM provider request failed (HTTP 503).");
+  const rateLimited = new OpenAiCompatibleLlmAdapter({ apiKey: "secret-key", model: "test-model", fetchImpl: async () => new Response(JSON.stringify({ error: { code: "insufficient_quota", type: "insufficient_quota", message: "do not expose this provider message" } }), { status: 429, headers: { "retry-after": "3" } }) });
+  await assert.rejects(rateLimited.extract(input), (error: unknown) => error instanceof LlmProviderError && error.message === "LLM provider request failed (HTTP 429: insufficient_quota; retry-after=3s)." && !error.message.includes("do not expose"));
   const malformed = new OpenAiCompatibleLlmAdapter({ apiKey: "secret-key", model: "test-model", fetchImpl: async () => new Response(JSON.stringify({ output_text: "not-json" }), { status: 200 }) });
   await assert.rejects(malformed.extract(input), (error: unknown) => error instanceof LlmProviderError && error.message === "LLM provider returned malformed structured JSON.");
 });

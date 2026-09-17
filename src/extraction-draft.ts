@@ -59,7 +59,7 @@ export class OpenAiCompatibleLlmAdapter implements LlmAdapter {
         }),
         signal: controller.signal,
       });
-      if (!response.ok) throw new LlmProviderError(`LLM provider request failed (HTTP ${response.status}).`);
+      if (!response.ok) throw await providerRequestError(response);
       let body: unknown;
       try { body = await response.json(); } catch { throw new LlmProviderError("LLM provider returned malformed JSON."); }
       const text = responseText(body);
@@ -76,6 +76,27 @@ export class OpenAiCompatibleLlmAdapter implements LlmAdapter {
       clearTimeout(timer);
     }
   }
+}
+
+async function providerRequestError(response: Response): Promise<LlmProviderError> {
+  let detail: string | undefined;
+  try {
+    const body: unknown = await response.clone().json();
+    if (isRecord(body) && isRecord(body.error)) {
+      const code = safeProviderToken(body.error.code) ?? safeProviderToken(body.error.type);
+      if (code) detail = code;
+    }
+  } catch {
+    // Provider error bodies are optional; status alone remains safe and useful.
+  }
+  const retryAfter = response.headers.get("retry-after")?.trim();
+  const safeRetryAfter = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? retryAfter : undefined;
+  const suffix = `${detail ? `: ${detail}` : ""}${safeRetryAfter ? `; retry-after=${safeRetryAfter}s` : ""}`;
+  return new LlmProviderError(`LLM provider request failed (HTTP ${response.status}${suffix}).`);
+}
+
+function safeProviderToken(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(value) ? value : undefined;
 }
 
 /** @deprecated Use OpenAiCompatibleLlmAdapter; retained for existing callers. */
