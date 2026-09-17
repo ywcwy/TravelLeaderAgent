@@ -7,14 +7,23 @@ export const tripItemStatuses = [
 ] as const;
 
 export type TripItemStatus = (typeof tripItemStatuses)[number];
-export type TripItemKind = "flight" | "lodging" | "rental_car" | "transport" | "meal" | "activity" | "shopping" | "meeting" | "other";
-export type ProposalShape = "point" | "route";
-export type ProposalShapeSource = "explicit" | "inferred";
+export const tripItemKinds = ["flight", "lodging", "rental_car", "transport", "meal", "activity", "shopping", "meeting", "other"] as const;
+export type TripItemKind = (typeof tripItemKinds)[number];
+export const proposalShapes = ["point", "route"] as const;
+export type ProposalShape = (typeof proposalShapes)[number];
+export const proposalShapeSources = ["explicit", "inferred"] as const;
+export type ProposalShapeSource = (typeof proposalShapeSources)[number];
 export type TimezoneSource = "explicit" | "inferred" | "fallback";
 export type ProposalStatus = "pending" | "confirmed" | "rejected";
 export type MemberRole = "owner" | "member";
 export type TripStatus = "active" | "archived";
 export type DecisionStatus = "open" | "resolved" | "needs_options" | "cancelled";
+export const extractionDraftStatuses = ["pending_confirmation", "confirmed", "cancelled", "failed"] as const;
+export type ExtractionDraftStatus = (typeof extractionDraftStatuses)[number];
+export const timeFlexibilities = ["required", "estimated", "flexible"] as const;
+export type TimeFlexibility = (typeof timeFlexibilities)[number];
+export const timeWindows = ["morning", "afternoon", "evening", "night"] as const;
+export type TimeWindow = (typeof timeWindows)[number];
 
 export interface ExtractedTripItem {
   kind: TripItemKind;
@@ -36,6 +45,40 @@ export interface ExtractedTripItem {
   deadlineAt?: string;
   sourceLine?: number;
   sourceExcerpt?: string;
+}
+
+export interface ExtractionDraftItem extends ExtractedTripItem {
+  startTimeFlexibility: TimeFlexibility;
+  endTimeFlexibility: TimeFlexibility;
+  timeWindow?: TimeWindow;
+}
+
+export interface ExtractionDraftMissing {
+  field: string;
+  message: string;
+  required: boolean;
+}
+
+export interface ExtractionDraftIssue {
+  code: string;
+  message: string;
+}
+
+export interface ExtractionDraftPayload {
+  items: ExtractionDraftItem[];
+  missing: ExtractionDraftMissing[];
+  assumptions: string[];
+  issues: ExtractionDraftIssue[];
+  sourceExcerpt: string;
+}
+
+export interface ExtractionDraft extends ExtractionDraftPayload {
+  id: string;
+  tripId: string;
+  sourceId: string;
+  status: ExtractionDraftStatus;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SourceImportOptions {

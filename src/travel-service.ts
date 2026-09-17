@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
-import type { Decision, ExtractedTripItem, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import { validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
+import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftPayload, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -27,6 +28,11 @@ export interface MarkdownImportResult {
   sourceId: string;
   proposalIds: string[];
   outcome: "created" | "reused";
+}
+
+export interface ExtractionDraftOptions extends SourceImportOptions {
+  currentDate?: string;
+  inputType?: string;
 }
 
 export class TravelService {
@@ -237,6 +243,56 @@ export class TravelService {
     if (!row) return null;
     return { id: row.id, tripId: row.trip_id, type: row.type, idempotencyKey: row.idempotency_key, content: row.content, sourceTime: row.source_time,
       provenance: row.provider ? { provider: row.provider, messageId: row.provider_message_id ?? "", ...(row.provider_group_id ? { groupId: row.provider_group_id } : {}), ...(row.provider_user_id ? { userId: row.provider_user_id } : {}) } : null };
+  }
+
+  async createExtractionDraft(tripId: string, content: string, options: ExtractionDraftOptions, adapter: LlmAdapter): Promise<ExtractionDraft> {
+    const trip = this.requireActiveTrip(tripId);
+    const idempotencyKey = options.idempotencyKey.trim();
+    if (!idempotencyKey) throw new InvalidSourceError("A Source Idempotency Key is required.");
+    if (containsSensitiveTravelData(content)) throw new InvalidSourceError("Sensitive Travel Data must be removed before sending this Source to an LLM.");
+
+    let source = this.db.connection.prepare(`SELECT id FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, idempotencyKey) as { id: string } | undefined;
+    if (!source) {
+      const sourceId = randomUUID();
+      const provenance = options.provenance;
+      this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, idempotency_key, content, source_time, provider, provider_message_id, provider_group_id, provider_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        sourceId, tripId, options.type ?? "freeform", idempotencyKey, content, options.sourceTime ?? now(), provenance?.provider ?? null, provenance?.messageId ?? null, provenance?.groupId ?? null, provenance?.userId ?? null, now(),
+      );
+      source = { id: sourceId };
+    }
+
+    const existing = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ?`).get(source.id) as ExtractionDraftRow | undefined;
+    if (existing) return toExtractionDraft(existing);
+
+    const currentDate = options.currentDate ?? currentDateInTimezone(trip.timezone);
+    const input = { sourceContent: content, tripTimezone: trip.timezone, currentDate, inputType: options.inputType ?? options.type ?? "freeform" };
+    let status: ExtractionDraft["status"] = "pending_confirmation";
+    let payload: ExtractionDraftPayload;
+    try {
+      payload = validateExtractionDraftPayload(await adapter.extract(input));
+    } catch (error) {
+      status = "failed";
+      payload = {
+        items: [],
+        missing: [],
+        assumptions: [],
+        issues: [{ code: "adapter_failure", message: error instanceof Error ? error.message : "LLM extraction failed." }],
+        sourceExcerpt: content.trim().slice(0, 500),
+      };
+    }
+    const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const timestamp = now();
+    this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, status, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      draftId, tripId, source.id, status, JSON.stringify(payload), timestamp, timestamp,
+    );
+    const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE id = ?`).get(draftId) as ExtractionDraftRow | undefined;
+    if (!persisted) throw new InvalidSourceError("The Extraction Draft could not be persisted.");
+    return toExtractionDraft(persisted);
+  }
+
+  getExtractionDraft(tripId: string, draftId: string): ExtractionDraft | null {
+    const row = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND id = ?`).get(tripId, draftId) as ExtractionDraftRow | undefined;
+    return row ? toExtractionDraft(row) : null;
   }
 
   createProposal(tripId: string, sourceId: string, item: ExtractedTripItem): string {
@@ -659,6 +715,16 @@ interface TravelGroupRow {
 
 interface SourceRow { id: string; trip_id: string; type: string; idempotency_key: string; content: string; source_time: string; provider: string | null; provider_message_id: string | null; provider_group_id: string | null; provider_user_id: string | null; }
 
+interface ExtractionDraftRow {
+  id: string;
+  trip_id: string;
+  source_id: string;
+  status: ExtractionDraft["status"];
+  payload_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
 interface TripRow {
   id: string; travel_group_id: string; title: string; timezone: string; status: "active" | "archived";
 }
@@ -745,6 +811,16 @@ function toSource(row: SourceRow): Source {
     sourceTime: row.source_time,
     provenance: row.provider ? { provider: row.provider, messageId: row.provider_message_id ?? "", ...(row.provider_group_id ? { groupId: row.provider_group_id } : {}), ...(row.provider_user_id ? { userId: row.provider_user_id } : {}) } : null,
   };
+}
+
+function toExtractionDraft(row: ExtractionDraftRow): ExtractionDraft {
+  let payload: ExtractionDraftPayload;
+  try {
+    payload = validateExtractionDraftPayload(JSON.parse(row.payload_json));
+  } catch (error) {
+    throw new InvalidSourceError(`Extraction Draft ${row.id} contains invalid persisted data: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return { id: row.id, tripId: row.trip_id, sourceId: row.source_id, status: row.status, ...payload, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 function toTripItem(row: Record<string, unknown>, kinds = [row.kind as TripItem["kind"]]): TripItem {
@@ -973,6 +1049,12 @@ function inferLocationTimezone(value: string | undefined): string | undefined {
 function containsSensitiveTravelData(markdown: string): boolean {
   return /(?:護照(?:號碼|号码)?|passport(?:\s*(?:number|no\.?))?)\s*[:：#-]?\s*[A-Z0-9]{6,}/i.test(markdown)
     || /(?:信用卡|credit\s*card|card\s*number|卡號)\s*[:：#-]?\s*\d[\d -]{7,}/i.test(markdown);
+}
+
+function currentDateInTimezone(timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 function findUnparseableLineIssues(sourceId: string, markdown: string): ReviewIssue[] {

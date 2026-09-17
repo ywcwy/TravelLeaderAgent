@@ -56,6 +56,16 @@ export class TravelDatabase {
         UNIQUE (trip_id, idempotency_key)
       );
 
+      CREATE TABLE IF NOT EXISTS extraction_drafts (
+        id TEXT PRIMARY KEY,
+        trip_id TEXT NOT NULL REFERENCES trips(id),
+        source_id TEXT NOT NULL UNIQUE REFERENCES sources(id),
+        status TEXT NOT NULL CHECK (status IN ('pending_confirmation', 'confirmed', 'cancelled', 'failed')),
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS members (
         trip_id TEXT NOT NULL REFERENCES trips(id),
         line_user_id TEXT NOT NULL,
