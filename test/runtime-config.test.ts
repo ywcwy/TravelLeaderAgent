@@ -13,11 +13,14 @@ const required = {
 
 test("loads required runtime configuration without exposing secrets", () => {
   const config = loadRuntimeConfig({ ...required, TRAVEL_DATABASE_PATH: "./data/test.sqlite", PORT: "3100", WEBHOOK_BODY_LIMIT_BYTES: "128" });
-  assert.deepEqual(config, { channelSecret: "secret", channelAccessToken: "access", officialAccountUserId: "U-bot", systemAdministratorId: "system-admin", databasePath: "./data/test.sqlite", port: 3100, bodyLimitBytes: 128, requestTimeoutMs: 10_000, workerPollMs: 1_000, extractionAdapter: "fake" });
+  assert.deepEqual(config, { channelSecret: "secret", channelAccessToken: "access", officialAccountUserId: "U-bot", systemAdministratorId: "system-admin", databasePath: "./data/test.sqlite", port: 3100, bodyLimitBytes: 128, requestTimeoutMs: 10_000, workerPollMs: 1_000, extractionAdapter: "fake", openAiApiKey: null, openAiModel: "gpt-4o-mini", openAiTimeoutMs: 20_000 });
 });
 
 test("selects the Fake extraction adapter for local runtime", () => {
   assert.equal(loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "fake" }).extractionAdapter, "fake");
+  const openai = loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "openai", OPENAI_API_KEY: "test-key", OPENAI_MODEL: "test-model", OPENAI_TIMEOUT_MS: "5000" });
+  assert.deepEqual({ adapter: openai.extractionAdapter, key: openai.openAiApiKey, model: openai.openAiModel, timeout: openai.openAiTimeoutMs }, { adapter: "openai", key: "test-key", model: "test-model", timeout: 5000 });
+  assert.throws(() => loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "openai" }), /OPENAI_API_KEY/);
   assert.throws(() => loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "real" }), /TRAVEL_EXTRACTION_ADAPTER/);
 });
 

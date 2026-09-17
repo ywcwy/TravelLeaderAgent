@@ -98,6 +98,25 @@ test("edits a LINE Draft through the Fake Adapter without creating a new Source"
   db.close();
 });
 
+test("rejects Sensitive Travel Data before a LINE Draft edit reaches the adapter", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-draft-sensitive-edit", "敏感編輯群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "敏感編輯旅程", "Asia/Taipei");
+  const draft = await travel.createExtractionDraft(trip.id, "原始住宿", { idempotencyKey: "line:draft:sensitive-edit", type: "line_text", provenance: { provider: "line", messageId: "source", groupId: group.lineGroupId, userId: "U-origin" } }, new FakeLlmAdapter());
+  let calls = 0;
+  const adapter = { extract: () => { calls += 1; return { items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: "" }; } };
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEDRAFTSENSITIVE000000", messageId: "draft-sensitive-message", groupId: group.lineGroupId, userId: "U-origin", tripId: trip.id, text: `修改 ${draft.id}｜信用卡號 4111 1111 1111 1111`, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "sensitive-reply" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, adapter);
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(calls, 0);
+  assert.match(replies[0] ?? "", /Sensitive Travel Data/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE source_id = ?`).get(draft.sourceId) as { count: number }).count, 1);
+  db.close();
+});
+
 test("handles a mentioned itinerary query without creating a Source", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");

@@ -110,6 +110,11 @@ export class LineSourceWorker {
     if (!this.extractionAdapter) return draftCommandHelp;
     try {
       if (command.type === "invalid_draft") return draftCommandHelp;
+      if (command.type === "view_draft") {
+        const draft = this.travel.getExtractionDraft(event.tripId, command.draftId);
+        if (!draft) throw new Error(`Extraction Draft ${command.draftId} was not found.`);
+        return renderExtractionDraft(draft, { page: command.page });
+      }
       if (command.type === "confirm_draft") {
         const result = this.travel.confirmExtractionDraft(event.tripId, event.userId, command.draftId);
         return result.proposalIds.length > 0 ? `已確認 Draft ${command.draftId}，建立 Proposal：${result.proposalIds.join("、")}。` : `Draft ${command.draftId} 已確認。`;
@@ -124,6 +129,7 @@ export class LineSourceWorker {
       }
       const trip = this.travel.getTrip(event.tripId);
       if (!trip) throw new Error(`Trip ${event.tripId} was not found.`);
+      this.travel.assertSafeExtractionContent(command.content);
       const payload = await this.extractionAdapter.extract({ sourceContent: command.content, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10), inputType: "line_text" });
       const draft = this.travel.reviseExtractionDraft(event.tripId, event.userId, command.draftId, payload);
       return renderExtractionDraft(draft);

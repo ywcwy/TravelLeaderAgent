@@ -21,6 +21,62 @@ export interface LlmAdapter {
 }
 
 export class ExtractionDraftValidationError extends Error {}
+export class LlmProviderError extends Error {}
+
+export interface OpenAiLlmAdapterOptions {
+  apiKey: string;
+  model: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+  endpoint?: string;
+}
+
+/** OpenAI Responses API adapter. The provider output is still validated at the domain boundary. */
+export class OpenAiLlmAdapter implements LlmAdapter {
+  private readonly options: Required<Pick<OpenAiLlmAdapterOptions, "apiKey" | "model" | "timeoutMs" | "endpoint">> & Pick<OpenAiLlmAdapterOptions, "fetchImpl">;
+
+  constructor(options: OpenAiLlmAdapterOptions) {
+    if (!options.apiKey.trim()) throw new LlmProviderError("OPENAI_API_KEY is required.");
+    if (!options.model.trim()) throw new LlmProviderError("OPENAI_MODEL is required.");
+    const timeoutMs = options.timeoutMs ?? 20_000;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new LlmProviderError("OpenAI provider timeout must be a positive integer.");
+    this.options = { apiKey: options.apiKey, model: options.model, timeoutMs, endpoint: options.endpoint ?? "https://api.openai.com/v1/responses", fetchImpl: options.fetchImpl };
+  }
+
+  async extract(input: LlmExtractionInput): Promise<ExtractionDraftPayload> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    try {
+      const response = await (this.options.fetchImpl ?? fetch)(this.options.endpoint, {
+        method: "POST",
+        headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: this.options.model,
+          store: false,
+          instructions: extractionInstructions,
+          input: JSON.stringify(input),
+          text: { format: { type: "json_schema", name: "extraction_draft", strict: true, schema: extractionDraftJsonSchema } },
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new LlmProviderError(`OpenAI provider request failed (HTTP ${response.status}).`);
+      let body: unknown;
+      try { body = await response.json(); } catch { throw new LlmProviderError("OpenAI provider returned malformed JSON."); }
+      const text = responseText(body);
+      if (!text) throw new LlmProviderError("OpenAI provider returned no structured output.");
+      let parsed: unknown;
+      try { parsed = JSON.parse(text); } catch { throw new LlmProviderError("OpenAI provider returned malformed structured JSON."); }
+      return validateExtractionDraftPayload(removeNulls(parsed));
+    } catch (error) {
+      if (error instanceof LlmProviderError) throw error;
+      if (error instanceof ExtractionDraftValidationError) throw new LlmProviderError("OpenAI provider returned invalid structured output.");
+      if (error instanceof DOMException && error.name === "AbortError") throw new LlmProviderError("OpenAI provider request timed out.");
+      throw new LlmProviderError("OpenAI provider request failed.");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
 
 export function validateExtractionDraftPayload(payload: unknown): ExtractionDraftPayload {
   if (!isRecord(payload)) throw new ExtractionDraftValidationError("Extraction Draft output must be a JSON object.");
@@ -56,18 +112,30 @@ export class FakeLlmAdapter implements LlmAdapter {
   }
 }
 
-export function renderExtractionDraft(draft: Pick<ExtractionDraft, "id" | "status" | "items" | "missing" | "assumptions" | "issues">): string {
+export function renderExtractionDraft(draft: Pick<ExtractionDraft, "id" | "status" | "items" | "missing" | "assumptions" | "issues">, options: { page?: number; pageSize?: number; maxLength?: number } = {}): string {
+  const page = Math.max(1, options.page ?? 1);
+  const pageSize = Math.max(1, options.pageSize ?? 8);
+  const maxLength = Math.max(500, options.maxLength ?? 4_500);
   const itemLines = draft.items.map((item) => {
     const time = item.startsAt ?? item.timeWindow ?? "未指定時間";
     const place = item.shape === "route" ? `${item.origin ?? "?"} → ${item.destination ?? "?"}` : (item.location ?? "未指定地點");
     return `- ${item.title}｜${time}｜${place}｜時間 ${item.startTimeFlexibility}/${item.endTimeFlexibility}`;
   });
-  const lines = [`Extraction Draft ${draft.id}｜${draft.status}`, ...(itemLines.length > 0 ? itemLines : ["- 尚未解析出行程項目"])];
-  if (draft.missing.length > 0) lines.push(`缺少：${draft.missing.map((entry) => `${entry.field}${entry.required ? "（必要）" : "（可選）"}`).join("、")}`);
-  if (draft.assumptions.length > 0) lines.push(`假設：${draft.assumptions.join("；")}`);
-  if (draft.issues.length > 0) lines.push(`問題：${draft.issues.map((issue) => issue.message).join("；")}`);
-  lines.push(`請確認：確認 Draft ${draft.id}`);
-  return lines.join("\n");
+  const totalPages = Math.max(1, Math.ceil(itemLines.length / pageSize));
+  const lines = [`Extraction Draft ${draft.id}｜${draft.status}｜第 ${Math.min(page, totalPages)}/${totalPages} 頁`, ...(itemLines.length > 0 ? itemLines.slice((page - 1) * pageSize, page * pageSize) : ["- 尚未解析出行程項目"])] as string[];
+  if (page === 1) {
+    if (draft.missing.length > 0) lines.push(`缺少：${draft.missing.map((entry) => `${entry.field}${entry.required ? "（必要）" : "（可選）"}`).join("、")}`);
+    if (draft.assumptions.length > 0) lines.push(`假設：${draft.assumptions.join("；")}`);
+    if (draft.issues.length > 0) lines.push(`問題：${draft.issues.map((issue) => issue.message).join("；")}`);
+    if (draft.status === "pending_confirmation") lines.push(`請確認：確認 ${draft.id}`);
+    else if (draft.status === "failed") lines.push(`請重試：重試 ${draft.id}`);
+    else if (draft.status === "confirmed") lines.push(`已確認 Draft ${draft.id}`);
+    else lines.push(`已取消 Draft ${draft.id}`);
+  }
+  if (page < totalPages) lines.push(`下一頁：查看 Draft ${draft.id} ${page + 1}`);
+  let rendered = lines.join("\n");
+  if (rendered.length > maxLength) rendered = `${rendered.slice(0, maxLength - 20).trimEnd()}…\n（內容已截短）`;
+  return rendered;
 }
 
 function defaultFixture(input: LlmExtractionInput): ExtractionDraftPayload {
@@ -154,4 +222,43 @@ function validateEnum<T extends string>(value: unknown, allowed: readonly T[], p
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const extractionInstructions = "Extract itinerary candidates from the user's source content. Return only JSON matching the extraction_draft schema. Preserve uncertainty as assumptions or missing fields; do not invent exact dates, times, or locations.";
+
+const extractionDraftJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["items", "missing", "assumptions", "issues", "sourceExcerpt"],
+  properties: {
+    items: { type: "array", items: {
+      type: "object", additionalProperties: false,
+      required: ["kind", "kinds", "shape", "shapeSource", "title", "status", "startsAt", "endsAt", "timezone", "timezoneSource", "originTimezone", "destinationTimezone", "location", "origin", "destination", "notes", "deadlineAt", "sourceLine", "sourceExcerpt", "startTimeFlexibility", "endTimeFlexibility", "timeWindow", "assumptions"],
+      properties: {
+        kind: { type: "string", enum: [...tripItemKinds] }, kinds: { type: "array", items: { type: "string", enum: [...tripItemKinds] } }, shape: { type: "string", enum: [...proposalShapes] }, shapeSource: { type: "string", enum: [...proposalShapeSources] }, title: { type: "string" }, status: { type: "string", enum: [...tripItemStatuses] },
+        startsAt: { type: ["string", "null"] }, endsAt: { type: ["string", "null"] }, timezone: { type: ["string", "null"] }, timezoneSource: { type: ["string", "null"], enum: [...timezoneSources, null] }, originTimezone: { type: ["string", "null"] }, destinationTimezone: { type: ["string", "null"] }, location: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, notes: { type: ["string", "null"] }, deadlineAt: { type: ["string", "null"] }, sourceLine: { type: ["integer", "null"] }, sourceExcerpt: { type: ["string", "null"] }, startTimeFlexibility: { type: "string", enum: [...timeFlexibilities] }, endTimeFlexibility: { type: "string", enum: [...timeFlexibilities] }, timeWindow: { type: ["string", "null"], enum: [...timeWindows, null] }, assumptions: { type: "array", items: { type: "string" } },
+      },
+    } },
+    missing: { type: "array", items: { type: "object", additionalProperties: false, required: ["field", "message", "required"], properties: { field: { type: "string" }, message: { type: "string" }, required: { type: "boolean" } } } },
+    assumptions: { type: "array", items: { type: "string" } },
+    issues: { type: "array", items: { type: "object", additionalProperties: false, required: ["code", "message"], properties: { code: { type: "string" }, message: { type: "string" } } } },
+    sourceExcerpt: { type: "string" },
+  },
+};
+
+function responseText(body: unknown): string | null {
+  if (!isRecord(body)) return null;
+  if (typeof body.output_text === "string") return body.output_text;
+  if (!Array.isArray(body.output)) return null;
+  for (const output of body.output) {
+    if (!isRecord(output) || !Array.isArray(output.content)) continue;
+    for (const content of output.content) if (isRecord(content) && typeof content.text === "string") return content.text;
+  }
+  return null;
+}
+
+function removeNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(removeNulls);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== null).map(([key, entry]) => [key, removeNulls(entry)]));
 }

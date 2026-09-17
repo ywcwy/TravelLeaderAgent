@@ -245,11 +245,15 @@ export class TravelService {
       provenance: row.provider ? { provider: row.provider, messageId: row.provider_message_id ?? "", ...(row.provider_group_id ? { groupId: row.provider_group_id } : {}), ...(row.provider_user_id ? { userId: row.provider_user_id } : {}) } : null };
   }
 
+  assertSafeExtractionContent(content: string): void {
+    if (containsSensitiveTravelData(content)) throw new InvalidSourceError("Sensitive Travel Data must be removed before sending this Source to an LLM.");
+  }
+
   async createExtractionDraft(tripId: string, content: string, options: ExtractionDraftOptions, adapter: LlmAdapter): Promise<ExtractionDraft> {
     const trip = this.requireActiveTrip(tripId);
     const idempotencyKey = options.idempotencyKey.trim();
     if (!idempotencyKey) throw new InvalidSourceError("A Source Idempotency Key is required.");
-    if (containsSensitiveTravelData(content)) throw new InvalidSourceError("Sensitive Travel Data must be removed before sending this Source to an LLM.");
+    this.assertSafeExtractionContent(content);
 
     let source = this.db.connection.prepare(`SELECT id, provider_user_id, content FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, idempotencyKey) as { id: string; provider_user_id: string | null; content: string } | undefined;
     if (!source) {

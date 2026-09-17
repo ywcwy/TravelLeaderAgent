@@ -49,7 +49,27 @@ test("persists one pending Extraction Draft without creating a Proposal", async 
   assert.equal(draft.sourceExcerpt, source);
   assert.equal(service.reviewTrip(trip.id).pending.length, 0);
   assert.match(renderExtractionDraft(draft), new RegExp(`Extraction Draft ${draft.id}`));
-  assert.match(renderExtractionDraft(draft), /確認 Draft/);
+  assert.match(renderExtractionDraft(draft), /請確認：確認 X-/);
+  db.close();
+});
+
+test("renders long Drafts in bounded pages with a continuation command", () => {
+  const draft = { id: "X-PAGE0001", status: "pending_confirmation" as const, items: Array.from({ length: 10 }, (_, index) => ({ ...fixture("source"), items: undefined, kind: "other" as const, kinds: ["other" as const], shape: "point" as const, shapeSource: "inferred" as const, title: `行程 ${index + 1}`, status: "provisional" as const, startTimeFlexibility: "flexible" as const, endTimeFlexibility: "flexible" as const, location: "Page" })).map(({ items: _items, ...item }) => item), missing: [], assumptions: [], issues: [] };
+  const page = renderExtractionDraft(draft, { pageSize: 2, maxLength: 500 });
+  assert.match(page, /第 1\/5 頁/);
+  assert.match(page, /下一頁：查看 Draft X-PAGE0001 2/);
+  assert.ok(page.length <= 500);
+});
+
+test("rejects Sensitive Travel Data before invoking the provider", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-sensitive", "敏感資料群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "敏感資料旅程", "Asia/Taipei");
+  let calls = 0;
+  await assert.rejects(service.createExtractionDraft(trip.id, "信用卡號 4111 1111 1111 1111", { idempotencyKey: "draft:sensitive" }, { extract: () => { calls += 1; return fixture("safe"); } }), /Sensitive Travel Data/);
+  assert.equal(calls, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   db.close();
 });
 
@@ -85,6 +105,7 @@ test("invalid Fake Adapter output is retained as a failed Draft and keeps the So
 
   assert.equal(draft.status, "failed");
   assert.equal(draft.issues[0]?.code, "adapter_failure");
+  assert.match(renderExtractionDraft(draft), new RegExp(`重試 ${draft.id}`));
   assert.ok(service.getSource(draft.sourceId));
   assert.equal(service.reviewTrip(trip.id).pending.length, 0);
   db.close();

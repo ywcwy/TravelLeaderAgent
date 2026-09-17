@@ -4,7 +4,7 @@ import { formatLocalDateTime } from "./timezone.ts";
 export type ParsedItineraryMessage = { type: "query"; query: ItineraryQuery } | { type: "help" } | null;
 
 export type ParsedProposalCommand = { type: "confirm"; proposalId: string } | { type: "reject"; proposalId: string; reason: string | null } | { type: "select"; decisionId: string; proposalId: string } | { type: "cancel"; decisionId: string } | { type: "invalid" } | null;
-export type ParsedDraftCommand = { type: "confirm_draft"; draftId: string } | { type: "edit_draft"; draftId: string; content: string } | { type: "cancel_draft"; draftId: string } | { type: "retry_draft"; draftId: string } | { type: "invalid_draft" } | null;
+export type ParsedDraftCommand = { type: "confirm_draft"; draftId: string } | { type: "edit_draft"; draftId: string; content: string } | { type: "cancel_draft"; draftId: string } | { type: "retry_draft"; draftId: string } | { type: "view_draft"; draftId: string; page: number } | { type: "invalid_draft" } | null;
 
 export function parseProposalCommand(text: string): ParsedProposalCommand {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "").trim();
@@ -32,11 +32,13 @@ export function parseDraftCommand(text: string): ParsedDraftCommand {
   if (cancel) return { type: "cancel_draft", draftId: cancel[1].toUpperCase() };
   const retry = normalized.match(/^(?:重試|retry)\s+(?:Draft\s+)?(X-[A-Z0-9]{8})$/i);
   if (retry) return { type: "retry_draft", draftId: retry[1].toUpperCase() };
+  const view = normalized.match(/^(?:查看|view|draft)\s+(?:Draft\s+)?(X-[A-Z0-9]{8})(?:\s+(?:第\s*)?(\d+)\s*頁?)?$/i);
+  if (view) return { type: "view_draft", draftId: view[1].toUpperCase(), page: Math.max(1, Number(view[2] ?? "1")) };
   if (/^(?:確認|confirm|修改|edit|取消|cancel|重試|retry)\s+(?:Draft\s+)?X-/i.test(normalized)) return { type: "invalid_draft" };
   return null;
 }
 
-export const draftCommandHelp = "Draft 指令格式：確認 X-XXXXXXXX、修改 X-XXXXXXXX｜新內容、取消 Draft X-XXXXXXXX，或重試 Draft X-XXXXXXXX。";
+export const draftCommandHelp = "Draft 指令格式：查看 Draft X-XXXXXXXX [頁碼]、確認 X-XXXXXXXX、修改 X-XXXXXXXX｜新內容、取消 Draft X-XXXXXXXX，或重試 Draft X-XXXXXXXX。";
 
 export function parseItineraryMessage(text: string): ParsedItineraryMessage {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "").trim();
