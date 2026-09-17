@@ -21,7 +21,8 @@ It requires `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`,
 settings include `TRAVEL_DATABASE_PATH` (default `./data/travel.sqlite`),
 `PORT` (default `3000`), `WEBHOOK_BODY_LIMIT_BYTES` (default `262144`),
 `WEBHOOK_REQUEST_TIMEOUT_MS` (default `10000`), and `TRAVEL_WORKER_POLL_MS`
-(default `1000`). The runtime exposes `POST /line/webhook` (with
+(default `1000`). `TRAVEL_EXTRACTION_ADAPTER` selects the extraction seam and
+currently defaults to `fake` for local Draft testing. The runtime exposes `POST /line/webhook` (with
 `/webhooks/line` retained as a compatibility alias) and `GET /healthz`.
 
 For local development, put these variables in a root `.env` file. `npm run start`
@@ -54,3 +55,21 @@ number are stored with every proposal as evidence.
 Every import also supplies a provider-specific Source Idempotency Key. Repeating
 an import with the same key returns the original Source and Proposal IDs; a new key
 creates a separate Source even when the Markdown is identical.
+
+## LINE Extraction Draft flow
+
+With the default Fake Adapter, a free-form mentioned message is persisted as one
+Source and one `pending_confirmation` Extraction Draft. Structured Markdown
+candidate messages continue to use the deterministic importer. The Draft reply
+is a concise preview; no Proposal is created until the originating user confirms it:
+
+```text
+確認 X-XXXXXXXX
+修改 X-XXXXXXXX｜補充日期、地點或其他內容
+取消 Draft X-XXXXXXXX
+重試 Draft X-XXXXXXXX
+```
+
+Confirmation creates pending Proposals and returns their IDs. See
+`docs/runbooks/line-draft-fake-adapter.md` for the manual smoke test and SQLite
+checks.

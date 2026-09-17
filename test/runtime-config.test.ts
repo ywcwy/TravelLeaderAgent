@@ -13,7 +13,12 @@ const required = {
 
 test("loads required runtime configuration without exposing secrets", () => {
   const config = loadRuntimeConfig({ ...required, TRAVEL_DATABASE_PATH: "./data/test.sqlite", PORT: "3100", WEBHOOK_BODY_LIMIT_BYTES: "128" });
-  assert.deepEqual(config, { channelSecret: "secret", channelAccessToken: "access", officialAccountUserId: "U-bot", systemAdministratorId: "system-admin", databasePath: "./data/test.sqlite", port: 3100, bodyLimitBytes: 128, requestTimeoutMs: 10_000, workerPollMs: 1_000 });
+  assert.deepEqual(config, { channelSecret: "secret", channelAccessToken: "access", officialAccountUserId: "U-bot", systemAdministratorId: "system-admin", databasePath: "./data/test.sqlite", port: 3100, bodyLimitBytes: 128, requestTimeoutMs: 10_000, workerPollMs: 1_000, extractionAdapter: "fake" });
+});
+
+test("selects the Fake extraction adapter for local runtime", () => {
+  assert.equal(loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "fake" }).extractionAdapter, "fake");
+  assert.throws(() => loadRuntimeConfig({ ...required, TRAVEL_EXTRACTION_ADAPTER: "real" }), /TRAVEL_EXTRACTION_ADAPTER/);
 });
 
 test("fails fast and names missing variables without including secret values", () => {
@@ -45,7 +50,7 @@ test("stops accepting HTTP before stopping the poller", async () => {
   await stopping;
 });
 
-test("default runtime wires polling to Source creation and Reply API", async () => {
+test("default runtime wires polling to Source/Proposal creation and Reply API", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
   globalThis.fetch = (async (input) => { calls.push(String(input)); return new Response(null, { status: 200 }); }) as typeof fetch;
@@ -59,6 +64,7 @@ test("default runtime wires polling to Source creation and Reply API", async () 
     for (let attempt = 0; attempt < 100 && runtime.inbox.get(event.eventId)?.status !== "completed"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 2));
     assert.equal(runtime.inbox.get(event.eventId)?.status, "completed");
     assert.deepEqual(calls, ["https://api.line.me/v2/bot/message/reply"]);
+    assert.equal((runtime.database.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
     assert.equal(runtime.service.reviewTrip(trip.id).provisional.length, 1);
   } finally {
     globalThis.fetch = originalFetch;

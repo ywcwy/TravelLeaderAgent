@@ -1,6 +1,7 @@
 import type { TravelService } from "./travel-service.ts";
 import type { WebhookInbox, WebhookInboxEvent } from "./webhook-inbox.ts";
-import { itineraryQueryHelp, parseItineraryMessage, parseProposalCommand, proposalCommandHelp, renderItineraryQuery } from "./itinerary-query.ts";
+import { draftCommandHelp, itineraryQueryHelp, parseDraftCommand, parseItineraryMessage, parseProposalCommand, proposalCommandHelp, renderItineraryQuery } from "./itinerary-query.ts";
+import { renderExtractionDraft, type LlmAdapter } from "./extraction-draft.ts";
 
 export type LineReplySender = (replyToken: string, text: string) => void | Promise<void>;
 
@@ -8,10 +9,11 @@ export class LineSourceWorker {
   private readonly inbox: WebhookInbox;
   private readonly travel: TravelService;
   private readonly reply: LineReplySender;
+  private readonly extractionAdapter: LlmAdapter | null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private active: Promise<"processed" | "failed" | "idle"> | null = null;
   private processing = false;
-  constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender) { this.inbox = inbox; this.travel = travel; this.reply = reply; }
+  constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender, extractionAdapter: LlmAdapter | null = null) { this.inbox = inbox; this.travel = travel; this.reply = reply; this.extractionAdapter = extractionAdapter; }
 
   start(intervalMs = 1_000): void {
     if (this.timer) return;
@@ -48,7 +50,13 @@ export class LineSourceWorker {
     return (async () => {
       try {
         const parsed = parseItineraryMessage(event.text);
+        const draftCommand = parseDraftCommand(event.text);
         const command = parseProposalCommand(event.text);
+        if (draftCommand) {
+          if (replyToken) await this.reply(replyToken, await this.draftReply(event, draftCommand));
+          this.inbox.complete(event.eventId, leaseToken);
+          return "processed" as const;
+        }
         if (command) {
           if (replyToken) {
             const text = command.type === "invalid" ? proposalCommandHelp
@@ -70,8 +78,25 @@ export class LineSourceWorker {
           this.inbox.complete(event.eventId, leaseToken);
           return "processed" as const;
         }
-        const imported = this.importSource(event);
-        if (replyToken) await this.reply(replyToken, this.contextualReply(event.tripId, imported.proposalIds));
+        if (isQuestion(event.text)) {
+          if (replyToken) await this.reply(replyToken, "這看起來是問題，未建立行程 Draft。請改用「查詢行程」或補充要寫入行程的內容。");
+          this.inbox.complete(event.eventId, leaseToken);
+          return "processed" as const;
+        }
+        if (isStructuredMarkdown(event.text) || !this.extractionAdapter) {
+          const imported = this.importSource(event);
+          if (replyToken) await this.reply(replyToken, this.contextualReply(event.tripId, imported.proposalIds));
+          this.inbox.complete(event.eventId, leaseToken);
+          return "processed" as const;
+        }
+        const draft = await this.travel.createExtractionDraft(event.tripId, event.text, {
+          idempotencyKey: event.eventId,
+          sourceTime: event.receivedAt,
+          type: "line_text",
+          currentDate: event.receivedAt.slice(0, 10),
+          provenance: { provider: "line", messageId: event.messageId, groupId: event.groupId, userId: event.userId },
+        }, this.extractionAdapter!);
+        if (replyToken) await this.reply(replyToken, renderExtractionDraft(draft));
         this.inbox.complete(event.eventId, leaseToken);
         return "processed" as const;
       } catch (error) {
@@ -79,6 +104,32 @@ export class LineSourceWorker {
         return "failed" as const;
       }
     })();
+  }
+
+  private async draftReply(event: WebhookInboxEvent, command: Exclude<ReturnType<typeof parseDraftCommand>, null>): Promise<string> {
+    if (!this.extractionAdapter) return draftCommandHelp;
+    try {
+      if (command.type === "invalid_draft") return draftCommandHelp;
+      if (command.type === "confirm_draft") {
+        const result = this.travel.confirmExtractionDraft(event.tripId, event.userId, command.draftId);
+        return result.proposalIds.length > 0 ? `已確認 Draft ${command.draftId}，建立 Proposal：${result.proposalIds.join("、")}。` : `Draft ${command.draftId} 已確認。`;
+      }
+      if (command.type === "cancel_draft") {
+        this.travel.cancelExtractionDraft(event.tripId, event.userId, command.draftId);
+        return `已取消 Draft ${command.draftId}。`;
+      }
+      if (command.type === "retry_draft") {
+        const draft = await this.travel.retryExtractionDraft(event.tripId, event.userId, command.draftId, this.extractionAdapter);
+        return renderExtractionDraft(draft);
+      }
+      const trip = this.travel.getTrip(event.tripId);
+      if (!trip) throw new Error(`Trip ${event.tripId} was not found.`);
+      const payload = await this.extractionAdapter.extract({ sourceContent: command.content, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10), inputType: "line_text" });
+      const draft = this.travel.reviseExtractionDraft(event.tripId, event.userId, command.draftId, payload);
+      return renderExtractionDraft(draft);
+    } catch (error) {
+      return commandErrorReply(error);
+    }
   }
 
   private confirmReply(tripId: string, userId: string, proposalId: string): string {
@@ -141,6 +192,16 @@ export class LineSourceWorker {
     return `已收到 Proposal ${candidates}\n${contextLines.join("\n")}\n狀態：${proposals.map((proposal) => `${proposal.itemStatus} / ${proposal.status}`).join("、")}。\nDecision Owner 後續可確認此 Proposal。`;
   }
 
+}
+
+function isQuestion(text: string): boolean {
+  const normalized = text.trim().replace(/^@[^\s]+\s*/, "");
+  return /[?？]\s*$/.test(normalized) || /^(?:請問|想問|為什麼|為何|怎麼|如何|what|why|how|where|when|can|could|is|are)\b/i.test(normalized);
+}
+
+function isStructuredMarkdown(text: string): boolean {
+  const normalized = text.trim().replace(/^@[^\s]+\s*/, "");
+  return /^-?\s*\[(?:confirmed|provisional|open_decision|conflicted|cancelled)\]\s+/i.test(normalized);
 }
 
 function commandErrorReply(error: unknown): string {

@@ -7,6 +7,8 @@ import { LineWebhookHandler } from "../src/line-webhook-handler.ts";
 import { LineWebhookIngress } from "../src/line-webhook-ingress.ts";
 import { TravelService } from "../src/travel-service.ts";
 import { WebhookInbox } from "../src/webhook-inbox.ts";
+import { FakeLlmAdapter } from "../src/extraction-draft.ts";
+import type { ExtractionDraftPayload } from "../src/domain.ts";
 
 test("ingests a mentioned LINE group message into one Source with provenance", async () => {
   const db = new TravelDatabase();
@@ -49,6 +51,50 @@ test("keeps non-Markdown LINE text as a Source with a review issue", async () =>
   const worker = new LineSourceWorker(inbox, travel, () => undefined);
   assert.equal(await worker.processNext(), "processed");
   assert.equal(travel.reviewTrip(trip.id).issues.some((issue) => issue.code === "source_unparsed"), true);
+  db.close();
+});
+
+test("routes free-form LINE text through a Fake Adapter Draft and confirms it into Proposals", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-draft-line", "Draft LINE 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Draft LINE 旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEDRAFT0000000000000000", messageId: "draft-line-message", groupId: group.lineGroupId, userId: "U-origin", tripId: trip.id, text: "10/1 晚上到 Page，想住 Holiday Inn。", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "draft-reply" });
+  const replies: string[] = [];
+  const adapterPayload: ExtractionDraftPayload = { items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Page 住宿", status: "provisional", startsAt: "2026-10-01T18:00:00+08:00", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" }], missing: [], assumptions: [], issues: [], sourceExcerpt: "10/1 晚上到 Page，想住 Holiday Inn。" };
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, new FakeLlmAdapter({ "10/1 晚上到 Page，想住 Holiday Inn。": adapterPayload }));
+
+  assert.equal(await worker.processNext(), "processed");
+  const draftRow = db.connection.prepare(`SELECT id, status FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { id: string; status: string };
+  assert.equal(draftRow.status, "pending_confirmation");
+  assert.match(replies[0] ?? "", new RegExp(`Extraction Draft ${draftRow.id}`));
+  assert.match(replies[0] ?? "", /請確認/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM proposals WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+
+  inbox.enqueue({ eventId: "01JLINEDRAFT0000000000000001", messageId: "draft-confirm-message", groupId: group.lineGroupId, userId: "U-origin", tripId: trip.id, text: `確認 ${draftRow.id}`, receivedAt: "2026-09-11T00:00:02.000Z", rawBody: "raw", replyToken: "confirm-reply" });
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[1] ?? "", /已確認 Draft .*建立 Proposal：P-/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM proposals WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
+  db.close();
+});
+
+test("edits a LINE Draft through the Fake Adapter without creating a new Source", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-draft-edit", "Draft 編輯群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Draft 編輯旅程", "Asia/Taipei");
+  const source = "原始住宿內容";
+  const draft = await travel.createExtractionDraft(trip.id, source, { idempotencyKey: "line:draft:edit", type: "line_text", provenance: { provider: "line", messageId: "source", groupId: group.lineGroupId, userId: "U-origin" } }, new FakeLlmAdapter());
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEDRAFTEDIT000000000000", messageId: "draft-edit-message", groupId: group.lineGroupId, userId: "U-origin", tripId: trip.id, text: `修改 ${draft.id}｜改成 Page 的住宿`, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "edit-reply" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, new FakeLlmAdapter());
+  assert.equal(await worker.processNext(), "processed");
+  const latest = db.connection.prepare(`SELECT id, revision FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(draft.sourceId) as { id: string; revision: number };
+  assert.equal(latest.revision, 2);
+  assert.match(replies[0] ?? "", new RegExp(`Extraction Draft ${latest.id}`));
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
   db.close();
 });
 
@@ -243,7 +289,7 @@ test("produces equivalent structured records for equivalent Markdown and LINE in
   db.close();
 });
 
-test("does not turn a LINE question into a Proposal and acknowledges its Source", async () => {
+test("does not turn a LINE question into a Source or Proposal", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-freeform-question", "自由格式問題群組");
@@ -255,8 +301,23 @@ test("does not turn a LINE question into a Proposal and acknowledges its Source"
 
   assert.equal(await worker.processNext(), "processed");
   assert.equal(travel.reviewTrip(trip.id).provisional.length, 0);
-  assert.equal(travel.reviewTrip(trip.id).issues.some((issue) => issue.code === "source_unparsed"), true);
-  assert.deepEqual(replies, ["已收到內容，已保存原始 Source；目前無法建立 Proposal，請補充日期、地點或路線。"]);
+  assert.equal(travel.reviewTrip(trip.id).issues.some((issue) => issue.code === "source_unparsed"), false);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.deepEqual(replies, ["這看起來是問題，未建立行程 Draft。請改用「查詢行程」或補充要寫入行程的內容。"]);
+  db.close();
+});
+
+test("does not turn a LINE question into an Extraction Draft when the Fake Adapter is enabled", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-draft-question", "Draft 問題群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Draft 問題旅程", "Asia/Taipei");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEDRAFTQUESTION00000000", messageId: "draft-question-message", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "推薦 Page 的住宿？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "draft-question-reply" });
+  const worker = new LineSourceWorker(inbox, travel, () => undefined, new FakeLlmAdapter());
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   db.close();
 });
 

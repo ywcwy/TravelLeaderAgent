@@ -8,6 +8,7 @@ export interface RuntimeConfig {
   bodyLimitBytes: number;
   requestTimeoutMs: number;
   workerPollMs: number;
+  extractionAdapter: "fake";
 }
 
 export class RuntimeConfigError extends Error {}
@@ -20,8 +21,14 @@ export function loadRuntimeConfig(environment: Record<string, string | undefined
     channelSecret: environment.LINE_CHANNEL_SECRET!, channelAccessToken: environment.LINE_CHANNEL_ACCESS_TOKEN!, officialAccountUserId: environment.LINE_OFFICIAL_ACCOUNT_USER_ID!, systemAdministratorId: environment.TRAVEL_SYSTEM_ADMINISTRATOR_ID!,
     databasePath: environment.TRAVEL_DATABASE_PATH?.trim() || "./data/travel.sqlite",
     port: integer(environment.PORT, 3000, "PORT", 0), bodyLimitBytes: positiveInteger(environment.WEBHOOK_BODY_LIMIT_BYTES, 256 * 1024, "WEBHOOK_BODY_LIMIT_BYTES"),
-    requestTimeoutMs: positiveInteger(environment.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000, "WEBHOOK_REQUEST_TIMEOUT_MS"), workerPollMs: positiveInteger(environment.TRAVEL_WORKER_POLL_MS, 1_000, "TRAVEL_WORKER_POLL_MS"),
+    requestTimeoutMs: positiveInteger(environment.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000, "WEBHOOK_REQUEST_TIMEOUT_MS"), workerPollMs: positiveInteger(environment.TRAVEL_WORKER_POLL_MS, 1_000, "TRAVEL_WORKER_POLL_MS"), extractionAdapter: extractionAdapter(environment.TRAVEL_EXTRACTION_ADAPTER),
   };
+}
+
+function extractionAdapter(value: string | undefined): "fake" {
+  const selected = value?.trim().toLowerCase() || "fake";
+  if (selected !== "fake") throw new RuntimeConfigError("TRAVEL_EXTRACTION_ADAPTER currently supports only 'fake'.");
+  return "fake";
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string): number {
