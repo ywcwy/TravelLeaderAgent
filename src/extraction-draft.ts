@@ -141,7 +141,7 @@ export function renderExtractionDraft(draft: Pick<ExtractionDraft, "id" | "statu
   const pageSize = Math.max(1, options.pageSize ?? 8);
   const maxLength = Math.max(500, options.maxLength ?? 4_500);
   const itemLines = draft.items.map((item) => {
-    const time = item.startsAt ?? item.timeWindow ?? "未指定時間";
+    const time = item.startsAt ?? (item.localDate ? `${item.localDate}${item.timeWindow ? ` ${item.timeWindow}` : ""}` : item.timeWindow) ?? "未指定時間";
     const place = item.shape === "route" ? `${item.origin ?? "?"} → ${item.destination ?? "?"}` : (item.location ?? "未指定地點");
     return `- ${item.title}｜${time}｜${place}｜時間 ${item.startTimeFlexibility}/${item.endTimeFlexibility}`;
   });
@@ -200,6 +200,9 @@ function validateItem(value: unknown, index: number): ExtractionDraftItem {
   validateEnum(base.shape, proposalShapes, `items[${index}].shape`);
   validateEnum(base.shapeSource, proposalShapeSources, `items[${index}].shapeSource`);
   validateEnum(base.status, tripItemStatuses, `items[${index}].status`);
+  if (value.localDate !== undefined && (typeof value.localDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.localDate))) {
+    throw new ExtractionDraftValidationError(`items[${index}].localDate must be an ISO calendar date.`);
+  }
   for (const field of ["startsAt", "endsAt", "title", "sourceExcerpt"] as const) {
     if (value[field] !== undefined && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
   }
@@ -252,6 +255,7 @@ const extractionInstructions = [
   "Extract itinerary candidates from the user's source content. Return only JSON matching the extraction_draft schema.",
   "Preserve uncertainty as assumptions or missing fields; do not invent exact dates, times, or locations.",
   "A vague part-of-day phrase such as 晚上, tonight, or in the evening is a timeWindow, not an exact timestamp: set startTimeFlexibility and endTimeFlexibility to flexible unless the source explicitly says the time is fixed or tied to a ticket/tour/reservation.",
+  "When a calendar date is known but no exact clock time is stated, set localDate to the ISO date, keep startsAt null, and preserve any part-of-day phrase in timeWindow.",
   "When the source says arriving at, going to, staying in, or lodging in a named place (for example, 到 Page，想住 Holiday Inn), set location to that named place and keep the lodging property in title or notes.",
 ].join(" ");
 
@@ -262,10 +266,10 @@ const extractionDraftJsonSchema = {
   properties: {
     items: { type: "array", items: {
       type: "object", additionalProperties: false,
-      required: ["kind", "kinds", "shape", "shapeSource", "title", "status", "startsAt", "endsAt", "timezone", "timezoneSource", "originTimezone", "destinationTimezone", "location", "origin", "destination", "notes", "deadlineAt", "sourceLine", "sourceExcerpt", "startTimeFlexibility", "endTimeFlexibility", "timeWindow", "assumptions"],
+      required: ["kind", "kinds", "shape", "shapeSource", "title", "status", "localDate", "startsAt", "endsAt", "timezone", "timezoneSource", "originTimezone", "destinationTimezone", "location", "origin", "destination", "notes", "deadlineAt", "sourceLine", "sourceExcerpt", "startTimeFlexibility", "endTimeFlexibility", "timeWindow", "assumptions"],
       properties: {
         kind: { type: "string", enum: [...tripItemKinds] }, kinds: { type: "array", items: { type: "string", enum: [...tripItemKinds] } }, shape: { type: "string", enum: [...proposalShapes] }, shapeSource: { type: "string", enum: [...proposalShapeSources] }, title: { type: "string" }, status: { type: "string", enum: [...tripItemStatuses] },
-        startsAt: { type: ["string", "null"] }, endsAt: { type: ["string", "null"] }, timezone: { type: ["string", "null"] }, timezoneSource: { type: ["string", "null"], enum: [...timezoneSources, null] }, originTimezone: { type: ["string", "null"] }, destinationTimezone: { type: ["string", "null"] }, location: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, notes: { type: ["string", "null"] }, deadlineAt: { type: ["string", "null"] }, sourceLine: { type: ["integer", "null"] }, sourceExcerpt: { type: ["string", "null"] }, startTimeFlexibility: { type: "string", enum: [...timeFlexibilities] }, endTimeFlexibility: { type: "string", enum: [...timeFlexibilities] }, timeWindow: { type: ["string", "null"], enum: [...timeWindows, null] }, assumptions: { type: "array", items: { type: "string" } },
+        localDate: { type: ["string", "null"] }, startsAt: { type: ["string", "null"] }, endsAt: { type: ["string", "null"] }, timezone: { type: ["string", "null"] }, timezoneSource: { type: ["string", "null"], enum: [...timezoneSources, null] }, originTimezone: { type: ["string", "null"] }, destinationTimezone: { type: ["string", "null"] }, location: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, notes: { type: ["string", "null"] }, deadlineAt: { type: ["string", "null"] }, sourceLine: { type: ["integer", "null"] }, sourceExcerpt: { type: ["string", "null"] }, startTimeFlexibility: { type: "string", enum: [...timeFlexibilities] }, endTimeFlexibility: { type: "string", enum: [...timeFlexibilities] }, timeWindow: { type: ["string", "null"], enum: [...timeWindows, null] }, assumptions: { type: "array", items: { type: "string" } },
       },
     } },
     missing: { type: "array", items: { type: "object", additionalProperties: false, required: ["field", "message", "required"], properties: { field: { type: "string" }, message: { type: "string" }, required: { type: "boolean" } } } },

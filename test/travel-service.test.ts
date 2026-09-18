@@ -702,6 +702,22 @@ test("an existing SQLite database gains the replacement relationship column", ()
   rmSync(directory, { recursive: true, force: true });
 });
 
+test("an existing SQLite database gains date-only columns without changing legacy records", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-date-only-migration-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  initial.connection.exec(`ALTER TABLE proposals DROP COLUMN local_date; ALTER TABLE trip_items DROP COLUMN local_date;`);
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const proposalColumns = upgraded.connection.prepare(`PRAGMA table_info(proposals)`).all() as Array<{ name: string }>;
+  const tripItemColumns = upgraded.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
+  assert.equal(proposalColumns.some((column) => column.name === "local_date"), true);
+  assert.equal(tripItemColumns.some((column) => column.name === "local_date"), true);
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
 test("an existing SQLite database backfills legacy location Proposals as inferred Points", () => {
   const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-shape-migration-"));
   const databasePath = join(directory, "travel.sqlite");

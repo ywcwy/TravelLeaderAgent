@@ -33,6 +33,7 @@ export interface ExtractedTripItem {
   shapeSource: ProposalShapeSource;
   title: string;
   status: TripItemStatus;
+  localDate?: string;
   startsAt?: string;
   endsAt?: string;
   timezone?: string;

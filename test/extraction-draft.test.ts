@@ -164,6 +164,42 @@ test("only the originating user can confirm a Draft into pending Proposals", asy
   db.close();
 });
 
+test("confirms a flexible date-only Draft and preserves localDate through Proposal and Trip Item", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-date-only", "Date-only 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Date-only 旅程", "Asia/Taipei");
+  service.addMember("system-admin", trip.id, "U-origin", "Origin", "owner");
+  const source = "2026-10-01 晚上入住 Page 的 Holiday Inn";
+  const payload = fixture(source);
+  payload.items[0]!.startsAt = undefined;
+  payload.items[0]!.endsAt = undefined;
+  payload.items[0]!.localDate = "2026-10-01";
+  payload.items[0]!.startTimeFlexibility = "flexible";
+  payload.items[0]!.endTimeFlexibility = "flexible";
+  payload.missing = [];
+  const draft = await service.createExtractionDraft(trip.id, source, {
+    idempotencyKey: "draft:date-only",
+    provenance: { provider: "line", messageId: "message-date-only", userId: "U-origin" },
+  }, new FakeLlmAdapter({ [source]: payload }));
+
+  const confirmed = service.confirmExtractionDraft(trip.id, "U-origin", draft.id);
+  const proposal = service.getProposal(trip.id, confirmed.proposalIds[0]!);
+  assert.equal(proposal?.localDate, "2026-10-01");
+  assert.equal(proposal?.startsAt, undefined);
+  assert.equal(proposal?.timeWindow, "evening");
+  const item = service.confirmProposal(trip.id, "U-origin", confirmed.proposalIds[0]!);
+  assert.equal(item.localDate, "2026-10-01");
+  assert.equal(item.startsAt, undefined);
+  const queried = service.queryActiveTrip(trip.id, "U-origin", { date: "2026-10-01" });
+  assert.equal(queried.confirmed[0]?.localDate, "2026-10-01");
+  const proposalColumns = db.connection.prepare(`PRAGMA table_info(proposals)`).all() as Array<{ name: string }>;
+  const tripItemColumns = db.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
+  assert.ok(proposalColumns.some((column) => column.name === "local_date"));
+  assert.ok(tripItemColumns.some((column) => column.name === "local_date"));
+  db.close();
+});
+
 test("required missing Draft information blocks confirmation", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

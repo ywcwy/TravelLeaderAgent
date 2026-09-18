@@ -19,6 +19,7 @@ test("Grok-compatible adapter sends the contract and validates structured output
   assert.equal(body.text.format.type, "json_schema");
   assert.equal(body.text.format.name, "extraction_draft");
   assert.match(body.instructions, /timeWindow/);
+  assert.match(body.instructions, /localDate/);
   assert.match(body.instructions, /set location/);
 });
 
