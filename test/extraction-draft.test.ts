@@ -282,7 +282,7 @@ test("groups 到地點 context when the lodging candidate lacks a location", asy
   const source = "10/2晚上到Page, 想著另一間飯店";
   const lodging = { ...fixture(source).items[0]!, title: "另一間飯店", localDate: "2026-10-02", startsAt: undefined, endsAt: undefined, location: undefined, kind: "other" as const, kinds: ["other" as const] };
   const arrival = { ...lodging, title: "到Page", location: "Page" };
-  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:arrive-missing-location" }, new FakeLlmAdapter({ [source]: { items: [lodging, arrival], missing: [], assumptions: [], issues: [{ code: "model_context", message: "Retain transportation to Page, but remove lodging context." }], sourceExcerpt: source } }));
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:arrive-missing-location" }, new FakeLlmAdapter({ [source]: { items: [lodging, arrival], missing: [], assumptions: [], issues: [{ code: "arbitrary_provider_code", message: "Retain transportation to Page, but remove lodging context." }], sourceExcerpt: source } }));
   assert.deepEqual(draft.items.map((item) => item.title), ["另一間飯店"]);
   assert.deepEqual(draft.issues.map((issue) => issue.code), ["contextual_phrase"]);
   db.close();

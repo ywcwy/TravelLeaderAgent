@@ -173,7 +173,7 @@ export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sou
     kept.push(item);
   }
   const retainedTransport = kept.some((item) => item.kind === "transport" || item.kinds.includes("transport"));
-  const actionableIssues = issues.filter((issue) => !(issue.code === "model_context" && /retain transportation .*remove lodging context/i.test(issue.message) && !retainedTransport));
+  const actionableIssues = issues.filter((issue) => !(/retain transportation .*remove lodging context/i.test(issue.message) && !retainedTransport));
   return { ...payload, items: kept, issues: actionableIssues };
 }
 
