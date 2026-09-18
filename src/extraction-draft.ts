@@ -174,7 +174,7 @@ export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sou
 }
 
 function isArrivalCandidate(item: ExtractionDraftItem): boolean {
-  return /\barriv(?:al|e|ing)?\b|抵達|到達|抵店/iu.test(item.title);
+  return /^到|\barriv(?:al|e|ing)?\b|抵達|到達|抵店/iu.test(item.title);
 }
 
 function isDateOnlyTimestamp(value: string): boolean {
