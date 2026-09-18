@@ -172,7 +172,9 @@ export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sou
     seen.set(duplicateKey, item);
     kept.push(item);
   }
-  return { ...payload, items: kept, issues };
+  const retainedTransport = kept.some((item) => item.kind === "transport" || item.kinds.includes("transport"));
+  const actionableIssues = issues.filter((issue) => !(issue.code === "model_context" && /retain transportation .*remove lodging context/i.test(issue.message) && !retainedTransport));
+  return { ...payload, items: kept, issues: actionableIssues };
 }
 
 function isArrivalCandidate(item: ExtractionDraftItem): boolean {
