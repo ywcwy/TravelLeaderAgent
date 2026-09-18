@@ -136,6 +136,8 @@ export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sou
   const hasSeparateArrival = /(?:separate|separately|another|另外|獨立|單獨).{0,24}(?:arrival|arriv|抵達|到達)/iu.test(sourceContent)
     || /(?:arrival|arriv|抵達|到達).{0,24}(?:separate|separately|another|另外|獨立|單獨)/iu.test(sourceContent);
   const lodgingLocations = new Set(items.filter((item) => item.kind === "lodging" && item.location).map((item) => item.location!.trim().toLocaleLowerCase()));
+  const hasLodgingContext = /住宿|飯店|酒店|旅館|hotel|lodging|stay(?:ing)?|住/iu.test(sourceContent)
+    || items.some((item) => item.kind === "lodging" || /住宿|飯店|酒店|旅館|hotel|lodging|stay(?:ing)?/iu.test(item.title));
   const kept: ExtractionDraftItem[] = [];
   const seen = new Map<string, ExtractionDraftItem>();
   for (const item of items) {
@@ -146,7 +148,7 @@ export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sou
       issues.push({ code: "low_information_item", message: `排除低資訊行程「${item.title}」：缺少可用地點與時間。` });
       continue;
     }
-    if (arrival && !hasSeparateArrival && locationKey && lodgingLocations.has(locationKey) && (!item.startsAt || isDateOnlyTimestamp(item.startsAt))) {
+    if (arrival && !hasSeparateArrival && (!item.startsAt || isDateOnlyTimestamp(item.startsAt)) && ((locationKey && lodgingLocations.has(locationKey)) || hasLodgingContext)) {
       issues.push({ code: "contextual_phrase", message: `「${item.title}」視為住宿情境，不另建立 Arrival 行程。` });
       continue;
     }

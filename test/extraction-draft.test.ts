@@ -274,6 +274,19 @@ test("groups Chinese 到地點 wording as lodging context", async () => {
   db.close();
 });
 
+test("groups 到地點 context when the lodging candidate lacks a location", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-arrive-missing-location", "缺少地點上下文群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "缺少地點上下文旅程", "Asia/Taipei");
+  const source = "10/2晚上到Page, 想著另一間飯店";
+  const lodging = { ...fixture(source).items[0]!, title: "另一間飯店", localDate: "2026-10-02", startsAt: undefined, endsAt: undefined, location: undefined, kind: "other" as const, kinds: ["other" as const] };
+  const arrival = { ...lodging, title: "到Page", location: "Page" };
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:arrive-missing-location" }, new FakeLlmAdapter({ [source]: { items: [lodging, arrival], missing: [], assumptions: [], issues: [], sourceExcerpt: source } }));
+  assert.deepEqual(draft.items.map((item) => item.title), ["另一間飯店"]);
+  db.close();
+});
+
 test("retains an explicitly timed Arrival as a separate item", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
