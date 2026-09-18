@@ -200,7 +200,7 @@ function validateItem(value: unknown, index: number): ExtractionDraftItem {
   validateEnum(base.shape, proposalShapes, `items[${index}].shape`);
   validateEnum(base.shapeSource, proposalShapeSources, `items[${index}].shapeSource`);
   validateEnum(base.status, tripItemStatuses, `items[${index}].status`);
-  if (value.localDate !== undefined && (typeof value.localDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.localDate))) {
+  if (value.localDate !== undefined && value.localDate !== null && (typeof value.localDate !== "string" || !isIsoCalendarDate(value.localDate))) {
     throw new ExtractionDraftValidationError(`items[${index}].localDate must be an ISO calendar date.`);
   }
   for (const field of ["startsAt", "endsAt", "title", "sourceExcerpt"] as const) {
@@ -249,6 +249,13 @@ function validateEnum<T extends string>(value: unknown, allowed: readonly T[], p
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isIsoCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
 }
 
 const extractionInstructions = [

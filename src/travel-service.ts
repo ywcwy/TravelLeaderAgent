@@ -901,10 +901,9 @@ function toDecision(row: DecisionRow): Decision {
 }
 
 function compareScheduledItems(left: { localDate?: string; startsAt?: string; title: string; id: string }, right: { localDate?: string; startsAt?: string; title: string; id: string }): number {
-  // A date-only value has no instant; keep it out of Unix-time ordering and
-  // place it deterministically after timed records using the tie-breakers.
-  const leftTime = left.startsAt && !isDateOnly(left.startsAt) ? Date.parse(left.startsAt) : Number.POSITIVE_INFINITY;
-  const rightTime = right.startsAt && !isDateOnly(right.startsAt) ? Date.parse(right.startsAt) : Number.POSITIVE_INFINITY;
+  // Date-only values sort by their calendar date; values without any date sort last.
+  const leftTime = left.startsAt && !isDateOnly(left.startsAt) ? Date.parse(left.startsAt) : Date.parse(left.localDate ?? left.startsAt ?? "T") || Number.POSITIVE_INFINITY;
+  const rightTime = right.startsAt && !isDateOnly(right.startsAt) ? Date.parse(right.startsAt) : Date.parse(right.localDate ?? right.startsAt ?? "T") || Number.POSITIVE_INFINITY;
   return leftTime - rightTime || left.title.localeCompare(right.title) || left.id.localeCompare(right.id);
 }
 

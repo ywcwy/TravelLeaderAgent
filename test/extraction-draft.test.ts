@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FakeLlmAdapter, renderExtractionDraft } from "../src/extraction-draft.ts";
+import { FakeLlmAdapter, renderExtractionDraft, validateExtractionDraftPayload } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
 import { TravelDatabase } from "../src/database.ts";
 import { ConflictError, PermissionError, TravelService } from "../src/travel-service.ts";
@@ -198,6 +198,26 @@ test("confirms a flexible date-only Draft and preserves localDate through Propos
   assert.ok(proposalColumns.some((column) => column.name === "local_date"));
   assert.ok(tripItemColumns.some((column) => column.name === "local_date"));
   db.close();
+});
+
+test("accepts a provider item with a null localDate", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-null-date", "Null date 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Null date 旅程", "Asia/Taipei");
+  const source = "有待補日期的住宿";
+  const payload = fixture(source);
+  (payload.items[0] as unknown as { localDate: string | null }).localDate = null;
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:null-date" }, new FakeLlmAdapter({ [source]: payload }));
+  assert.equal(draft.status, "pending_confirmation");
+  assert.equal(draft.items[0]?.localDate, null);
+  db.close();
+});
+
+test("rejects an invalid calendar date in an extraction item", () => {
+  const payload = fixture("invalid calendar date");
+  payload.items[0]!.localDate = "2026-02-30";
+  assert.throws(() => validateExtractionDraftPayload(payload), /ISO calendar date/);
 });
 
 test("required missing Draft information blocks confirmation", async () => {

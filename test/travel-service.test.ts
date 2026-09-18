@@ -204,7 +204,7 @@ test("queries each timed item by its local date and renders timezone context", (
 
   const localDateResult = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-01" });
   assert.deepEqual(localDateResult.pending.map((item) => item.title).sort(), ["Date-only Page", "Las Vegas evening", "Page lodging", "St George boundary", "Unknown fallback"].sort());
-  assert.equal(localDateResult.pending.at(-1)?.title, "Date-only Page");
+  assert.equal(localDateResult.pending[0]?.title, "Date-only Page");
   const rendered = renderItineraryQuery(localDateResult);
   assert.match(rendered, /America\/Los_Angeles/);
   assert.match(rendered, /America\/Phoenix/);
