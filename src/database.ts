@@ -66,6 +66,9 @@ export class TravelDatabase {
         status TEXT NOT NULL CHECK (status IN ('pending_confirmation', 'confirmed', 'cancelled', 'failed')),
         payload_json TEXT NOT NULL,
         proposal_ids_json TEXT NOT NULL DEFAULT '[]',
+        provider TEXT NOT NULL DEFAULT 'unknown',
+        model TEXT NOT NULL DEFAULT 'unknown',
+        prompt_version TEXT NOT NULL DEFAULT 'extraction-draft-v3',
         confirmed_at TEXT,
         cancelled_at TEXT,
         cancelled_by TEXT,
@@ -231,7 +234,7 @@ export class TravelDatabase {
       this.connection.exec(`PRAGMA foreign_keys = OFF`);
       try {
         this.connection.exec("BEGIN IMMEDIATE");
-        this.connection.exec(`CREATE TABLE extraction_drafts_v2 (id TEXT PRIMARY KEY, trip_id TEXT NOT NULL REFERENCES trips(id), source_id TEXT NOT NULL REFERENCES sources(id), originating_user_id TEXT, revision INTEGER NOT NULL DEFAULT 1, previous_draft_id TEXT REFERENCES extraction_drafts(id), status TEXT NOT NULL CHECK (status IN ('pending_confirmation', 'confirmed', 'cancelled', 'failed')), payload_json TEXT NOT NULL, proposal_ids_json TEXT NOT NULL DEFAULT '[]', confirmed_at TEXT, cancelled_at TEXT, cancelled_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+        this.connection.exec(`CREATE TABLE extraction_drafts_v2 (id TEXT PRIMARY KEY, trip_id TEXT NOT NULL REFERENCES trips(id), source_id TEXT NOT NULL REFERENCES sources(id), originating_user_id TEXT, revision INTEGER NOT NULL DEFAULT 1, previous_draft_id TEXT REFERENCES extraction_drafts(id), status TEXT NOT NULL CHECK (status IN ('pending_confirmation', 'confirmed', 'cancelled', 'failed')), payload_json TEXT NOT NULL, proposal_ids_json TEXT NOT NULL DEFAULT '[]', provider TEXT NOT NULL DEFAULT 'unknown', model TEXT NOT NULL DEFAULT 'unknown', prompt_version TEXT NOT NULL DEFAULT 'extraction-draft-v3', confirmed_at TEXT, cancelled_at TEXT, cancelled_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
         this.connection.exec(`INSERT INTO extraction_drafts_v2 (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) SELECT id, trip_id, source_id, ${legacyOriginatingUser}, 1, NULL, status, payload_json, ${legacyProposalIds}, ${legacyConfirmedAt}, NULL, NULL, created_at, updated_at FROM extraction_drafts`);
         this.connection.exec(`DROP TABLE extraction_drafts`);
         this.connection.exec(`ALTER TABLE extraction_drafts_v2 RENAME TO extraction_drafts`);
@@ -251,6 +254,9 @@ export class TravelDatabase {
     if (!extractionDraftColumns.some((column) => column.name === "previous_draft_id")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN previous_draft_id TEXT REFERENCES extraction_drafts(id)`);
     if (!extractionDraftColumns.some((column) => column.name === "cancelled_at")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN cancelled_at TEXT`);
     if (!extractionDraftColumns.some((column) => column.name === "cancelled_by")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN cancelled_by TEXT`);
+    if (!extractionDraftColumns.some((column) => column.name === "provider")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN provider TEXT NOT NULL DEFAULT 'unknown'`);
+    if (!extractionDraftColumns.some((column) => column.name === "model")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN model TEXT NOT NULL DEFAULT 'unknown'`);
+    if (!extractionDraftColumns.some((column) => column.name === "prompt_version")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN prompt_version TEXT NOT NULL DEFAULT 'extraction-draft-v3'`);
     this.connection.exec(`CREATE UNIQUE INDEX IF NOT EXISTS extraction_draft_source_revision ON extraction_drafts(source_id, revision)`);
     const decisionColumns = this.connection.prepare(`PRAGMA table_info(decisions)`).all() as Array<{ name: string }>;
     const decisionTable = this.connection.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'decisions'`).get() as { sql: string } | undefined;

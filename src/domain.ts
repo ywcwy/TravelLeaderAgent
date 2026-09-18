@@ -78,6 +78,12 @@ export interface ExtractionDraftPayload {
   sourceExcerpt: string;
 }
 
+export interface ExtractionDraftMetadata {
+  provider: string;
+  model: string;
+  promptVersion: string;
+}
+
 export interface ExtractionDraft extends ExtractionDraftPayload {
   id: string;
   tripId: string;
@@ -86,6 +92,7 @@ export interface ExtractionDraft extends ExtractionDraftPayload {
   revision: number;
   previousDraftId: string | null;
   status: ExtractionDraftStatus;
+  metadata: ExtractionDraftMetadata;
   proposalIds: string[];
   confirmedAt: string | null;
   cancelledAt: string | null;

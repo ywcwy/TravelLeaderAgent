@@ -47,6 +47,7 @@ test("persists one pending Extraction Draft without creating a Proposal", async 
   assert.equal(draft.items[0]?.timeWindow, "evening");
   assert.equal(draft.missing[0]?.required, false);
   assert.equal(draft.sourceExcerpt, source);
+  assert.deepEqual(draft.metadata, { provider: "fake", model: "fake", promptVersion: "extraction-draft-v3" });
   assert.equal(service.reviewTrip(trip.id).pending.length, 0);
   assert.match(renderExtractionDraft(draft), new RegExp(`Extraction Draft ${draft.id}`));
   assert.match(renderExtractionDraft(draft), /請確認：確認 X-/);

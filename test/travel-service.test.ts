@@ -718,6 +718,22 @@ test("an existing SQLite database gains date-only columns without changing legac
   rmSync(directory, { recursive: true, force: true });
 });
 
+test("an existing SQLite database gains Extraction Draft provider metadata columns", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-draft-metadata-migration-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  initial.connection.exec(`ALTER TABLE extraction_drafts DROP COLUMN provider; ALTER TABLE extraction_drafts DROP COLUMN model; ALTER TABLE extraction_drafts DROP COLUMN prompt_version;`);
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const columns = upgraded.connection.prepare(`PRAGMA table_info(extraction_drafts)`).all() as Array<{ name: string }>;
+  assert.equal(columns.some((column) => column.name === "provider"), true);
+  assert.equal(columns.some((column) => column.name === "model"), true);
+  assert.equal(columns.some((column) => column.name === "prompt_version"), true);
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
 test("an existing SQLite database backfills legacy location Proposals as inferred Points", () => {
   const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-shape-migration-"));
   const databasePath = join(directory, "travel.sqlite");

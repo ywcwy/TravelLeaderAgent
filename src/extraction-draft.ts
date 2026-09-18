@@ -7,7 +7,9 @@ import {
   tripItemStatuses,
   timezoneSources,
 } from "./domain.ts";
-import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftPayload } from "./domain.ts";
+import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload } from "./domain.ts";
+
+export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v3";
 
 export interface LlmExtractionInput {
   sourceContent: string;
@@ -19,6 +21,7 @@ export interface LlmExtractionInput {
 
 export interface LlmAdapter {
   extract(input: LlmExtractionInput): ExtractionDraftPayload | Promise<ExtractionDraftPayload>;
+  readonly metadata?: ExtractionDraftMetadata;
 }
 
 export class ExtractionDraftValidationError extends Error {}
@@ -42,6 +45,10 @@ export class OpenAiCompatibleLlmAdapter implements LlmAdapter {
     const timeoutMs = options.timeoutMs ?? 20_000;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new LlmProviderError("OpenAI provider timeout must be a positive integer.");
     this.options = { apiKey: options.apiKey, model: options.model, timeoutMs, endpoint: options.endpoint ?? "https://api.openai.com/v1/responses", fetchImpl: options.fetchImpl };
+  }
+
+  get metadata(): ExtractionDraftMetadata {
+    return { provider: this.options.endpoint.includes("x.ai") ? "grok" : "openai", model: this.options.model, promptVersion: EXTRACTION_PROMPT_VERSION };
   }
 
   async extract(input: LlmExtractionInput): Promise<ExtractionDraftPayload> {
@@ -180,6 +187,10 @@ export class FakeLlmAdapter implements LlmAdapter {
 
   constructor(fixtures: ReadonlyMap<string, ExtractionDraftPayload> | Record<string, ExtractionDraftPayload> = {}) {
     this.fixtures = fixtures instanceof Map ? new Map(fixtures) : new Map(Object.entries(fixtures));
+  }
+
+  get metadata(): ExtractionDraftMetadata {
+    return { provider: "fake", model: "fake", promptVersion: EXTRACTION_PROMPT_VERSION };
   }
 
   extract(input: LlmExtractionInput): ExtractionDraftPayload {

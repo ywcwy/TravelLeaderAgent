@@ -1,6 +1,6 @@
 # LINE LLM provider smoke test
 
-This is the production-like Phase 9.5 check. Use a dedicated LINE Official
+This is the production-like Phase 10.4 check. Use a dedicated LINE Official
 Account, test group, isolated SQLite file, and a short-lived API key. Never
 record the API key, raw webhook body, reply token, or full travel source in the
 test result.
@@ -64,7 +64,7 @@ Draft is `confirmed`, the Proposal is `pending`, and no Trip Item was created:
 
 ```sh
 sqlite3 ./data/line-llm-smoke.sqlite \
-  "select id,status,revision,proposal_ids_json from extraction_drafts order by updated_at desc limit 5;"
+  "select id,status,revision,provider,model,prompt_version,proposal_ids_json from extraction_drafts order by updated_at desc limit 5;"
 sqlite3 ./data/line-llm-smoke.sqlite \
   "select id,proposal_status,item_status from proposals order by created_at desc limit 5;"
 sqlite3 ./data/line-llm-smoke.sqlite \
@@ -82,3 +82,17 @@ Redeliver the same webhook event and verify the event becomes a duplicate while
 Source, Draft, and Proposal counts remain unchanged. A non-originating member
 cannot confirm the Draft. Stop ngrok and the service after the test; rotate or
 revoke the temporary API key when finished.
+
+## Phase 10 regression checklist
+
+The automated suite covers the provider boundary and Fake Adapter equivalents
+for: lodging context versus a separate Arrival, multiple independent items,
+vague Time Windows, required times, missing facts, low-information candidates,
+duplicates, contradictions, valid empty extraction, provider failures, Draft
+revision, confirmation blocking, and idempotent redelivery. The real smoke
+run only proves the external OpenAI → LINE path; it does not require storing
+the provider response body.
+
+For a successful run, record only the Draft/Proposal IDs, statuses, revision,
+provider/model/prompt version, and aggregate SQLite counts. Do not record API
+keys, raw webhook payloads, Reply Tokens, or the full travel source.

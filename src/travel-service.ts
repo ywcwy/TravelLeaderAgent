@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
-import { guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
-import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftPayload, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import { EXTRACTION_PROMPT_VERSION, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
+import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftMetadata, ExtractionDraftPayload, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -288,8 +288,9 @@ export class TravelService {
     }
     const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
     const timestamp = now();
-    this.db.connection.prepare(`INSERT OR IGNORE INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, '[]', NULL, NULL, NULL, ?, ?)`).run(
-      draftId, tripId, source.id, source.provider_user_id, status, JSON.stringify(payload), timestamp, timestamp,
+    const metadata = adapter.metadata ?? defaultExtractionMetadata();
+    this.db.connection.prepare(`INSERT OR IGNORE INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, '[]', ?, ?, ?, NULL, NULL, NULL, ?, ?)`).run(
+      draftId, tripId, source.id, source.provider_user_id, status, JSON.stringify(payload), metadata.provider, metadata.model, metadata.promptVersion, timestamp, timestamp,
     );
     const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(source.id) as ExtractionDraftRow | undefined;
     if (!persisted) throw new InvalidSourceError("The Extraction Draft could not be persisted.");
@@ -343,7 +344,7 @@ export class TravelService {
       status = "failed";
       payload = { items: [], missing: [], assumptions: [], issues: [{ code: "adapter_failure", message: error instanceof Error ? error.message : "LLM extraction failed." }], sourceExcerpt: source.content.trim().slice(0, 500) };
     }
-    return this.insertDraftRevision(tripId, current, status, payload);
+    return this.insertDraftRevision(tripId, current, status, payload, adapter.metadata);
   }
 
   confirmExtractionDraft(tripId: string, userId: string, draftId: string): { draft: ExtractionDraft; proposalIds: string[] } {
@@ -785,7 +786,7 @@ export class TravelService {
     });
   }
 
-  private insertDraftRevision(tripId: string, current: ExtractionDraftRow, status: ExtractionDraft["status"], payload: ExtractionDraftPayload): ExtractionDraft {
+  private insertDraftRevision(tripId: string, current: ExtractionDraftRow, status: ExtractionDraft["status"], payload: ExtractionDraftPayload, metadataOverride?: ExtractionDraftMetadata): ExtractionDraft {
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
       const latest = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(current.source_id) as ExtractionDraftRow | undefined;
@@ -793,8 +794,9 @@ export class TravelService {
       const revision = latest.revision + 1;
       const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
       const timestamp = now();
-      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', NULL, NULL, NULL, ?, ?)`).run(
-        draftId, tripId, current.source_id, current.originating_user_id, revision, current.id, status, JSON.stringify(payload), timestamp, timestamp,
+      const metadata = metadataOverride ?? { provider: current.provider ?? "unknown", model: current.model ?? "unknown", promptVersion: current.prompt_version ?? EXTRACTION_PROMPT_VERSION };
+      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, NULL, NULL, NULL, ?, ?)`).run(
+        draftId, tripId, current.source_id, current.originating_user_id, revision, current.id, status, JSON.stringify(payload), metadata.provider, metadata.model, metadata.promptVersion, timestamp, timestamp,
       );
       const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE id = ?`).get(draftId) as ExtractionDraftRow | undefined;
       if (!persisted) throw new InvalidSourceError(`Extraction Draft ${draftId} could not be persisted.`);
@@ -844,6 +846,9 @@ interface ExtractionDraftRow {
   revision: number;
   previous_draft_id: string | null;
   status: ExtractionDraft["status"];
+  provider: string | null;
+  model: string | null;
+  prompt_version: string | null;
   payload_json: string;
   proposal_ids_json: string;
   confirmed_at: string | null;
@@ -971,7 +976,11 @@ function toExtractionDraft(row: ExtractionDraftRow): ExtractionDraft {
   } catch (error) {
     throw new InvalidSourceError(`Extraction Draft ${row.id} contains invalid Proposal IDs: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return { id: row.id, tripId: row.trip_id, sourceId: row.source_id, originatingUserId: row.originating_user_id ?? null, revision: row.revision, previousDraftId: row.previous_draft_id ?? null, status: row.status, proposalIds, confirmedAt: row.confirmed_at ?? null, cancelledAt: row.cancelled_at ?? null, cancelledBy: row.cancelled_by ?? null, ...payload, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, tripId: row.trip_id, sourceId: row.source_id, originatingUserId: row.originating_user_id ?? null, revision: row.revision, previousDraftId: row.previous_draft_id ?? null, status: row.status, metadata: { provider: row.provider ?? "unknown", model: row.model ?? "unknown", promptVersion: row.prompt_version ?? EXTRACTION_PROMPT_VERSION }, proposalIds, confirmedAt: row.confirmed_at ?? null, cancelledAt: row.cancelled_at ?? null, cancelledBy: row.cancelled_by ?? null, ...payload, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+function defaultExtractionMetadata(): ExtractionDraftMetadata {
+  return { provider: "unknown", model: "unknown", promptVersion: EXTRACTION_PROMPT_VERSION };
 }
 
 function toTripItem(row: Record<string, unknown>, kinds = [row.kind as TripItem["kind"]]): TripItem {
