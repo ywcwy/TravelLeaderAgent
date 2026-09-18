@@ -14,6 +14,7 @@ export interface LlmExtractionInput {
   tripTimezone: string;
   currentDate: string;
   inputType: string;
+  existingDraft?: ExtractionDraftPayload;
 }
 
 export interface LlmAdapter {
@@ -200,9 +201,12 @@ export function renderExtractionDraft(draft: Pick<ExtractionDraft, "id" | "statu
   const totalPages = Math.max(1, Math.ceil(itemLines.length / pageSize));
   const lines = [`Extraction Draft ${draft.id}｜${draft.status}｜第 ${Math.min(page, totalPages)}/${totalPages} 頁`, ...(itemLines.length > 0 ? itemLines.slice((page - 1) * pageSize, page * pageSize) : ["- 尚未解析出行程項目"])] as string[];
   if (page === 1) {
-    if (draft.missing.length > 0) lines.push(`缺少：${draft.missing.map((entry) => `${entry.field}${entry.required ? "（必要）" : "（可選）"}`).join("、")}`);
-    if (draft.assumptions.length > 0) lines.push(`假設：${draft.assumptions.join("；")}`);
-    if (draft.issues.length > 0) lines.push(`問題：${draft.issues.map((issue) => issue.message).join("；")}`);
+    if (draft.missing.length > 0) lines.push(`必要資訊待補：${draft.missing.map((entry) => `${entry.field}${entry.required ? "（必要）" : "（可選）"}${entry.message ? `｜${entry.message}` : ""}`).join("；")}`);
+    if (draft.assumptions.length > 0) lines.push(`模型假設：${draft.assumptions.join("；")}`);
+    const ignored = draft.issues.filter((issue) => /^(?:low_information_item|duplicate_item|contextual_phrase|contradictory_item)$/.test(issue.code));
+    const otherIssues = draft.issues.filter((issue) => !ignored.includes(issue));
+    if (ignored.length > 0) lines.push(`已忽略：${ignored.map((issue) => issue.message).join("；")}`);
+    if (otherIssues.length > 0) lines.push(`需要注意：${otherIssues.map((issue) => issue.message).join("；")}`);
     if (draft.status === "pending_confirmation") lines.push(`請確認：確認 ${draft.id}`);
     else if (draft.status === "failed") lines.push(`請重試：重試 ${draft.id}`);
     else if (draft.status === "confirmed") lines.push(`已確認 Draft ${draft.id}`);
@@ -318,6 +322,7 @@ const extractionInstructions = [
   "When the source says arriving at, going to, staying in, or lodging in a named place (for example, 到 Page，想住 Holiday Inn), set location to that named place and keep the lodging property in title or notes.",
   "Group one user intention into one itinerary item: arrival wording used only to explain where a lodging is should remain context, not become a second item. Keep a separate Arrival only when the source explicitly requests it or provides an independently actionable time/location.",
   "Exclude low-information candidates such as Arrival with neither a usable location nor a date/time; report them in issues with code low_information_item. Do not invent recommendations. Do not emit duplicate candidates; if two candidates conflict, keep the source facts and report the ambiguity in issues.",
+  "When existingDraft is present, treat sourceContent as a natural-language correction to that Draft and return the complete revised item batch. Preserve unchanged items, apply additions, and remove items the user explicitly excludes; do not create Proposals at extraction time.",
 ].join(" ");
 
 const extractionDraftJsonSchema = {

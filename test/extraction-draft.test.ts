@@ -61,6 +61,20 @@ test("renders long Drafts in bounded pages with a continuation command", () => {
   assert.ok(page.length <= 500);
 });
 
+test("renders missing fields, assumptions, and ignored candidates as distinct sections", () => {
+  const text = renderExtractionDraft({
+    id: "X-UX000001",
+    status: "pending_confirmation",
+    items: [],
+    missing: [{ field: "location", message: "請補充住宿城市。", required: true }],
+    assumptions: ["以旅程時區解讀日期。"],
+    issues: [{ code: "low_information_item", message: "排除低資訊行程「Arrival」。" }],
+  });
+  assert.match(text, /必要資訊待補：location（必要）｜請補充住宿城市/);
+  assert.match(text, /模型假設：以旅程時區解讀日期/);
+  assert.match(text, /已忽略：排除低資訊行程/);
+});
+
 test("rejects Sensitive Travel Data before invoking the provider", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

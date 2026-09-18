@@ -98,6 +98,33 @@ test("edits a LINE Draft through the Fake Adapter without creating a new Source"
   db.close();
 });
 
+test("passes the existing Draft to a natural-language edit and keeps batch confirmation", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-draft-edit-context", "Draft context 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Draft context 旅程", "Asia/Taipei");
+  const source = "10/1 住宿 Page 與晚餐";
+  const initial = await travel.createExtractionDraft(trip.id, source, { idempotencyKey: "line:draft:edit-context", type: "line_text", provenance: { provider: "line", messageId: "source-context", groupId: group.lineGroupId, userId: "U-origin" } }, new FakeLlmAdapter());
+  let receivedExisting: unknown;
+  const adapter = {
+    extract: (input: { existingDraft?: { items: Array<{ title: string }> } }) => {
+      receivedExisting = input.existingDraft;
+      return { items: [{ ...initial.items[0]!, title: "Page lodging", location: "Page" }], missing: [], assumptions: [], issues: [], sourceExcerpt: source };
+    },
+  };
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEDRAFTEDITCTX00000000", messageId: "draft-edit-context", groupId: group.lineGroupId, userId: "U-origin", tripId: trip.id, text: `修改 ${initial.id}｜排除晚餐，只保留住宿`, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "edit-context-reply" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, adapter);
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal((receivedExisting as { items: Array<{ title: string }> }).items[0]?.title, initial.items[0]?.title);
+  const latest = travel.getExtractionDraft(trip.id, initial.id) ?? db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(initial.sourceId);
+  assert.match(replies[0] ?? "", /Extraction Draft X-/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM proposals WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.ok(latest);
+  db.close();
+});
+
 test("rejects Sensitive Travel Data before a LINE Draft edit reaches the adapter", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");

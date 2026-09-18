@@ -1,7 +1,7 @@
 import type { TravelService } from "./travel-service.ts";
 import type { WebhookInbox, WebhookInboxEvent } from "./webhook-inbox.ts";
 import { draftCommandHelp, itineraryQueryHelp, parseDraftCommand, parseItineraryMessage, parseProposalCommand, proposalCommandHelp, renderItineraryQuery } from "./itinerary-query.ts";
-import { renderExtractionDraft, type LlmAdapter } from "./extraction-draft.ts";
+import { guardExtractionDraftPayload, renderExtractionDraft, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
 
 export type LineReplySender = (replyToken: string, text: string) => void | Promise<void>;
 
@@ -129,8 +129,16 @@ export class LineSourceWorker {
       }
       const trip = this.travel.getTrip(event.tripId);
       if (!trip) throw new Error(`Trip ${event.tripId} was not found.`);
+      const currentDraft = this.travel.getExtractionDraft(event.tripId, command.draftId);
+      if (!currentDraft) throw new Error(`Extraction Draft ${command.draftId} was not found.`);
       this.travel.assertSafeExtractionContent(command.content);
-      const payload = await this.extractionAdapter.extract({ sourceContent: command.content, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10), inputType: "line_text" });
+      const payload = guardExtractionDraftPayload(validateExtractionDraftPayload(await this.extractionAdapter.extract({
+        sourceContent: command.content,
+        tripTimezone: trip.timezone,
+        currentDate: event.receivedAt.slice(0, 10),
+        inputType: "line_text",
+        existingDraft: { items: currentDraft.items, missing: currentDraft.missing, assumptions: currentDraft.assumptions, issues: currentDraft.issues, sourceExcerpt: currentDraft.sourceExcerpt },
+      })), `${currentDraft.sourceExcerpt}\n${command.content}`);
       const draft = this.travel.reviseExtractionDraft(event.tripId, event.userId, command.draftId, payload);
       return renderExtractionDraft(draft);
     } catch (error) {
