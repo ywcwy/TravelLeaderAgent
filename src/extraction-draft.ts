@@ -248,7 +248,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-const extractionInstructions = "Extract itinerary candidates from the user's source content. Return only JSON matching the extraction_draft schema. Preserve uncertainty as assumptions or missing fields; do not invent exact dates, times, or locations.";
+const extractionInstructions = [
+  "Extract itinerary candidates from the user's source content. Return only JSON matching the extraction_draft schema.",
+  "Preserve uncertainty as assumptions or missing fields; do not invent exact dates, times, or locations.",
+  "A vague part-of-day phrase such as 晚上, tonight, or in the evening is a timeWindow, not an exact timestamp: set startTimeFlexibility and endTimeFlexibility to flexible unless the source explicitly says the time is fixed or tied to a ticket/tour/reservation.",
+  "When the source says arriving at, going to, staying in, or lodging in a named place (for example, 到 Page，想住 Holiday Inn), set location to that named place and keep the lodging property in title or notes.",
+].join(" ");
 
 const extractionDraftJsonSchema = {
   type: "object",
