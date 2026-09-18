@@ -233,6 +233,59 @@ test("rejects an invalid calendar date in an extraction item", () => {
   assert.throws(() => validateExtractionDraftPayload(payload), /ISO calendar date/);
 });
 
+test("groups lodging context without creating a duplicate Arrival item", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-grouping", "Grouping 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Grouping 旅程", "Asia/Taipei");
+  const source = "10/1 晚上到 Page，想住 Holiday Inn";
+  const lodging = { ...fixture(source).items[0]!, title: "Holiday Inn", localDate: "2026-10-01", startsAt: undefined, endsAt: undefined, location: "Page", kind: "lodging" as const, kinds: ["lodging" as const] };
+  const arrival = { ...lodging, title: "Arriving in Page", kind: "other" as const, kinds: ["other" as const], startsAt: "2026-10-01" };
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:grouping" }, new FakeLlmAdapter({ [source]: { items: [lodging, arrival], missing: [], assumptions: [], issues: [], sourceExcerpt: source } }));
+  assert.deepEqual(draft.items.map((item) => item.title), ["Holiday Inn"]);
+  db.close();
+});
+
+test("retains an explicitly timed Arrival as a separate item", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-arrival", "Arrival 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Arrival 旅程", "Asia/Taipei");
+  const source = "10/1 18:00 抵達 Page，另外安排住宿 Holiday Inn";
+  const lodging = { ...fixture(source).items[0]!, title: "Holiday Inn", startsAt: "2026-10-01T19:00:00+08:00", location: "Page", kind: "lodging" as const, kinds: ["lodging" as const] };
+  const arrival = { ...lodging, title: "抵達 Page", kind: "other" as const, kinds: ["other" as const], startsAt: "2026-10-01T18:00:00+08:00" };
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:arrival" }, new FakeLlmAdapter({ [source]: { items: [lodging, arrival], missing: [], assumptions: [], issues: [], sourceExcerpt: source } }));
+  assert.deepEqual(draft.items.map((item) => item.title), ["Holiday Inn", "抵達 Page"]);
+  db.close();
+});
+
+test("excludes low-information Arrival candidates and records a review issue", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-low-info", "Low info 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Low info 旅程", "Asia/Taipei");
+  const source = "之後會抵達";
+  const arrival = { ...fixture(source).items[0]!, title: "Arrival", kind: "other" as const, kinds: ["other" as const], startsAt: undefined, localDate: undefined, timeWindow: undefined, location: undefined };
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:low-info" }, new FakeLlmAdapter({ [source]: { items: [arrival], missing: [], assumptions: [], issues: [], sourceExcerpt: source } }));
+  assert.equal(draft.items.length, 0);
+  assert.equal(draft.issues[0]?.code, "low_information_item");
+  db.close();
+});
+
+test("deduplicates identical model candidates without changing the Source", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-duplicate", "Duplicate 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Duplicate 旅程", "Asia/Taipei");
+  const source = "10/1 住宿 Page";
+  const item = { ...fixture(source).items[0]!, localDate: "2026-10-01", startsAt: undefined, endsAt: undefined, location: "Page" };
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:duplicate" }, new FakeLlmAdapter({ [source]: { items: [item, { ...item }], missing: [], assumptions: [], issues: [], sourceExcerpt: source } }));
+  assert.equal(draft.items.length, 1);
+  assert.equal(draft.issues[0]?.code, "duplicate_item");
+  assert.ok(service.getSource(draft.sourceId));
+  db.close();
+});
+
 test("required missing Draft information blocks confirmation", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

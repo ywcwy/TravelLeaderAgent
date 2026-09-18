@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
-import { validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
+import { guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
 import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftPayload, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
@@ -275,7 +275,7 @@ export class TravelService {
     let status: ExtractionDraft["status"] = "pending_confirmation";
     let payload: ExtractionDraftPayload;
     try {
-      payload = validateExtractionDraftPayload(await adapter.extract(input));
+      payload = guardExtractionDraftPayload(validateExtractionDraftPayload(await adapter.extract(input)), content);
     } catch (error) {
       status = "failed";
       payload = {
@@ -338,7 +338,7 @@ export class TravelService {
     let status: ExtractionDraft["status"] = "pending_confirmation";
     let payload: ExtractionDraftPayload;
     try {
-      payload = validateExtractionDraftPayload(await adapter.extract({ sourceContent: source.content, tripTimezone: trip.timezone, currentDate: currentDateInTimezone(trip.timezone), inputType: source.type }));
+      payload = guardExtractionDraftPayload(validateExtractionDraftPayload(await adapter.extract({ sourceContent: source.content, tripTimezone: trip.timezone, currentDate: currentDateInTimezone(trip.timezone), inputType: source.type })), source.content);
     } catch (error) {
       status = "failed";
       payload = { items: [], missing: [], assumptions: [], issues: [{ code: "adapter_failure", message: error instanceof Error ? error.message : "LLM extraction failed." }], sourceExcerpt: source.content.trim().slice(0, 500) };

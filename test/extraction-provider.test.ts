@@ -21,6 +21,8 @@ test("Grok-compatible adapter sends the contract and validates structured output
   assert.match(body.instructions, /timeWindow/);
   assert.match(body.instructions, /localDate/);
   assert.match(body.instructions, /set location/);
+  assert.match(body.instructions, /one itinerary item/);
+  assert.match(body.instructions, /low_information_item/);
 });
 
 test("Grok-compatible adapter turns provider failures and malformed output into safe errors", async () => {

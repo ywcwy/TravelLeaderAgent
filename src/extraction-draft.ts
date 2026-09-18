@@ -121,6 +121,53 @@ export function validateExtractionDraftPayload(payload: unknown): ExtractionDraf
   };
 }
 
+/** Apply deterministic guards after model extraction while retaining the immutable Source. */
+export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sourceContent: string): ExtractionDraftPayload {
+  const items = [...payload.items];
+  const issues = [...payload.issues];
+  const hasSeparateArrival = /(?:separate|separately|another|另外|獨立|單獨).{0,24}(?:arrival|arriv|抵達|到達)/iu.test(sourceContent)
+    || /(?:arrival|arriv|抵達|到達).{0,24}(?:separate|separately|another|另外|獨立|單獨)/iu.test(sourceContent);
+  const lodgingLocations = new Set(items.filter((item) => item.kind === "lodging" && item.location).map((item) => item.location!.trim().toLocaleLowerCase()));
+  const kept: ExtractionDraftItem[] = [];
+  const seen = new Map<string, ExtractionDraftItem>();
+  for (const item of items) {
+    const arrival = isArrivalCandidate(item);
+    const locationKey = item.location?.trim().toLocaleLowerCase();
+    const hasSchedule = Boolean(item.startsAt || item.localDate || item.timeWindow);
+    if (arrival && !item.location && !hasSchedule) {
+      issues.push({ code: "low_information_item", message: `排除低資訊行程「${item.title}」：缺少可用地點與時間。` });
+      continue;
+    }
+    if (arrival && !hasSeparateArrival && locationKey && lodgingLocations.has(locationKey) && (!item.startsAt || isDateOnlyTimestamp(item.startsAt))) {
+      issues.push({ code: "contextual_phrase", message: `「${item.title}」視為住宿情境，不另建立 Arrival 行程。` });
+      continue;
+    }
+    const duplicateKey = [item.kind, item.title.trim().toLocaleLowerCase(), locationKey ?? "", item.localDate ?? "", item.startsAt ?? "", item.endsAt ?? ""].join("|");
+    const previous = seen.get(duplicateKey);
+    if (previous) {
+      issues.push({ code: "duplicate_item", message: `排除重複行程「${item.title}」。` });
+      continue;
+    }
+    const contradictionKey = [item.kind, item.title.trim().toLocaleLowerCase(), locationKey ?? "", item.localDate ?? ""].join("|");
+    const contradiction = kept.find((candidate) => [candidate.kind, candidate.title.trim().toLocaleLowerCase(), candidate.location?.trim().toLocaleLowerCase() ?? "", candidate.localDate ?? ""].join("|") === contradictionKey && candidate.startsAt !== item.startsAt);
+    if (contradiction) {
+      issues.push({ code: "contradictory_item", message: `排除互相矛盾的行程「${item.title}」，保留先出現的候選。` });
+      continue;
+    }
+    seen.set(duplicateKey, item);
+    kept.push(item);
+  }
+  return { ...payload, items: kept, issues };
+}
+
+function isArrivalCandidate(item: ExtractionDraftItem): boolean {
+  return /\barriv(?:al|e|ing)?\b|抵達|到達|抵店/iu.test(item.title);
+}
+
+function isDateOnlyTimestamp(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
 /** A deterministic adapter used by tests and local development; it never calls a model. */
 export class FakeLlmAdapter implements LlmAdapter {
   private readonly fixtures: Map<string, ExtractionDraftPayload>;
@@ -264,6 +311,8 @@ const extractionInstructions = [
   "A vague part-of-day phrase such as 晚上, tonight, or in the evening is a timeWindow, not an exact timestamp: set startTimeFlexibility and endTimeFlexibility to flexible unless the source explicitly says the time is fixed or tied to a ticket/tour/reservation.",
   "When a calendar date is known but no exact clock time is stated, set localDate to the ISO date, keep startsAt null, and preserve any part-of-day phrase in timeWindow.",
   "When the source says arriving at, going to, staying in, or lodging in a named place (for example, 到 Page，想住 Holiday Inn), set location to that named place and keep the lodging property in title or notes.",
+  "Group one user intention into one itinerary item: arrival wording used only to explain where a lodging is should remain context, not become a second item. Keep a separate Arrival only when the source explicitly requests it or provides an independently actionable time/location.",
+  "Exclude low-information candidates such as Arrival with neither a usable location nor a date/time; report them in issues with code low_information_item. Do not invent recommendations. Do not emit duplicate candidates; if two candidates conflict, keep the source facts and report the ambiguity in issues.",
 ].join(" ");
 
 const extractionDraftJsonSchema = {
