@@ -7,17 +7,21 @@ import {
   tripItemStatuses,
   timezoneSources,
 } from "./domain.ts";
-import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftPayload } from "./domain.ts";
+import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload } from "./domain.ts";
+
+export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v3";
 
 export interface LlmExtractionInput {
   sourceContent: string;
   tripTimezone: string;
   currentDate: string;
   inputType: string;
+  existingDraft?: ExtractionDraftPayload;
 }
 
 export interface LlmAdapter {
   extract(input: LlmExtractionInput): ExtractionDraftPayload | Promise<ExtractionDraftPayload>;
+  readonly metadata?: ExtractionDraftMetadata;
 }
 
 export class ExtractionDraftValidationError extends Error {}
@@ -41,6 +45,10 @@ export class OpenAiCompatibleLlmAdapter implements LlmAdapter {
     const timeoutMs = options.timeoutMs ?? 20_000;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new LlmProviderError("OpenAI provider timeout must be a positive integer.");
     this.options = { apiKey: options.apiKey, model: options.model, timeoutMs, endpoint: options.endpoint ?? "https://api.openai.com/v1/responses", fetchImpl: options.fetchImpl };
+  }
+
+  get metadata(): ExtractionDraftMetadata {
+    return { provider: this.options.endpoint.includes("x.ai") ? "grok" : "openai", model: this.options.model, promptVersion: EXTRACTION_PROMPT_VERSION };
   }
 
   async extract(input: LlmExtractionInput): Promise<ExtractionDraftPayload> {
@@ -121,12 +129,72 @@ export function validateExtractionDraftPayload(payload: unknown): ExtractionDraf
   };
 }
 
+/** Apply deterministic guards after model extraction while retaining the immutable Source. */
+export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sourceContent: string): ExtractionDraftPayload {
+  const items = [...payload.items];
+  const issues = [...payload.issues];
+  const hasSeparateArrival = /(?:separate|separately|another|另外|獨立|單獨).{0,24}(?:arrival|arriv|抵達|到達)/iu.test(sourceContent)
+    || /(?:arrival|arriv|抵達|到達).{0,24}(?:separate|separately|another|另外|獨立|單獨)/iu.test(sourceContent);
+  const lodgingLocations = new Set(items.filter((item) => item.kind === "lodging" && item.location).map((item) => item.location!.trim().toLocaleLowerCase()));
+  const hasLodgingContext = /住宿|飯店|酒店|旅館|hotel|lodging|stay(?:ing)?|住/iu.test(sourceContent)
+    || items.some((item) => item.kind === "lodging" || /住宿|飯店|酒店|旅館|hotel|lodging|stay(?:ing)?/iu.test(item.title));
+  const kept: ExtractionDraftItem[] = [];
+  const seen = new Map<string, ExtractionDraftItem>();
+  for (const item of items) {
+    const arrival = isArrivalCandidate(item);
+    const locationKey = item.location?.trim().toLocaleLowerCase();
+    const hasSchedule = Boolean(item.startsAt || item.localDate || item.timeWindow);
+    if (arrival && !item.location && !hasSchedule) {
+      issues.push({ code: "low_information_item", message: `排除低資訊行程「${item.title}」：缺少可用地點與時間。` });
+      continue;
+    }
+    if (arrival && !hasSeparateArrival && (!item.startsAt || isDateOnlyTimestamp(item.startsAt)) && ((locationKey && lodgingLocations.has(locationKey)) || hasLodgingContext)) {
+      issues.push({ code: "contextual_phrase", message: `「${item.title}」視為住宿情境，不另建立 Arrival 行程。` });
+      continue;
+    }
+    const duplicateKey = [item.kind, item.title.trim().toLocaleLowerCase(), locationKey ?? "", item.localDate ?? "", item.startsAt ?? "", item.endsAt ?? ""].join("|");
+    const previous = seen.get(duplicateKey);
+    if (previous) {
+      issues.push({ code: "duplicate_item", message: `排除重複行程「${item.title}」。` });
+      continue;
+    }
+    const contradictionKey = [item.kind, item.title.trim().toLocaleLowerCase(), locationKey ?? ""].join("|");
+    const contradiction = kept.find((candidate) => {
+      const candidateKey = [candidate.kind, candidate.title.trim().toLocaleLowerCase(), candidate.location?.trim().toLocaleLowerCase() ?? ""].join("|");
+      return candidateKey === contradictionKey
+        && (candidate.localDate !== item.localDate || candidate.startsAt !== item.startsAt || candidate.endsAt !== item.endsAt)
+        && Boolean(candidate.localDate || item.localDate || candidate.startsAt || item.startsAt);
+    });
+    if (contradiction) {
+      issues.push({ code: "contradictory_item", message: `排除互相矛盾的行程「${item.title}」，保留先出現的候選。` });
+      continue;
+    }
+    seen.set(duplicateKey, item);
+    kept.push(item);
+  }
+  const retainedTransport = kept.some((item) => item.kind === "transport" || item.kinds.includes("transport"));
+  const actionableIssues = issues.filter((issue) => !(/retain transportation .*remove lodging context/i.test(issue.message) && !retainedTransport));
+  return { ...payload, items: kept, issues: actionableIssues };
+}
+
+function isArrivalCandidate(item: ExtractionDraftItem): boolean {
+  return /^到|\barriv(?:al|e|ing)?\b|抵達|到達|抵店/iu.test(item.title);
+}
+
+function isDateOnlyTimestamp(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
 /** A deterministic adapter used by tests and local development; it never calls a model. */
 export class FakeLlmAdapter implements LlmAdapter {
   private readonly fixtures: Map<string, ExtractionDraftPayload>;
 
   constructor(fixtures: ReadonlyMap<string, ExtractionDraftPayload> | Record<string, ExtractionDraftPayload> = {}) {
     this.fixtures = fixtures instanceof Map ? new Map(fixtures) : new Map(Object.entries(fixtures));
+  }
+
+  get metadata(): ExtractionDraftMetadata {
+    return { provider: "fake", model: "fake", promptVersion: EXTRACTION_PROMPT_VERSION };
   }
 
   extract(input: LlmExtractionInput): ExtractionDraftPayload {
@@ -141,16 +209,19 @@ export function renderExtractionDraft(draft: Pick<ExtractionDraft, "id" | "statu
   const pageSize = Math.max(1, options.pageSize ?? 8);
   const maxLength = Math.max(500, options.maxLength ?? 4_500);
   const itemLines = draft.items.map((item) => {
-    const time = item.startsAt ?? item.timeWindow ?? "未指定時間";
+    const time = item.startsAt ?? (item.localDate ? `${item.localDate}${item.timeWindow ? ` ${item.timeWindow}` : ""}` : item.timeWindow) ?? "未指定時間";
     const place = item.shape === "route" ? `${item.origin ?? "?"} → ${item.destination ?? "?"}` : (item.location ?? "未指定地點");
     return `- ${item.title}｜${time}｜${place}｜時間 ${item.startTimeFlexibility}/${item.endTimeFlexibility}`;
   });
   const totalPages = Math.max(1, Math.ceil(itemLines.length / pageSize));
   const lines = [`Extraction Draft ${draft.id}｜${draft.status}｜第 ${Math.min(page, totalPages)}/${totalPages} 頁`, ...(itemLines.length > 0 ? itemLines.slice((page - 1) * pageSize, page * pageSize) : ["- 尚未解析出行程項目"])] as string[];
   if (page === 1) {
-    if (draft.missing.length > 0) lines.push(`缺少：${draft.missing.map((entry) => `${entry.field}${entry.required ? "（必要）" : "（可選）"}`).join("、")}`);
-    if (draft.assumptions.length > 0) lines.push(`假設：${draft.assumptions.join("；")}`);
-    if (draft.issues.length > 0) lines.push(`問題：${draft.issues.map((issue) => issue.message).join("；")}`);
+    if (draft.missing.length > 0) lines.push(`必要資訊待補：${draft.missing.map((entry) => `${entry.field}${entry.required ? "（必要）" : "（可選）"}${entry.message ? `｜${entry.message}` : ""}`).join("；")}`);
+    if (draft.assumptions.length > 0) lines.push(`模型假設：${draft.assumptions.join("；")}`);
+    const ignored = draft.issues.filter((issue) => /^(?:low_information_item|duplicate_item|contextual_phrase|contradictory_item)$/.test(issue.code));
+    const otherIssues = draft.issues.filter((issue) => !ignored.includes(issue));
+    if (ignored.length > 0) lines.push(`已忽略：${ignored.map((issue) => issue.message).join("；")}`);
+    if (otherIssues.length > 0) lines.push(`需要注意：${otherIssues.map((issue) => issue.message).join("；")}`);
     if (draft.status === "pending_confirmation") lines.push(`請確認：確認 ${draft.id}`);
     else if (draft.status === "failed") lines.push(`請重試：重試 ${draft.id}`);
     else if (draft.status === "confirmed") lines.push(`已確認 Draft ${draft.id}`);
@@ -200,8 +271,11 @@ function validateItem(value: unknown, index: number): ExtractionDraftItem {
   validateEnum(base.shape, proposalShapes, `items[${index}].shape`);
   validateEnum(base.shapeSource, proposalShapeSources, `items[${index}].shapeSource`);
   validateEnum(base.status, tripItemStatuses, `items[${index}].status`);
+  if (value.localDate !== undefined && value.localDate !== null && (typeof value.localDate !== "string" || !isIsoCalendarDate(value.localDate))) {
+    throw new ExtractionDraftValidationError(`items[${index}].localDate must be an ISO calendar date.`);
+  }
   for (const field of ["startsAt", "endsAt", "title", "sourceExcerpt"] as const) {
-    if (value[field] !== undefined && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
+    if (value[field] !== undefined && value[field] !== null && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
   }
   for (const field of ["origin", "destination", "location", "notes", "deadlineAt"] as const) {
     if (value[field] !== undefined && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
@@ -248,11 +322,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isIsoCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+}
+
 const extractionInstructions = [
   "Extract itinerary candidates from the user's source content. Return only JSON matching the extraction_draft schema.",
   "Preserve uncertainty as assumptions or missing fields; do not invent exact dates, times, or locations.",
   "A vague part-of-day phrase such as 晚上, tonight, or in the evening is a timeWindow, not an exact timestamp: set startTimeFlexibility and endTimeFlexibility to flexible unless the source explicitly says the time is fixed or tied to a ticket/tour/reservation.",
+  "When a calendar date is known but no exact clock time is stated, set localDate to the ISO date, keep startsAt null, and preserve any part-of-day phrase in timeWindow.",
   "When the source says arriving at, going to, staying in, or lodging in a named place (for example, 到 Page，想住 Holiday Inn), set location to that named place and keep the lodging property in title or notes.",
+  "Group one user intention into one itinerary item: arrival wording used only to explain where a lodging is should remain context, not become a second item. Keep a separate Arrival only when the source explicitly requests it or provides an independently actionable time/location.",
+  "Exclude low-information candidates such as Arrival with neither a usable location nor a date/time; report them in issues with code low_information_item. Do not invent recommendations. Do not emit duplicate candidates; if two candidates conflict, keep the source facts and report the ambiguity in issues.",
+  "When existingDraft is present, treat sourceContent as a natural-language correction to that Draft and return the complete revised item batch. Preserve unchanged items, apply additions, and remove items the user explicitly excludes; do not create Proposals at extraction time.",
 ].join(" ");
 
 const extractionDraftJsonSchema = {
@@ -262,10 +347,10 @@ const extractionDraftJsonSchema = {
   properties: {
     items: { type: "array", items: {
       type: "object", additionalProperties: false,
-      required: ["kind", "kinds", "shape", "shapeSource", "title", "status", "startsAt", "endsAt", "timezone", "timezoneSource", "originTimezone", "destinationTimezone", "location", "origin", "destination", "notes", "deadlineAt", "sourceLine", "sourceExcerpt", "startTimeFlexibility", "endTimeFlexibility", "timeWindow", "assumptions"],
+      required: ["kind", "kinds", "shape", "shapeSource", "title", "status", "localDate", "startsAt", "endsAt", "timezone", "timezoneSource", "originTimezone", "destinationTimezone", "location", "origin", "destination", "notes", "deadlineAt", "sourceLine", "sourceExcerpt", "startTimeFlexibility", "endTimeFlexibility", "timeWindow", "assumptions"],
       properties: {
         kind: { type: "string", enum: [...tripItemKinds] }, kinds: { type: "array", items: { type: "string", enum: [...tripItemKinds] } }, shape: { type: "string", enum: [...proposalShapes] }, shapeSource: { type: "string", enum: [...proposalShapeSources] }, title: { type: "string" }, status: { type: "string", enum: [...tripItemStatuses] },
-        startsAt: { type: ["string", "null"] }, endsAt: { type: ["string", "null"] }, timezone: { type: ["string", "null"] }, timezoneSource: { type: ["string", "null"], enum: [...timezoneSources, null] }, originTimezone: { type: ["string", "null"] }, destinationTimezone: { type: ["string", "null"] }, location: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, notes: { type: ["string", "null"] }, deadlineAt: { type: ["string", "null"] }, sourceLine: { type: ["integer", "null"] }, sourceExcerpt: { type: ["string", "null"] }, startTimeFlexibility: { type: "string", enum: [...timeFlexibilities] }, endTimeFlexibility: { type: "string", enum: [...timeFlexibilities] }, timeWindow: { type: ["string", "null"], enum: [...timeWindows, null] }, assumptions: { type: "array", items: { type: "string" } },
+        localDate: { type: ["string", "null"] }, startsAt: { type: ["string", "null"] }, endsAt: { type: ["string", "null"] }, timezone: { type: ["string", "null"] }, timezoneSource: { type: ["string", "null"], enum: [...timezoneSources, null] }, originTimezone: { type: ["string", "null"] }, destinationTimezone: { type: ["string", "null"] }, location: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, notes: { type: ["string", "null"] }, deadlineAt: { type: ["string", "null"] }, sourceLine: { type: ["integer", "null"] }, sourceExcerpt: { type: ["string", "null"] }, startTimeFlexibility: { type: "string", enum: [...timeFlexibilities] }, endTimeFlexibility: { type: "string", enum: [...timeFlexibilities] }, timeWindow: { type: ["string", "null"], enum: [...timeWindows, null] }, assumptions: { type: "array", items: { type: "string" } },
       },
     } },
     missing: { type: "array", items: { type: "object", additionalProperties: false, required: ["field", "message", "required"], properties: { field: { type: "string" }, message: { type: "string" }, required: { type: "boolean" } } } },

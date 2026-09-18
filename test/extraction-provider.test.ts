@@ -11,6 +11,7 @@ test("Grok-compatible adapter sends the contract and validates structured output
   const adapter = new OpenAiCompatibleLlmAdapter({ apiKey: "secret-key", model: "grok-4.6", endpoint: "https://api.x.ai/v1/responses", fetchImpl: async (input, init) => { url = String(input); request = init; return new Response(JSON.stringify({ output_text: JSON.stringify(output) }), { status: 200 }); } });
   const result = await adapter.extract(input);
   assert.equal(result.items[0]?.title, "Page 住宿");
+  assert.deepEqual(adapter.metadata, { provider: "grok", model: "grok-4.6", promptVersion: "extraction-draft-v3" });
   assert.equal(request?.headers && new Headers(request.headers).get("authorization"), "Bearer secret-key");
   const body = JSON.parse(String(request?.body)) as { model: string; store: boolean; instructions: string; text: { format: { type: string; name: string } } };
   assert.equal(url, "https://api.x.ai/v1/responses");
@@ -19,7 +20,10 @@ test("Grok-compatible adapter sends the contract and validates structured output
   assert.equal(body.text.format.type, "json_schema");
   assert.equal(body.text.format.name, "extraction_draft");
   assert.match(body.instructions, /timeWindow/);
+  assert.match(body.instructions, /localDate/);
   assert.match(body.instructions, /set location/);
+  assert.match(body.instructions, /one itinerary item/);
+  assert.match(body.instructions, /low_information_item/);
 });
 
 test("Grok-compatible adapter turns provider failures and malformed output into safe errors", async () => {

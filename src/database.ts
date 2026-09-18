@@ -66,6 +66,9 @@ export class TravelDatabase {
         status TEXT NOT NULL CHECK (status IN ('pending_confirmation', 'confirmed', 'cancelled', 'failed')),
         payload_json TEXT NOT NULL,
         proposal_ids_json TEXT NOT NULL DEFAULT '[]',
+        provider TEXT NOT NULL DEFAULT 'unknown',
+        model TEXT NOT NULL DEFAULT 'unknown',
+        prompt_version TEXT NOT NULL DEFAULT 'extraction-draft-v3',
         confirmed_at TEXT,
         cancelled_at TEXT,
         cancelled_by TEXT,
@@ -98,6 +101,7 @@ export class TravelDatabase {
         destination_timezone TEXT,
         title TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('confirmed', 'provisional', 'open_decision', 'conflicted', 'cancelled')),
+        local_date TEXT,
         starts_at TEXT,
         ends_at TEXT,
         start_time_flexibility TEXT CHECK (start_time_flexibility IN ('required', 'estimated', 'flexible') OR start_time_flexibility IS NULL),
@@ -141,6 +145,7 @@ export class TravelDatabase {
         title TEXT NOT NULL,
         item_status TEXT NOT NULL CHECK (item_status IN ('confirmed', 'provisional', 'open_decision', 'conflicted', 'cancelled')),
         proposal_status TEXT NOT NULL CHECK (proposal_status IN ('pending', 'confirmed', 'rejected')),
+        local_date TEXT,
         starts_at TEXT,
         ends_at TEXT,
         start_time_flexibility TEXT CHECK (start_time_flexibility IN ('required', 'estimated', 'flexible') OR start_time_flexibility IS NULL),
@@ -229,7 +234,7 @@ export class TravelDatabase {
       this.connection.exec(`PRAGMA foreign_keys = OFF`);
       try {
         this.connection.exec("BEGIN IMMEDIATE");
-        this.connection.exec(`CREATE TABLE extraction_drafts_v2 (id TEXT PRIMARY KEY, trip_id TEXT NOT NULL REFERENCES trips(id), source_id TEXT NOT NULL REFERENCES sources(id), originating_user_id TEXT, revision INTEGER NOT NULL DEFAULT 1, previous_draft_id TEXT REFERENCES extraction_drafts(id), status TEXT NOT NULL CHECK (status IN ('pending_confirmation', 'confirmed', 'cancelled', 'failed')), payload_json TEXT NOT NULL, proposal_ids_json TEXT NOT NULL DEFAULT '[]', confirmed_at TEXT, cancelled_at TEXT, cancelled_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+        this.connection.exec(`CREATE TABLE extraction_drafts_v2 (id TEXT PRIMARY KEY, trip_id TEXT NOT NULL REFERENCES trips(id), source_id TEXT NOT NULL REFERENCES sources(id), originating_user_id TEXT, revision INTEGER NOT NULL DEFAULT 1, previous_draft_id TEXT REFERENCES extraction_drafts(id), status TEXT NOT NULL CHECK (status IN ('pending_confirmation', 'confirmed', 'cancelled', 'failed')), payload_json TEXT NOT NULL, proposal_ids_json TEXT NOT NULL DEFAULT '[]', provider TEXT NOT NULL DEFAULT 'unknown', model TEXT NOT NULL DEFAULT 'unknown', prompt_version TEXT NOT NULL DEFAULT 'extraction-draft-v3', confirmed_at TEXT, cancelled_at TEXT, cancelled_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
         this.connection.exec(`INSERT INTO extraction_drafts_v2 (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) SELECT id, trip_id, source_id, ${legacyOriginatingUser}, 1, NULL, status, payload_json, ${legacyProposalIds}, ${legacyConfirmedAt}, NULL, NULL, created_at, updated_at FROM extraction_drafts`);
         this.connection.exec(`DROP TABLE extraction_drafts`);
         this.connection.exec(`ALTER TABLE extraction_drafts_v2 RENAME TO extraction_drafts`);
@@ -249,6 +254,9 @@ export class TravelDatabase {
     if (!extractionDraftColumns.some((column) => column.name === "previous_draft_id")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN previous_draft_id TEXT REFERENCES extraction_drafts(id)`);
     if (!extractionDraftColumns.some((column) => column.name === "cancelled_at")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN cancelled_at TEXT`);
     if (!extractionDraftColumns.some((column) => column.name === "cancelled_by")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN cancelled_by TEXT`);
+    if (!extractionDraftColumns.some((column) => column.name === "provider")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN provider TEXT NOT NULL DEFAULT 'unknown'`);
+    if (!extractionDraftColumns.some((column) => column.name === "model")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN model TEXT NOT NULL DEFAULT 'unknown'`);
+    if (!extractionDraftColumns.some((column) => column.name === "prompt_version")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN prompt_version TEXT NOT NULL DEFAULT 'extraction-draft-v3'`);
     this.connection.exec(`CREATE UNIQUE INDEX IF NOT EXISTS extraction_draft_source_revision ON extraction_drafts(source_id, revision)`);
     const decisionColumns = this.connection.prepare(`PRAGMA table_info(decisions)`).all() as Array<{ name: string }>;
     const decisionTable = this.connection.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'decisions'`).get() as { sql: string } | undefined;
@@ -272,6 +280,7 @@ export class TravelDatabase {
       if (!decisionColumns.some((column) => column.name === "cancelled_at")) this.connection.exec(`ALTER TABLE decisions ADD COLUMN cancelled_at TEXT`);
     }
     const proposalColumns = this.connection.prepare(`PRAGMA table_info(proposals)`).all() as Array<{ name: string }>;
+    if (!proposalColumns.some((column) => column.name === "local_date")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN local_date TEXT`);
     if (!proposalColumns.some((column) => column.name === "confirmed_trip_item_id")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN confirmed_trip_item_id TEXT REFERENCES trip_items(id)`);
     if (!proposalColumns.some((column) => column.name === "rejection_reason")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN rejection_reason TEXT`);
     if (!proposalColumns.some((column) => column.name === "rejected_by")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN rejected_by TEXT`);
@@ -288,6 +297,7 @@ export class TravelDatabase {
     if (!proposalColumns.some((column) => column.name === "time_window")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN time_window TEXT`);
     if (!proposalColumns.some((column) => column.name === "assumptions_json")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN assumptions_json TEXT NOT NULL DEFAULT '[]'`);
     const tripItemColumnsAfterMigration = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "local_date")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN local_date TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape_source")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape_source TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "origin")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN origin TEXT`);

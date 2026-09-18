@@ -33,6 +33,7 @@ export interface ExtractedTripItem {
   shapeSource: ProposalShapeSource;
   title: string;
   status: TripItemStatus;
+  localDate?: string;
   startsAt?: string;
   endsAt?: string;
   timezone?: string;
@@ -77,6 +78,12 @@ export interface ExtractionDraftPayload {
   sourceExcerpt: string;
 }
 
+export interface ExtractionDraftMetadata {
+  provider: string;
+  model: string;
+  promptVersion: string;
+}
+
 export interface ExtractionDraft extends ExtractionDraftPayload {
   id: string;
   tripId: string;
@@ -85,6 +92,7 @@ export interface ExtractionDraft extends ExtractionDraftPayload {
   revision: number;
   previousDraftId: string | null;
   status: ExtractionDraftStatus;
+  metadata: ExtractionDraftMetadata;
   proposalIds: string[];
   confirmedAt: string | null;
   cancelledAt: string | null;
@@ -144,7 +152,7 @@ export interface ProposalContext {
 }
 
 export interface ReviewIssue {
-  code: "missing_start_time" | "missing_timezone" | "invalid_timezone" | "missing_endpoint_timezone" | "invalid_endpoint_timezone" | "ambiguous_local_time" | "missing_location" | "missing_route_endpoint" | "shape_conflict" | "unknown_kind" | "kind_clarification" | "schedule_collision" | "source_unparsed" | "unparseable_line";
+  code: "missing_start_time" | "missing_timezone" | "invalid_timezone" | "missing_endpoint_timezone" | "invalid_endpoint_timezone" | "ambiguous_local_time" | "missing_location" | "missing_route_endpoint" | "shape_conflict" | "unknown_kind" | "kind_clarification" | "schedule_collision" | "source_unparsed" | "unparseable_line" | "low_information_item" | "duplicate_item" | "contradictory_item";
   message: string;
   sourceId?: string;
   sourceLine?: number;

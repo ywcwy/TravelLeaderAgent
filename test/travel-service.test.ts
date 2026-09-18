@@ -204,7 +204,7 @@ test("queries each timed item by its local date and renders timezone context", (
 
   const localDateResult = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-01" });
   assert.deepEqual(localDateResult.pending.map((item) => item.title).sort(), ["Date-only Page", "Las Vegas evening", "Page lodging", "St George boundary", "Unknown fallback"].sort());
-  assert.equal(localDateResult.pending.at(-1)?.title, "Date-only Page");
+  assert.equal(localDateResult.pending[0]?.title, "Date-only Page");
   const rendered = renderItineraryQuery(localDateResult);
   assert.match(rendered, /America\/Los_Angeles/);
   assert.match(rendered, /America\/Phoenix/);
@@ -698,6 +698,38 @@ test("an existing SQLite database gains the replacement relationship column", ()
   const upgraded = new TravelDatabase(databasePath);
   const columns = upgraded.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
   assert.equal(columns.some((column) => column.name === "replacement_for_item_id"), true);
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test("an existing SQLite database gains date-only columns without changing legacy records", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-date-only-migration-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  initial.connection.exec(`ALTER TABLE proposals DROP COLUMN local_date; ALTER TABLE trip_items DROP COLUMN local_date;`);
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const proposalColumns = upgraded.connection.prepare(`PRAGMA table_info(proposals)`).all() as Array<{ name: string }>;
+  const tripItemColumns = upgraded.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
+  assert.equal(proposalColumns.some((column) => column.name === "local_date"), true);
+  assert.equal(tripItemColumns.some((column) => column.name === "local_date"), true);
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test("an existing SQLite database gains Extraction Draft provider metadata columns", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-draft-metadata-migration-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  initial.connection.exec(`ALTER TABLE extraction_drafts DROP COLUMN provider; ALTER TABLE extraction_drafts DROP COLUMN model; ALTER TABLE extraction_drafts DROP COLUMN prompt_version;`);
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const columns = upgraded.connection.prepare(`PRAGMA table_info(extraction_drafts)`).all() as Array<{ name: string }>;
+  assert.equal(columns.some((column) => column.name === "provider"), true);
+  assert.equal(columns.some((column) => column.name === "model"), true);
+  assert.equal(columns.some((column) => column.name === "prompt_version"), true);
   upgraded.close();
   rmSync(directory, { recursive: true, force: true });
 });

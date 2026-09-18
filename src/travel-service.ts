@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
-import { validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
-import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftPayload, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import { EXTRACTION_PROMPT_VERSION, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
+import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftMetadata, ExtractionDraftPayload, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -275,7 +275,7 @@ export class TravelService {
     let status: ExtractionDraft["status"] = "pending_confirmation";
     let payload: ExtractionDraftPayload;
     try {
-      payload = validateExtractionDraftPayload(await adapter.extract(input));
+      payload = guardExtractionDraftPayload(validateExtractionDraftPayload(await adapter.extract(input)), content);
     } catch (error) {
       status = "failed";
       payload = {
@@ -288,8 +288,9 @@ export class TravelService {
     }
     const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
     const timestamp = now();
-    this.db.connection.prepare(`INSERT OR IGNORE INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, '[]', NULL, NULL, NULL, ?, ?)`).run(
-      draftId, tripId, source.id, source.provider_user_id, status, JSON.stringify(payload), timestamp, timestamp,
+    const metadata = adapter.metadata ?? defaultExtractionMetadata();
+    this.db.connection.prepare(`INSERT OR IGNORE INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, '[]', ?, ?, ?, NULL, NULL, NULL, ?, ?)`).run(
+      draftId, tripId, source.id, source.provider_user_id, status, JSON.stringify(payload), metadata.provider, metadata.model, metadata.promptVersion, timestamp, timestamp,
     );
     const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(source.id) as ExtractionDraftRow | undefined;
     if (!persisted) throw new InvalidSourceError("The Extraction Draft could not be persisted.");
@@ -338,12 +339,12 @@ export class TravelService {
     let status: ExtractionDraft["status"] = "pending_confirmation";
     let payload: ExtractionDraftPayload;
     try {
-      payload = validateExtractionDraftPayload(await adapter.extract({ sourceContent: source.content, tripTimezone: trip.timezone, currentDate: currentDateInTimezone(trip.timezone), inputType: source.type }));
+      payload = guardExtractionDraftPayload(validateExtractionDraftPayload(await adapter.extract({ sourceContent: source.content, tripTimezone: trip.timezone, currentDate: currentDateInTimezone(trip.timezone), inputType: source.type })), source.content);
     } catch (error) {
       status = "failed";
       payload = { items: [], missing: [], assumptions: [], issues: [{ code: "adapter_failure", message: error instanceof Error ? error.message : "LLM extraction failed." }], sourceExcerpt: source.content.trim().slice(0, 500) };
     }
-    return this.insertDraftRevision(tripId, current, status, payload);
+    return this.insertDraftRevision(tripId, current, status, payload, adapter.metadata);
   }
 
   confirmExtractionDraft(tripId: string, userId: string, draftId: string): { draft: ExtractionDraft; proposalIds: string[] } {
@@ -356,7 +357,7 @@ export class TravelService {
     if (draft.status !== "pending_confirmation") throw new ConflictError(`Extraction Draft ${draftId} is not pending confirmation.`);
     const blockingMissing = [
       ...draft.missing.filter((entry) => entry.required),
-      ...draft.items.flatMap((item) => !item.startsAt ? [{ field: "startsAt" }] : []),
+      ...draft.items.flatMap((item) => !item.startsAt && !item.localDate ? [{ field: "localDate" }] : []),
       ...draft.items.flatMap((item) => [
         item.startTimeFlexibility === "required" && !item.startsAt ? { field: "startsAt" } : null,
         item.endTimeFlexibility === "required" && !item.endsAt ? { field: "endsAt" } : null,
@@ -400,9 +401,9 @@ export class TravelService {
     const endpointTimezones = resolveEndpointTimezones(item);
     const id = `P-${randomUUID().slice(0, 8).toUpperCase()}`;
     this.db.connection.prepare(`
-      INSERT INTO proposals (id, trip_id, source_id, kind, shape, shape_source, origin, destination, origin_timezone, destination_timezone, title, item_status, proposal_status, starts_at, ends_at, start_time_flexibility, end_time_flexibility, time_window, assumptions_json, timezone, timezone_source, location, notes, deadline_at, source_line, source_excerpt, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, tripId, sourceId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, endpointTimezones.origin ?? null, endpointTimezones.destination ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null, item.startTimeFlexibility ?? null, item.endTimeFlexibility ?? null, item.timeWindow ?? null, JSON.stringify(item.assumptions ?? []),
+      INSERT INTO proposals (id, trip_id, source_id, kind, shape, shape_source, origin, destination, origin_timezone, destination_timezone, title, item_status, proposal_status, local_date, starts_at, ends_at, start_time_flexibility, end_time_flexibility, time_window, assumptions_json, timezone, timezone_source, location, notes, deadline_at, source_line, source_excerpt, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, tripId, sourceId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, endpointTimezones.origin ?? null, endpointTimezones.destination ?? null, item.title, item.status, item.localDate ?? null, item.startsAt ?? null, item.endsAt ?? null, item.startTimeFlexibility ?? null, item.endTimeFlexibility ?? null, item.timeWindow ?? null, JSON.stringify(item.assumptions ?? []),
       timezone.value, timezone.source ?? null, item.location ?? null, item.notes ?? null, item.deadlineAt ?? null, item.sourceLine ?? null, item.sourceExcerpt ?? null, now());
     const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) VALUES (?, ?)`);
     for (const kind of kinds) insertKind.run(id, kind);
@@ -441,9 +442,9 @@ export class TravelService {
     if (!source || !predecessor) throw new ConflictError("A Replacement Proposal must reference a confirmed Trip Item and Source from the same Active Trip.");
     const id = `P-${randomUUID().slice(0, 8).toUpperCase()}`;
     this.db.connection.prepare(`
-      INSERT INTO proposals (id, trip_id, source_id, replacement_for_item_id, kind, shape, shape_source, origin, destination, origin_timezone, destination_timezone, title, item_status, proposal_status, starts_at, ends_at, start_time_flexibility, end_time_flexibility, time_window, assumptions_json, timezone, timezone_source, location, notes, deadline_at, source_line, source_excerpt, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, tripId, sourceId, predecessorItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, endpointTimezones.origin ?? null, endpointTimezones.destination ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null, item.startTimeFlexibility ?? null, item.endTimeFlexibility ?? null, item.timeWindow ?? null, JSON.stringify(item.assumptions ?? []),
+      INSERT INTO proposals (id, trip_id, source_id, replacement_for_item_id, kind, shape, shape_source, origin, destination, origin_timezone, destination_timezone, title, item_status, proposal_status, local_date, starts_at, ends_at, start_time_flexibility, end_time_flexibility, time_window, assumptions_json, timezone, timezone_source, location, notes, deadline_at, source_line, source_excerpt, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, tripId, sourceId, predecessorItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, endpointTimezones.origin ?? null, endpointTimezones.destination ?? null, item.title, item.status, item.localDate ?? null, item.startsAt ?? null, item.endsAt ?? null, item.startTimeFlexibility ?? null, item.endTimeFlexibility ?? null, item.timeWindow ?? null, JSON.stringify(item.assumptions ?? []),
       timezone.value, timezone.source ?? null, item.location ?? null, item.notes ?? null, item.deadlineAt ?? null, item.sourceLine ?? null, item.sourceExcerpt ?? null, now());
     const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) VALUES (?, ?)`);
     for (const kind of kinds) insertKind.run(id, kind);
@@ -510,13 +511,16 @@ export class TravelService {
         sourceId: proposal.source_id,
         replacementForItemId: null,
         kind: proposal.kind as TripItem["kind"], kinds, shape: proposal.shape ?? "point", shapeSource: proposal.shape_source ?? "inferred", origin: proposal.origin ?? undefined, destination: proposal.destination ?? undefined, title: proposal.title,
-        status: "confirmed", startsAt: proposal.starts_at ?? undefined, endsAt: proposal.ends_at ?? undefined, startTimeFlexibility: proposal.start_time_flexibility ?? undefined, endTimeFlexibility: proposal.end_time_flexibility ?? undefined, timeWindow: proposal.time_window ?? undefined, assumptions: parseAssumptions(proposal.assumptions_json),
+        status: "confirmed", localDate: proposal.local_date ?? undefined, startsAt: proposal.starts_at ?? undefined, endsAt: proposal.ends_at ?? undefined, startTimeFlexibility: proposal.start_time_flexibility ?? undefined, endTimeFlexibility: proposal.end_time_flexibility ?? undefined, timeWindow: proposal.time_window ?? undefined, assumptions: parseAssumptions(proposal.assumptions_json),
         timezone: proposal.timezone ?? undefined, timezoneSource: proposal.timezone_source ?? undefined, originTimezone: proposal.origin_timezone ?? undefined, destinationTimezone: proposal.destination_timezone ?? undefined, location: proposal.location ?? undefined, notes: proposal.notes ?? undefined,
         confirmedBy: ownerId,
       };
       const resolvedAt = now();
-      this.db.connection.prepare(`INSERT INTO trip_items (id, trip_id, source_id, replacement_for_item_id, kind, shape, shape_source, origin, destination, origin_timezone, destination_timezone, title, status, starts_at, ends_at, start_time_flexibility, end_time_flexibility, time_window, assumptions_json, timezone, timezone_source, location, notes, confirmed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(item.id, tripId, item.sourceId, item.replacementForItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.originTimezone ?? null, item.destinationTimezone ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null, item.startTimeFlexibility ?? null, item.endTimeFlexibility ?? null, item.timeWindow ?? null, JSON.stringify(item.assumptions ?? []), item.timezone ?? null, item.timezoneSource ?? null, item.location ?? null, item.notes ?? null, ownerId, resolvedAt);
+      this.db.connection.prepare(`INSERT INTO trip_items (id, trip_id, source_id, replacement_for_item_id, kind, shape, shape_source, origin, destination, origin_timezone, destination_timezone, title, status, local_date, starts_at, ends_at, start_time_flexibility, end_time_flexibility, time_window, assumptions_json, timezone, timezone_source, location, notes, confirmed_by, created_at) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )`)
+        .run(item.id, tripId, item.sourceId, item.replacementForItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.originTimezone ?? null, item.destinationTimezone ?? null, item.title, item.status, item.localDate ?? null, item.startsAt ?? null, item.endsAt ?? null, item.startTimeFlexibility ?? null, item.endTimeFlexibility ?? null, item.timeWindow ?? null, JSON.stringify(item.assumptions ?? []), item.timezone ?? null, item.timezoneSource ?? null, item.location ?? null, item.notes ?? null, ownerId, resolvedAt);
       const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) VALUES (?, ?)`);
       for (const kind of item.kinds) insertKind.run(item.id, kind);
       this.db.connection.prepare(`UPDATE proposals SET proposal_status = CASE WHEN id = ? THEN 'confirmed' ELSE 'rejected' END, rejection_reason = CASE WHEN id = ? THEN rejection_reason ELSE 'Not selected in Decision ' || ? END, rejected_by = CASE WHEN id = ? THEN rejected_by ELSE ? END, rejected_at = CASE WHEN id = ? THEN rejected_at ELSE ? END WHERE decision_id = ? AND proposal_status = 'pending'`)
@@ -564,7 +568,7 @@ export class TravelService {
         sourceId: proposal.source_id,
         replacementForItemId: proposal.replacement_for_item_id,
         kind: proposal.kind as TripItem["kind"], kinds, shape: proposal.shape ?? "point", shapeSource: proposal.shape_source ?? "inferred", origin: proposal.origin ?? undefined, destination: proposal.destination ?? undefined, title: proposal.title,
-        status: "confirmed", startsAt: proposal.starts_at ?? undefined, endsAt: proposal.ends_at ?? undefined, startTimeFlexibility: proposal.start_time_flexibility ?? undefined, endTimeFlexibility: proposal.end_time_flexibility ?? undefined, timeWindow: proposal.time_window ?? undefined, assumptions: parseAssumptions(proposal.assumptions_json),
+        status: "confirmed", localDate: proposal.local_date ?? undefined, startsAt: proposal.starts_at ?? undefined, endsAt: proposal.ends_at ?? undefined, startTimeFlexibility: proposal.start_time_flexibility ?? undefined, endTimeFlexibility: proposal.end_time_flexibility ?? undefined, timeWindow: proposal.time_window ?? undefined, assumptions: parseAssumptions(proposal.assumptions_json),
         timezone: proposal.timezone ?? undefined, timezoneSource: proposal.timezone_source ?? undefined, originTimezone: proposal.origin_timezone ?? undefined, destinationTimezone: proposal.destination_timezone ?? undefined, location: proposal.location ?? undefined, notes: proposal.notes ?? undefined,
         confirmedBy: ownerId,
       };
@@ -572,8 +576,8 @@ export class TravelService {
         const predecessor = this.db.connection.prepare(`SELECT id FROM trip_items WHERE id = ? AND trip_id = ? AND status = 'confirmed'`).get(proposal.replacement_for_item_id, tripId);
         if (!predecessor) throw new ConflictError("The Replacement Proposal predecessor is no longer confirmed.");
       }
-      this.db.connection.prepare(`INSERT INTO trip_items (id, trip_id, source_id, replacement_for_item_id, kind, shape, shape_source, origin, destination, origin_timezone, destination_timezone, title, status, starts_at, ends_at, start_time_flexibility, end_time_flexibility, time_window, assumptions_json, timezone, timezone_source, location, notes, confirmed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(item.id, tripId, item.sourceId, item.replacementForItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.originTimezone ?? null, item.destinationTimezone ?? null, item.title, item.status, item.startsAt ?? null, item.endsAt ?? null, item.startTimeFlexibility ?? null, item.endTimeFlexibility ?? null, item.timeWindow ?? null, JSON.stringify(item.assumptions ?? []), item.timezone ?? null, item.timezoneSource ?? null, item.location ?? null, item.notes ?? null, ownerId, now());
+      this.db.connection.prepare(`INSERT INTO trip_items (id, trip_id, source_id, replacement_for_item_id, kind, shape, shape_source, origin, destination, origin_timezone, destination_timezone, title, status, local_date, starts_at, ends_at, start_time_flexibility, end_time_flexibility, time_window, assumptions_json, timezone, timezone_source, location, notes, confirmed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(item.id, tripId, item.sourceId, item.replacementForItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.originTimezone ?? null, item.destinationTimezone ?? null, item.title, item.status, item.localDate ?? null, item.startsAt ?? null, item.endsAt ?? null, item.startTimeFlexibility ?? null, item.endTimeFlexibility ?? null, item.timeWindow ?? null, JSON.stringify(item.assumptions ?? []), item.timezone ?? null, item.timezoneSource ?? null, item.location ?? null, item.notes ?? null, ownerId, now());
       const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) VALUES (?, ?)`);
       for (const kind of item.kinds) insertKind.run(item.id, kind);
       if (proposal.replacement_for_item_id) {
@@ -706,7 +710,7 @@ export class TravelService {
     const pageSize = Math.min(Math.max(query.pageSize ?? 10, 1), 10);
     const continuation = this.readQueryToken(query.continuationToken, tripId, memberId);
     const effectiveQuery = continuation?.query ?? query;
-    const matches = (item: { id?: string; title: string; startsAt?: string; endsAt?: string; timezone?: string; timezoneSource?: TimezoneSource; originTimezone?: string; destinationTimezone?: string; shape?: ProposalShape; location?: string; origin?: string; destination?: string; kinds: TripItemKind[] }) => {
+    const matches = (item: { id?: string; title: string; localDate?: string; startsAt?: string; endsAt?: string; timezone?: string; timezoneSource?: TimezoneSource; originTimezone?: string; destinationTimezone?: string; shape?: ProposalShape; location?: string; origin?: string; destination?: string; kinds: TripItemKind[] }) => {
       if (effectiveQuery.proposalId && item.id !== effectiveQuery.proposalId) return false;
       if (effectiveQuery.date && !overlapsLocalDate(item, effectiveQuery.date, trip.timezone)) return false;
       if (effectiveQuery.location && ![item.location, item.origin, item.destination].some((value) => value?.toLocaleLowerCase().includes(effectiveQuery.location!.toLocaleLowerCase()))) return false;
@@ -782,7 +786,7 @@ export class TravelService {
     });
   }
 
-  private insertDraftRevision(tripId: string, current: ExtractionDraftRow, status: ExtractionDraft["status"], payload: ExtractionDraftPayload): ExtractionDraft {
+  private insertDraftRevision(tripId: string, current: ExtractionDraftRow, status: ExtractionDraft["status"], payload: ExtractionDraftPayload, metadataOverride?: ExtractionDraftMetadata): ExtractionDraft {
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
       const latest = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(current.source_id) as ExtractionDraftRow | undefined;
@@ -790,8 +794,9 @@ export class TravelService {
       const revision = latest.revision + 1;
       const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
       const timestamp = now();
-      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', NULL, NULL, NULL, ?, ?)`).run(
-        draftId, tripId, current.source_id, current.originating_user_id, revision, current.id, status, JSON.stringify(payload), timestamp, timestamp,
+      const metadata = metadataOverride ?? { provider: current.provider ?? "unknown", model: current.model ?? "unknown", promptVersion: current.prompt_version ?? EXTRACTION_PROMPT_VERSION };
+      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, NULL, NULL, NULL, ?, ?)`).run(
+        draftId, tripId, current.source_id, current.originating_user_id, revision, current.id, status, JSON.stringify(payload), metadata.provider, metadata.model, metadata.promptVersion, timestamp, timestamp,
       );
       const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE id = ?`).get(draftId) as ExtractionDraftRow | undefined;
       if (!persisted) throw new InvalidSourceError(`Extraction Draft ${draftId} could not be persisted.`);
@@ -841,6 +846,9 @@ interface ExtractionDraftRow {
   revision: number;
   previous_draft_id: string | null;
   status: ExtractionDraft["status"];
+  provider: string | null;
+  model: string | null;
+  prompt_version: string | null;
   payload_json: string;
   proposal_ids_json: string;
   confirmed_at: string | null;
@@ -882,7 +890,7 @@ function toTripAccessPolicy(row: TripAccessPolicyRow): TripAccessPolicy {
 
 interface ProposalRow {
   id: string; source_id: string; replacement_for_item_id: string | null; confirmed_trip_item_id: string | null; rejection_reason: string | null; rejected_by: string | null; rejected_at: string | null; kind: string; shape: ProposalShape | null; shape_source: ProposalShapeSource | null; origin: string | null; destination: string | null; origin_timezone: string | null; destination_timezone: string | null; title: string; item_status: TripItemStatus; proposal_status: "pending" | "confirmed" | "rejected"; decision_id: string | null;
-  starts_at: string | null; ends_at: string | null; start_time_flexibility: ExtractedTripItem["startTimeFlexibility"] | null; end_time_flexibility: ExtractedTripItem["endTimeFlexibility"] | null; time_window: ExtractedTripItem["timeWindow"] | null; assumptions_json: string; timezone: string | null; timezone_source: TimezoneSource | null; location: string | null; notes: string | null; deadline_at: string | null; source_line: number | null; source_excerpt: string | null;
+  local_date: string | null; starts_at: string | null; ends_at: string | null; start_time_flexibility: ExtractedTripItem["startTimeFlexibility"] | null; end_time_flexibility: ExtractedTripItem["endTimeFlexibility"] | null; time_window: ExtractedTripItem["timeWindow"] | null; assumptions_json: string; timezone: string | null; timezone_source: TimezoneSource | null; location: string | null; notes: string | null; deadline_at: string | null; source_line: number | null; source_excerpt: string | null;
 }
 
 interface ProposalMembershipRow {
@@ -897,15 +905,21 @@ function toDecision(row: DecisionRow): Decision {
   return { id: row.id, tripId: row.trip_id, title: row.title, status: row.status, selectedProposalId: row.selected_proposal_id, resolvedBy: row.resolved_by, resolvedAt: row.resolved_at, cancelledBy: row.cancelled_by, cancelledAt: row.cancelled_at };
 }
 
-function compareScheduledItems(left: { startsAt?: string; title: string; id: string }, right: { startsAt?: string; title: string; id: string }): number {
-  // A date-only value has no instant; keep it out of Unix-time ordering and
-  // place it deterministically after timed records using the tie-breakers.
-  const leftTime = left.startsAt && !isDateOnly(left.startsAt) ? Date.parse(left.startsAt) : Number.POSITIVE_INFINITY;
-  const rightTime = right.startsAt && !isDateOnly(right.startsAt) ? Date.parse(right.startsAt) : Number.POSITIVE_INFINITY;
+function compareScheduledItems(left: { localDate?: string; startsAt?: string; title: string; id: string }, right: { localDate?: string; startsAt?: string; title: string; id: string }): number {
+  // Date-only values sort by their calendar date; values without any date sort last.
+  const leftTime = scheduledSortTime(left);
+  const rightTime = scheduledSortTime(right);
   return leftTime - rightTime || left.title.localeCompare(right.title) || left.id.localeCompare(right.id);
 }
 
-function overlapsLocalDate(item: { startsAt?: string; endsAt?: string; timezone?: string; originTimezone?: string; destinationTimezone?: string; shape?: ProposalShape }, date: string, tripTimezone: string): boolean {
+function scheduledSortTime(item: { localDate?: string; startsAt?: string }): number {
+  const value = item.startsAt && !isDateOnly(item.startsAt) ? item.startsAt : item.localDate ?? item.startsAt;
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+
+function overlapsLocalDate(item: { localDate?: string; startsAt?: string; endsAt?: string; timezone?: string; originTimezone?: string; destinationTimezone?: string; shape?: ProposalShape }, date: string, tripTimezone: string): boolean {
+  if (item.localDate && item.localDate === date) return true;
   if (!item.startsAt) return false;
   const timezones = item.shape === "route"
     ? [...new Set([item.originTimezone, item.destinationTimezone, item.timezone, tripTimezone].filter((timezone): timezone is string => Boolean(timezone)))]
@@ -919,7 +933,7 @@ function overlapsLocalDate(item: { startsAt?: string; endsAt?: string; timezone?
 
 function toProposal(row: ProposalRow, kinds = [row.kind as Proposal["kind"]]): Proposal {
   const shape = row.shape ?? (row.location ? "point" : "point");
-  return { id: row.id, sourceId: row.source_id, replacementForItemId: row.replacement_for_item_id, kind: row.kind as Proposal["kind"], kinds, shape, shapeSource: row.shape_source ?? "inferred", origin: row.origin ?? undefined, destination: row.destination ?? undefined, originTimezone: row.origin_timezone ?? undefined, destinationTimezone: row.destination_timezone ?? undefined, title: row.title, itemStatus: row.item_status, status: row.proposal_status, startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, startTimeFlexibility: row.start_time_flexibility ?? undefined, endTimeFlexibility: row.end_time_flexibility ?? undefined, timeWindow: row.time_window ?? undefined, assumptions: parseAssumptions(row.assumptions_json), timezone: row.timezone ?? undefined, timezoneSource: row.timezone_source ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, rejectionReason: row.rejection_reason, rejectedBy: row.rejected_by, rejectedAt: row.rejected_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
+  return { id: row.id, sourceId: row.source_id, replacementForItemId: row.replacement_for_item_id, kind: row.kind as Proposal["kind"], kinds, shape, shapeSource: row.shape_source ?? "inferred", origin: row.origin ?? undefined, destination: row.destination ?? undefined, originTimezone: row.origin_timezone ?? undefined, destinationTimezone: row.destination_timezone ?? undefined, title: row.title, itemStatus: row.item_status, status: row.proposal_status, localDate: row.local_date ?? undefined, startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, startTimeFlexibility: row.start_time_flexibility ?? undefined, endTimeFlexibility: row.end_time_flexibility ?? undefined, timeWindow: row.time_window ?? undefined, assumptions: parseAssumptions(row.assumptions_json), timezone: row.timezone ?? undefined, timezoneSource: row.timezone_source ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, rejectionReason: row.rejection_reason, rejectedBy: row.rejected_by, rejectedAt: row.rejected_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
 }
 
 function parseAssumptions(value: string | null | undefined): string[] {
@@ -962,11 +976,15 @@ function toExtractionDraft(row: ExtractionDraftRow): ExtractionDraft {
   } catch (error) {
     throw new InvalidSourceError(`Extraction Draft ${row.id} contains invalid Proposal IDs: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return { id: row.id, tripId: row.trip_id, sourceId: row.source_id, originatingUserId: row.originating_user_id ?? null, revision: row.revision, previousDraftId: row.previous_draft_id ?? null, status: row.status, proposalIds, confirmedAt: row.confirmed_at ?? null, cancelledAt: row.cancelled_at ?? null, cancelledBy: row.cancelled_by ?? null, ...payload, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, tripId: row.trip_id, sourceId: row.source_id, originatingUserId: row.originating_user_id ?? null, revision: row.revision, previousDraftId: row.previous_draft_id ?? null, status: row.status, metadata: { provider: row.provider ?? "unknown", model: row.model ?? "unknown", promptVersion: row.prompt_version ?? EXTRACTION_PROMPT_VERSION }, proposalIds, confirmedAt: row.confirmed_at ?? null, cancelledAt: row.cancelled_at ?? null, cancelledBy: row.cancelled_by ?? null, ...payload, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+function defaultExtractionMetadata(): ExtractionDraftMetadata {
+  return { provider: "unknown", model: "unknown", promptVersion: EXTRACTION_PROMPT_VERSION };
 }
 
 function toTripItem(row: Record<string, unknown>, kinds = [row.kind as TripItem["kind"]]): TripItem {
-  return { id: row.id as string, sourceId: row.source_id as string, replacementForItemId: (row.replacement_for_item_id as string) ?? null, kind: row.kind as TripItem["kind"], kinds, shape: (row.shape as ProposalShape | null) ?? "point", shapeSource: (row.shape_source as ProposalShapeSource | null) ?? "inferred", origin: (row.origin as string) ?? undefined, destination: (row.destination as string) ?? undefined, originTimezone: (row.origin_timezone as string) ?? undefined, destinationTimezone: (row.destination_timezone as string) ?? undefined, title: row.title as string, status: row.status as TripItemStatus, startsAt: (row.starts_at as string) ?? undefined, endsAt: (row.ends_at as string) ?? undefined, startTimeFlexibility: row.start_time_flexibility as ExtractedTripItem["startTimeFlexibility"] ?? undefined, endTimeFlexibility: row.end_time_flexibility as ExtractedTripItem["endTimeFlexibility"] ?? undefined, timeWindow: row.time_window as ExtractedTripItem["timeWindow"] ?? undefined, assumptions: parseAssumptions(row.assumptions_json as string | null | undefined), timezone: (row.timezone as string) ?? undefined, timezoneSource: (row.timezone_source as TimezoneSource | null) ?? undefined, location: (row.location as string) ?? undefined, notes: (row.notes as string) ?? undefined, confirmedBy: (row.confirmed_by as string) ?? null };
+  return { id: row.id as string, sourceId: row.source_id as string, replacementForItemId: (row.replacement_for_item_id as string) ?? null, kind: row.kind as TripItem["kind"], kinds, shape: (row.shape as ProposalShape | null) ?? "point", shapeSource: (row.shape_source as ProposalShapeSource | null) ?? "inferred", origin: (row.origin as string) ?? undefined, destination: (row.destination as string) ?? undefined, originTimezone: (row.origin_timezone as string) ?? undefined, destinationTimezone: (row.destination_timezone as string) ?? undefined, title: row.title as string, status: row.status as TripItemStatus, localDate: (row.local_date as string) ?? undefined, startsAt: (row.starts_at as string) ?? undefined, endsAt: (row.ends_at as string) ?? undefined, startTimeFlexibility: row.start_time_flexibility as ExtractedTripItem["startTimeFlexibility"] ?? undefined, endTimeFlexibility: row.end_time_flexibility as ExtractedTripItem["endTimeFlexibility"] ?? undefined, timeWindow: row.time_window as ExtractedTripItem["timeWindow"] ?? undefined, assumptions: parseAssumptions(row.assumptions_json as string | null | undefined), timezone: (row.timezone as string) ?? undefined, timezoneSource: (row.timezone_source as TimezoneSource | null) ?? undefined, location: (row.location as string) ?? undefined, notes: (row.notes as string) ?? undefined, confirmedBy: (row.confirmed_by as string) ?? null };
 }
 
 const canonicalTripItemKinds = new Set<TripItemKind>(["flight", "lodging", "rental_car", "transport", "meal", "activity", "shopping", "meeting", "other"]);
@@ -1210,10 +1228,10 @@ function findUnparseableLineIssues(sourceId: string, markdown: string): ReviewIs
   });
 }
 
-type ScheduledItem = Pick<ExtractedTripItem, "startsAt" | "endsAt">;
+type ScheduledItem = Pick<ExtractedTripItem, "localDate" | "startsAt" | "endsAt">;
 
 function isSameDateOrOverlapping(left: ScheduledItem, right: ScheduledItem, tripTimezone: string): boolean {
-  if (dateKey(left.startsAt, tripTimezone) === dateKey(right.startsAt, tripTimezone)) return true;
+  if (dateKey(left.localDate, left.startsAt, tripTimezone) === dateKey(right.localDate, right.startsAt, tripTimezone)) return true;
   return hasTimeOverlap(left, right);
 }
 
@@ -1228,7 +1246,8 @@ function hasTimeOverlap(left: ScheduledItem, right: ScheduledItem): boolean {
   return leftStart <= rightEnd && rightStart <= leftEnd;
 }
 
-function dateKey(value: string | undefined, tripTimezone: string): string | null {
+function dateKey(localDate: string | undefined, value: string | undefined, tripTimezone: string): string | null {
+  if (localDate) return localDate;
   if (!value) return null;
   if (isDateOnly(value)) return value;
   const parsed = new Date(value);
@@ -1239,7 +1258,7 @@ function dateKey(value: string | undefined, tripTimezone: string): string | null
 function buildReviewIssues(proposals: Proposal[], confirmed: TripItem[]): ReviewIssue[] {
   const issues: ReviewIssue[] = [];
   for (const proposal of proposals) {
-    if (!proposal.startsAt) issues.push({ code: "missing_start_time", message: `「${proposal.title}」缺少開始時間。`, proposalIds: [proposal.id] });
+    if (!proposal.startsAt && !proposal.localDate) issues.push({ code: "missing_start_time", message: `「${proposal.title}」缺少日期。`, proposalIds: [proposal.id] });
     if (proposal.startsAt && !isDateOnly(proposal.startsAt) && proposal.timezoneSource === "fallback") {
       issues.push({ code: "missing_timezone", message: `「${proposal.title}」有時間但缺少 IANA timezone，暫以 Trip Timezone fallback。`, proposalIds: [proposal.id] });
     } else if (proposal.startsAt && !isDateOnly(proposal.startsAt) && !proposal.timezone) {
