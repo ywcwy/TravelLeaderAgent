@@ -204,7 +204,7 @@ function validateItem(value: unknown, index: number): ExtractionDraftItem {
     throw new ExtractionDraftValidationError(`items[${index}].localDate must be an ISO calendar date.`);
   }
   for (const field of ["startsAt", "endsAt", "title", "sourceExcerpt"] as const) {
-    if (value[field] !== undefined && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
+    if (value[field] !== undefined && value[field] !== null && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
   }
   for (const field of ["origin", "destination", "location", "notes", "deadlineAt"] as const) {
     if (value[field] !== undefined && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);

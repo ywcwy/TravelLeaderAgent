@@ -207,11 +207,24 @@ test("accepts a provider item with a null localDate", async () => {
   const trip = service.createActiveTrip("system-admin", group.id, "Null date 旅程", "Asia/Taipei");
   const source = "有待補日期的住宿";
   const payload = fixture(source);
-  (payload.items[0] as unknown as { localDate: string | null }).localDate = null;
+  (payload.items[0] as unknown as { localDate: string | null; startsAt: string | null; endsAt: string | null }).localDate = null;
+  (payload.items[0] as unknown as { startsAt: string | null }).startsAt = null;
+  (payload.items[0] as unknown as { endsAt: string | null }).endsAt = null;
   const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:null-date" }, new FakeLlmAdapter({ [source]: payload }));
   assert.equal(draft.status, "pending_confirmation");
   assert.equal(draft.items[0]?.localDate, null);
   db.close();
+});
+
+test("accepts a date-only provider item with null clock timestamps", () => {
+  const payload = fixture("date-only provider output");
+  payload.items[0]!.localDate = "2026-10-01";
+  (payload.items[0] as unknown as { startsAt: string | null; endsAt: string | null }).startsAt = null;
+  (payload.items[0] as unknown as { endsAt: string | null }).endsAt = null;
+  const validated = validateExtractionDraftPayload(payload);
+  assert.equal(validated.items[0]?.localDate, "2026-10-01");
+  assert.equal(validated.items[0]?.startsAt, null);
+  assert.equal(validated.items[0]?.endsAt, null);
 });
 
 test("rejects an invalid calendar date in an extraction item", () => {

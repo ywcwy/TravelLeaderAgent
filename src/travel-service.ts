@@ -902,9 +902,15 @@ function toDecision(row: DecisionRow): Decision {
 
 function compareScheduledItems(left: { localDate?: string; startsAt?: string; title: string; id: string }, right: { localDate?: string; startsAt?: string; title: string; id: string }): number {
   // Date-only values sort by their calendar date; values without any date sort last.
-  const leftTime = left.startsAt && !isDateOnly(left.startsAt) ? Date.parse(left.startsAt) : Date.parse(left.localDate ?? left.startsAt ?? "T") || Number.POSITIVE_INFINITY;
-  const rightTime = right.startsAt && !isDateOnly(right.startsAt) ? Date.parse(right.startsAt) : Date.parse(right.localDate ?? right.startsAt ?? "T") || Number.POSITIVE_INFINITY;
+  const leftTime = scheduledSortTime(left);
+  const rightTime = scheduledSortTime(right);
   return leftTime - rightTime || left.title.localeCompare(right.title) || left.id.localeCompare(right.id);
+}
+
+function scheduledSortTime(item: { localDate?: string; startsAt?: string }): number {
+  const value = item.startsAt && !isDateOnly(item.startsAt) ? item.startsAt : item.localDate ?? item.startsAt;
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
 }
 
 function overlapsLocalDate(item: { localDate?: string; startsAt?: string; endsAt?: string; timezone?: string; originTimezone?: string; destinationTimezone?: string; shape?: ProposalShape }, date: string, tripTimezone: string): boolean {
