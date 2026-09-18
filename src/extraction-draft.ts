@@ -148,8 +148,13 @@ export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sou
       issues.push({ code: "duplicate_item", message: `排除重複行程「${item.title}」。` });
       continue;
     }
-    const contradictionKey = [item.kind, item.title.trim().toLocaleLowerCase(), locationKey ?? "", item.localDate ?? ""].join("|");
-    const contradiction = kept.find((candidate) => [candidate.kind, candidate.title.trim().toLocaleLowerCase(), candidate.location?.trim().toLocaleLowerCase() ?? "", candidate.localDate ?? ""].join("|") === contradictionKey && candidate.startsAt !== item.startsAt);
+    const contradictionKey = [item.kind, item.title.trim().toLocaleLowerCase(), locationKey ?? ""].join("|");
+    const contradiction = kept.find((candidate) => {
+      const candidateKey = [candidate.kind, candidate.title.trim().toLocaleLowerCase(), candidate.location?.trim().toLocaleLowerCase() ?? ""].join("|");
+      return candidateKey === contradictionKey
+        && (candidate.localDate !== item.localDate || candidate.startsAt !== item.startsAt || candidate.endsAt !== item.endsAt)
+        && Boolean(candidate.localDate || item.localDate || candidate.startsAt || item.startsAt);
+    });
     if (contradiction) {
       issues.push({ code: "contradictory_item", message: `排除互相矛盾的行程「${item.title}」，保留先出現的候選。` });
       continue;

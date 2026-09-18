@@ -286,6 +286,20 @@ test("deduplicates identical model candidates without changing the Source", asyn
   db.close();
 });
 
+test("guards contradictory candidates for the same itinerary identity", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-contradiction", "Contradiction 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Contradiction 旅程", "Asia/Taipei");
+  const source = "住宿日期待確認";
+  const item = { ...fixture(source).items[0]!, title: "Holiday Inn", localDate: "2026-10-01", startsAt: undefined, endsAt: undefined, location: "Page" };
+  const conflicting = { ...item, localDate: "2026-10-02" };
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:contradiction" }, new FakeLlmAdapter({ [source]: { items: [item, conflicting], missing: [], assumptions: [], issues: [], sourceExcerpt: source } }));
+  assert.equal(draft.items.length, 1);
+  assert.equal(draft.issues[0]?.code, "contradictory_item");
+  db.close();
+});
+
 test("required missing Draft information blocks confirmation", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
