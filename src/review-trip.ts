@@ -61,7 +61,7 @@ function renderHuman(result: ReturnType<typeof toResult>): string {
     `Extraction Drafts (${result.counts.extractionDrafts})`,
     ...result.extractionDrafts.map(({ draft, importBatchId, chunks }) => {
       const dates = draftDateRange(draft);
-      const chunkSummary = chunks.length > 0 ? ` | Chunks ${chunks.length} (${chunks.map((chunk) => `${chunk.ordinal + 1}:${chunk.status}`).join(",")})` : "";
+      const chunkSummary = chunks.length > 0 ? ` | Chunks ${chunks.length} (${chunks.map((chunk) => `${chunk.ordinal + 1}:${chunk.status}/attempts=${chunk.attempts}${chunk.errorCode ? `/${chunk.errorCode}` : ""}`).join(",")})` : "";
       return `- ${draft.id} | batch ${importBatchId} | ${draft.status} | revision ${draft.revision} | ${draft.items.length} items | ${dates.from ?? "undated"}${dates.to && dates.to !== dates.from ? `..${dates.to}` : ""} | Review Issues ${draft.issues.length + draft.missing.length}${chunkSummary}`;
     }),
     `Review Issues (${result.counts.reviewIssues})`,

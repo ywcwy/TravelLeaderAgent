@@ -139,6 +139,9 @@ export interface ImportChunk {
   content: string;
   status: ImportChunkStatus;
   attempts: number;
+  errorCode?: string;
+  errorMessage?: string;
+  extractionPayload?: ExtractionDraftPayload;
   createdAt: string;
   updatedAt: string;
 }

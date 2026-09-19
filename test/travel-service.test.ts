@@ -4,7 +4,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { TravelDatabase } from "../src/database.ts";
-import { FakeLlmAdapter } from "../src/extraction-draft.ts";
+import { FakeLlmAdapter, type LlmAdapter } from "../src/extraction-draft.ts";
+import type { ExtractionDraftPayload } from "../src/domain.ts";
 import { ConflictError, InvalidSourceError, InvalidTimezoneError, PermissionError, TravelService, TripNotActiveError } from "../src/travel-service.ts";
 import { renderItineraryQuery } from "../src/itinerary-query.ts";
 
@@ -317,6 +318,47 @@ test("persists ordered Import Chunks for a multi-section Markdown batch", () => 
   ]);
   assert.notEqual(chunks[0]?.contentHash, chunks[1]?.contentHash);
   assert.equal(chunks[0]?.content.endsWith(" "), false);
+  db.close();
+});
+
+test("keeps successful chunks when a later chunk fails", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-partial", "Partial 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Partial 旅程", "Asia/Taipei");
+  const markdown = ["# Day 1", "10/1 住宿 Page", "", "# Day 2", "10/2 住宿 Kanab"].join("\n");
+  const adapter: LlmAdapter = {
+    metadata: { provider: "fake", model: "partial", promptVersion: "test" },
+    extract: async (input: { sourceContent: string }) => {
+      if (input.sourceContent.includes("Day 2")) throw new Error("simulated provider failure");
+      return {
+        items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Day 1 lodging", status: "provisional", localDate: "2026-10-01", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" }],
+        missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
+      } satisfies ExtractionDraftPayload;
+    },
+  };
+
+  const draft = await service.createExtractionDraft(trip.id, markdown, { idempotencyKey: "partial:one", type: "markdown", provenance: { provider: "line", messageId: "partial", userId: "U-partial" } }, adapter);
+  const chunks = service.getImportChunks(trip.id, draft.sourceId);
+  assert.equal(chunks.length, 2);
+  assert.deepEqual(chunks.map((chunk) => chunk.status), ["completed", "failed"]);
+  assert.deepEqual(chunks.map((chunk) => chunk.attempts), [1, 1]);
+  assert.equal(chunks[1]?.errorCode, "chunk_extraction_error");
+  assert.equal(draft.status, "pending_confirmation");
+  assert.equal(draft.items.length, 1);
+  assert.ok(draft.issues.some((issue) => issue.code === "partial_batch"));
+  const retried = await service.retryImportChunk(trip.id, "U-partial", chunks[1]!.id, {
+    metadata: { provider: "fake", model: "retry", promptVersion: "test" },
+    extract: async (input) => ({
+      items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Day 2 lodging", status: "provisional", localDate: "2026-10-02", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Kanab" }],
+      missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
+    } satisfies ExtractionDraftPayload),
+  });
+  assert.equal(retried.status, "completed");
+  assert.equal(retried.attempts, 2);
+  const rebuilt = service.getExtractionDraft(trip.id, draft.id);
+  assert.equal(rebuilt?.items.length, 2);
+  assert.equal(rebuilt?.issues.some((issue) => issue.code === "partial_batch"), false);
   db.close();
 });
 

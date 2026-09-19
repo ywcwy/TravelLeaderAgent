@@ -88,6 +88,9 @@ export class TravelDatabase {
         content TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed', 'blocked', 'removed')),
         attempts INTEGER NOT NULL DEFAULT 0,
+        error_code TEXT,
+        error_message TEXT,
+        result_json TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE (source_id, ordinal)
@@ -276,6 +279,10 @@ export class TravelDatabase {
     if (!extractionDraftColumns.some((column) => column.name === "model")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN model TEXT NOT NULL DEFAULT 'unknown'`);
     if (!extractionDraftColumns.some((column) => column.name === "prompt_version")) this.connection.exec(`ALTER TABLE extraction_drafts ADD COLUMN prompt_version TEXT NOT NULL DEFAULT 'extraction-draft-v3'`);
     this.connection.exec(`CREATE UNIQUE INDEX IF NOT EXISTS extraction_draft_source_revision ON extraction_drafts(source_id, revision)`);
+    const importChunkColumns = this.connection.prepare(`PRAGMA table_info(import_chunks)`).all() as Array<{ name: string }>;
+    if (!importChunkColumns.some((column) => column.name === "error_code")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN error_code TEXT`);
+    if (!importChunkColumns.some((column) => column.name === "error_message")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN error_message TEXT`);
+    if (!importChunkColumns.some((column) => column.name === "result_json")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN result_json TEXT`);
     const decisionColumns = this.connection.prepare(`PRAGMA table_info(decisions)`).all() as Array<{ name: string }>;
     const decisionTable = this.connection.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'decisions'`).get() as { sql: string } | undefined;
     if (decisionTable && !decisionTable.sql.includes("needs_options")) {

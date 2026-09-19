@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
-import { EXTRACTION_PROMPT_VERSION, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
+import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
 import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
@@ -309,17 +309,78 @@ export class TravelService {
       content: row.content as string,
       status: row.status as ImportChunk["status"],
       attempts: row.attempts as number,
+      ...(typeof row.error_code === "string" ? { errorCode: row.error_code } : {}),
+      ...(typeof row.error_message === "string" ? { errorMessage: row.error_message } : {}),
+      ...(typeof row.result_json === "string" ? { extractionPayload: parseChunkPayload(row.result_json) } : {}),
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     }));
   }
 
+  async retryImportChunk(tripId: string, userId: string, chunkId: string, adapter: LlmAdapter): Promise<ImportChunk> {
+    const trip = this.requireActiveTrip(tripId);
+    const row = this.db.connection.prepare(`SELECT chunk.*, source.provider_user_id FROM import_chunks chunk JOIN sources source ON source.id = chunk.source_id WHERE chunk.id = ? AND chunk.trip_id = ?`).get(chunkId, tripId) as (Record<string, unknown> & { provider_user_id: string | null }) | undefined;
+    if (!row) throw new NotFoundError(`Import Chunk ${chunkId} was not found.`);
+    if (userId !== this.systemAdministratorId && (!row.provider_user_id || row.provider_user_id !== userId)) throw new PermissionError("Only the originating user or System Administrator can retry an Import Chunk.");
+    if (row.status !== "failed") throw new ConflictError(`Import Chunk ${chunkId} is not failed and cannot be retried.`);
+    const currentDraft = this.db.connection.prepare(`SELECT status FROM extraction_drafts WHERE trip_id = ? AND source_id = ? ORDER BY revision DESC LIMIT 1`).get(tripId, String(row.source_id)) as { status: ExtractionDraft["status"] } | undefined;
+    if (!currentDraft) throw new NotFoundError(`Extraction Draft for Import Chunk ${chunkId} was not found.`);
+    if (currentDraft.status === "confirmed" || currentDraft.status === "cancelled") throw new ConflictError(`Import Chunk ${chunkId} cannot be retried after its Extraction Draft is ${currentDraft.status}.`);
+    const attempts = Number(row.attempts) + 1;
+    let payload: ExtractionDraftPayload | null = null;
+    let status: ImportChunkStatus = "completed";
+    let errorCode: string | null = null;
+    let errorMessage: string | null = null;
+    try {
+      payload = guardExtractionDraftPayload(validateExtractionDraftPayload(await adapter.extract({ sourceContent: String(row.content), tripTimezone: trip.timezone, currentDate: currentDateInTimezone(trip.timezone), inputType: "markdown" })), String(row.content));
+    } catch (error) {
+      status = "failed";
+      const failure = classifyChunkFailure(error);
+      errorCode = failure.code;
+      errorMessage = failure.message;
+    }
+    const timestamp = now();
+    this.updateImportChunk(chunkId, status, attempts, errorCode, errorMessage, payload, timestamp);
+    this.rebuildExtractionDraftFromChunks(tripId, String(row.source_id), timestamp);
+    const updated = this.getImportChunks(tripId, String(row.source_id)).find((chunk) => chunk.id === chunkId);
+    if (!updated) throw new InvalidSourceError(`Import Chunk ${chunkId} disappeared after retry.`);
+    return updated;
+  }
+
+  private rebuildExtractionDraftFromChunks(tripId: string, sourceId: string, timestamp: string): void {
+    const draft = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND source_id = ? ORDER BY revision DESC LIMIT 1`).get(tripId, sourceId) as ExtractionDraftRow | undefined;
+    if (!draft) return;
+    const rows = this.db.connection.prepare(`SELECT * FROM import_chunks WHERE trip_id = ? AND source_id = ? ORDER BY ordinal`).all(tripId, sourceId) as Array<Record<string, unknown>>;
+    const payload: ExtractionDraftPayload = { items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: "" };
+    let failed = 0;
+    for (const row of rows) {
+      const chunkPayload = typeof row.result_json === "string" ? parseChunkPayload(row.result_json) : undefined;
+      if (row.status === "failed") {
+        failed += 1;
+        if (typeof row.error_code === "string") payload.issues.push({ code: row.error_code, message: `第 ${row.start_line}-${row.end_line} 行 Chunk 解析失敗：${row.error_message ?? "LLM extraction failed."}` });
+      }
+      if (!chunkPayload) continue;
+      payload.items.push(...chunkPayload.items.map((item) => item.sourceLine ? { ...item, sourceLine: item.sourceLine + Number(row.start_line) - 1 } : item));
+      payload.missing.push(...chunkPayload.missing);
+      payload.assumptions.push(...chunkPayload.assumptions);
+      payload.issues.push(...chunkPayload.issues);
+      if (!payload.sourceExcerpt) payload.sourceExcerpt = chunkPayload.sourceExcerpt;
+    }
+    if (failed > 0 && payload.items.length > 0) payload.issues.push({ code: "partial_batch", message: `Import Batch 部分完成：${failed}/${rows.length} 個 Chunk 失敗，可針對失敗 Chunk 重試。` });
+    const status: ExtractionDraft["status"] = payload.items.length > 0 && failed < rows.length ? "pending_confirmation" : "failed";
+    this.db.connection.prepare(`UPDATE extraction_drafts SET status = ?, payload_json = ?, updated_at = ? WHERE id = ?`).run(status, JSON.stringify(payload), timestamp, draft.id);
+  }
+
   private persistImportChunks(tripId: string, sourceId: string, importBatchId: string, markdown: string, status: ImportChunkStatus, timestamp: string): void {
     const chunks = splitMarkdownIntoChunks(markdown);
-    const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO import_chunks (id, trip_id, source_id, import_batch_id, ordinal, start_line, end_line, content_hash, content, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`);
+    const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO import_chunks (id, trip_id, source_id, import_batch_id, ordinal, start_line, end_line, content_hash, content, status, attempts, error_code, error_message, result_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?)`);
     for (const chunk of chunks) {
       insert.run(`C-${randomUUID().replaceAll("-", "").slice(0, 20).toUpperCase()}`, tripId, sourceId, importBatchId, chunk.ordinal, chunk.startLine, chunk.endLine, createHash("sha256").update(chunk.content).digest("hex"), chunk.content, status, timestamp, timestamp);
     }
+  }
+
+  private updateImportChunk(chunkId: string, status: ImportChunkStatus, attempts: number, errorCode: string | null, errorMessage: string | null, extractionPayload: ExtractionDraftPayload | null, timestamp: string): void {
+    this.db.connection.prepare(`UPDATE import_chunks SET status = ?, attempts = ?, error_code = ?, error_message = ?, result_json = ?, updated_at = ? WHERE id = ?`).run(status, attempts, errorCode, errorMessage, extractionPayload ? JSON.stringify(extractionPayload) : null, timestamp, chunkId);
   }
 
   getLatestExtractionDrafts(tripId: string): ExtractionDraftReview[] {
@@ -366,21 +427,32 @@ export class TravelService {
     }
 
     const currentDate = options.currentDate ?? currentDateInTimezone(trip.timezone);
-    const input = { sourceContent: content, tripTimezone: trip.timezone, currentDate, inputType: options.inputType ?? options.type ?? "freeform" };
-    let status: ExtractionDraft["status"] = "pending_confirmation";
-    let payload: ExtractionDraftPayload;
-    try {
-      payload = guardExtractionDraftPayload(validateExtractionDraftPayload(await adapter.extract(input)), content);
-    } catch (error) {
-      status = "failed";
-      payload = {
-        items: [],
-        missing: [],
-        assumptions: [],
-        issues: [{ code: "adapter_failure", message: error instanceof Error ? error.message : "LLM extraction failed." }],
-        sourceExcerpt: content.trim().slice(0, 500),
-      };
+    const inputType = options.inputType ?? options.type ?? "freeform";
+    this.persistImportChunks(tripId, source.id, idempotencyKey, content, "pending", now());
+    const chunks = this.getImportChunks(tripId, source.id);
+    const aggregate: ExtractionDraftPayload = { items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: content.trim().slice(0, 500) };
+    let failedChunkCount = 0;
+    for (const chunk of chunks) {
+      const attempts = chunk.attempts + 1;
+      try {
+        const extracted = guardExtractionDraftPayload(validateExtractionDraftPayload(await adapter.extract({ sourceContent: chunk.content, tripTimezone: trip.timezone, currentDate, inputType })), chunk.content);
+        aggregate.items.push(...extracted.items.map((item) => item.sourceLine ? { ...item, sourceLine: item.sourceLine + chunk.startLine - 1 } : item));
+        aggregate.missing.push(...extracted.missing);
+        aggregate.assumptions.push(...extracted.assumptions);
+        aggregate.issues.push(...extracted.issues);
+        this.updateImportChunk(chunk.id, "completed", attempts, null, null, extracted, now());
+      } catch (error) {
+        failedChunkCount += 1;
+        const failure = classifyChunkFailure(error);
+        aggregate.issues.push({ code: failure.code, message: `第 ${chunk.startLine}-${chunk.endLine} 行 Chunk 解析失敗：${failure.message}` });
+        this.updateImportChunk(chunk.id, "failed", attempts, failure.code, failure.message, null, now());
+      }
     }
+    if (failedChunkCount > 0 && aggregate.items.length > 0) {
+      aggregate.issues.push({ code: "partial_batch", message: `Import Batch 部分完成：${failedChunkCount}/${chunks.length} 個 Chunk 失敗，可針對失敗 Chunk 重試。` });
+    }
+    const status: ExtractionDraft["status"] = aggregate.items.length > 0 && failedChunkCount < chunks.length ? "pending_confirmation" : "failed";
+    const payload = aggregate;
     const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
     const timestamp = now();
     const metadata = adapter.metadata ?? defaultExtractionMetadata();
@@ -1088,6 +1160,21 @@ function toExtractionDraft(row: ExtractionDraftRow): ExtractionDraft {
 
 function defaultExtractionMetadata(): ExtractionDraftMetadata {
   return { provider: "unknown", model: "unknown", promptVersion: EXTRACTION_PROMPT_VERSION };
+}
+
+function classifyChunkFailure(error: unknown): { code: string; message: string } {
+  const message = error instanceof Error ? error.message : "LLM extraction failed.";
+  if (error instanceof LlmProviderError) {
+    if (/timed out/i.test(message)) return { code: "chunk_provider_timeout", message };
+    if (/malformed structured JSON|invalid structured output/i.test(message)) return { code: "chunk_malformed_output", message };
+    return { code: "chunk_provider_error", message };
+  }
+  if (error instanceof ExtractionDraftValidationError) return { code: "adapter_failure", message };
+  return { code: "chunk_extraction_error", message };
+}
+
+function parseChunkPayload(value: string): ExtractionDraftPayload | undefined {
+  try { return validateExtractionDraftPayload(JSON.parse(value)); } catch { return undefined; }
 }
 
 function toTripItem(row: Record<string, unknown>, kinds = [row.kind as TripItem["kind"]]): TripItem {
