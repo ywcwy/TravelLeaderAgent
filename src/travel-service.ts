@@ -319,7 +319,7 @@ export class TravelService {
 
   async retryImportChunk(tripId: string, userId: string, chunkId: string, adapter: LlmAdapter): Promise<ImportChunk> {
     const trip = this.requireActiveTrip(tripId);
-    const row = this.db.connection.prepare(`SELECT chunk.*, source.provider_user_id FROM import_chunks chunk JOIN sources source ON source.id = chunk.source_id WHERE chunk.id = ? AND chunk.trip_id = ?`).get(chunkId, tripId) as (Record<string, unknown> & { provider_user_id: string | null }) | undefined;
+    const row = this.db.connection.prepare(`SELECT chunk.*, source.provider_user_id, source.type AS source_type FROM import_chunks chunk JOIN sources source ON source.id = chunk.source_id WHERE chunk.id = ? AND chunk.trip_id = ?`).get(chunkId, tripId) as (Record<string, unknown> & { provider_user_id: string | null }) | undefined;
     if (!row) throw new NotFoundError(`Import Chunk ${chunkId} was not found.`);
     if (userId !== this.systemAdministratorId && (!row.provider_user_id || row.provider_user_id !== userId)) throw new PermissionError("Only the originating user or System Administrator can retry an Import Chunk.");
     if (row.status !== "failed") throw new ConflictError(`Import Chunk ${chunkId} is not failed and cannot be retried.`);
@@ -332,7 +332,7 @@ export class TravelService {
     let errorCode: string | null = null;
     let errorMessage: string | null = null;
     try {
-      payload = guardExtractionDraftPayload(validateExtractionDraftPayload(await adapter.extract({ sourceContent: String(row.content), tripTimezone: trip.timezone, currentDate: currentDateInTimezone(trip.timezone), inputType: "markdown" })), String(row.content));
+      payload = guardExtractionDraftPayload(validateExtractionDraftPayload(await adapter.extract({ sourceContent: String(row.content), tripTimezone: trip.timezone, currentDate: currentDateInTimezone(trip.timezone), inputType: String(row.source_type ?? "markdown") })), String(row.content));
     } catch (error) {
       status = "failed";
       const failure = classifyChunkFailure(error);
@@ -368,7 +368,7 @@ export class TravelService {
     }
     if (failed > 0 && payload.items.length > 0) payload.issues.push({ code: "partial_batch", message: `Import Batch 部分完成：${failed}/${rows.length} 個 Chunk 失敗，可針對失敗 Chunk 重試。` });
     const status: ExtractionDraft["status"] = payload.items.length > 0 && failed < rows.length ? "pending_confirmation" : "failed";
-    this.db.connection.prepare(`UPDATE extraction_drafts SET status = ?, payload_json = ?, updated_at = ? WHERE id = ?`).run(status, JSON.stringify(payload), timestamp, draft.id);
+    this.db.connection.prepare(`UPDATE extraction_drafts SET status = ?, payload_json = ?, updated_at = ? WHERE id = ? AND status IN ('pending_confirmation', 'failed')`).run(status, JSON.stringify(payload), timestamp, draft.id);
   }
 
   private persistImportChunks(tripId: string, sourceId: string, importBatchId: string, markdown: string, status: ImportChunkStatus, timestamp: string): void {
