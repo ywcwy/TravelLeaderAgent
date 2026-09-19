@@ -400,7 +400,12 @@ export class TravelService {
         if (typeof row.error_code === "string") payload.issues.push({ code: row.error_code, message: `第 ${row.start_line}-${row.end_line} 行 Chunk 未完成：${row.error_message ?? "LLM extraction failed."}` });
       }
       if (!chunkPayload) continue;
-      payload.items.push(...chunkPayload.items.map((item) => item.sourceLine ? { ...item, sourceLine: item.sourceLine + Number(row.start_line) - 1 } : item));
+      payload.items.push(...chunkPayload.items.map((item) => ({
+        ...item,
+        // Providers may omit sourceLine; anchor the item to the chunk start so
+        // confirmation can still distinguish completed from incomplete chunks.
+        sourceLine: item.sourceLine ? item.sourceLine + Number(row.start_line) - 1 : Number(row.start_line),
+      })));
       payload.missing.push(...chunkPayload.missing);
       payload.assumptions.push(...chunkPayload.assumptions);
       payload.issues.push(...chunkPayload.issues);
@@ -534,7 +539,11 @@ export class TravelService {
       }
       try {
         const extracted = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDate, inputType, relatedChunkContext(chunks, chunkIndex));
-        aggregate.items.push(...extracted.items.map((item) => item.sourceLine ? { ...item, sourceLine: item.sourceLine + chunk.startLine - 1 } : item));
+        aggregate.items.push(...extracted.items.map((item) => ({
+          ...item,
+          // Keep a chunk anchor even when the provider omits sourceLine.
+          sourceLine: item.sourceLine ? item.sourceLine + chunk.startLine - 1 : chunk.startLine,
+        })));
         aggregate.missing.push(...extracted.missing);
         aggregate.assumptions.push(...extracted.assumptions);
         aggregate.issues.push(...extracted.issues);
@@ -624,7 +633,7 @@ export class TravelService {
     return this.insertDraftRevision(tripId, current, composed.status, composed.payload, adapter.metadata);
   }
 
-  confirmExtractionDraft(tripId: string, userId: string, draftId: string): { draft: ExtractionDraft; proposalIds: string[] } {
+  confirmExtractionDraft(tripId: string, userId: string, draftId: string, itemIndexes?: number[]): { draft: ExtractionDraft; proposalIds: string[] } {
     this.requireActiveTrip(tripId);
     const row = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND id = ?`).get(tripId, draftId) as ExtractionDraftRow | undefined;
     if (!row) throw new NotFoundError(`Extraction Draft ${draftId} was not found.`);
@@ -632,7 +641,12 @@ export class TravelService {
     const draft = toExtractionDraft(row);
     if (draft.status === "confirmed") return { draft, proposalIds: draft.proposalIds };
     if (draft.status !== "pending_confirmation") throw new ConflictError(`Extraction Draft ${draftId} is not pending confirmation.`);
-    const eligibleItems = draft.items.filter(isConfirmableDraftItem);
+    const requestedIndexes = itemIndexes ? new Set(itemIndexes) : new Set(draft.items.map((_, index) => index));
+    if (itemIndexes?.some((index) => !Number.isInteger(index) || index < 0 || index >= draft.items.length)) throw new ConflictError(`Extraction Draft ${draftId} contains an invalid item selection.`);
+    if (itemIndexes && requestedIndexes.size !== itemIndexes.length) throw new ConflictError(`Extraction Draft ${draftId} contains duplicate item selections.`);
+    const chunks = this.getImportChunks(tripId, draft.sourceId);
+    const eligibleItems = draft.items.filter((item, index) => requestedIndexes.has(index) && isConfirmableDraftItem(item) && !isItemFromIncompleteChunk(item, chunks));
+    if (itemIndexes && eligibleItems.length !== itemIndexes.length) throw new ConflictError(`Extraction Draft ${draftId} selection includes unresolved or failed Chunk items.`);
     if (eligibleItems.length === 0) {
       const blockingFields = draft.items.flatMap((item) => [
         !item.startsAt && !item.localDate ? "localDate" : null,
@@ -655,20 +669,31 @@ export class TravelService {
         return { draft: lockedDraft, proposalIds: lockedDraft.proposalIds };
       }
       if (lockedDraft.status !== "pending_confirmation") throw new ConflictError(`Extraction Draft ${draftId} is not pending confirmation.`);
-      const unresolvedIssues = unresolvedDraftIssues(lockedDraft);
-      const proposalIds = lockedDraft.items
-        .filter(isConfirmableDraftItem)
-        .map((item) => this.createProposal(tripId, lockedRow.source_id, { ...item, assumptions: lockedDraft.assumptions }));
+      const lockedRequestedIndexes = itemIndexes ? new Set(itemIndexes) : new Set(lockedDraft.items.map((_, index) => index));
+      const selectedItems = lockedDraft.items.filter((item, index) => lockedRequestedIndexes.has(index) && isConfirmableDraftItem(item) && !isItemFromIncompleteChunk(item, this.getImportChunks(tripId, lockedRow.source_id)));
+      const existingProposalKeys = new Set((this.db.connection.prepare(`SELECT title, source_line FROM proposals WHERE source_id = ?`).all(lockedRow.source_id) as Array<{ title: string; source_line: number | null }>).map((proposal) => `${proposal.title}|${proposal.source_line ?? ""}`));
+      const proposalIds = [...lockedDraft.proposalIds];
+      for (const item of selectedItems) {
+        const key = `${item.title}|${item.sourceLine ?? ""}`;
+        if (existingProposalKeys.has(key)) continue;
+        proposalIds.push(this.createProposal(tripId, lockedRow.source_id, { ...item, assumptions: lockedDraft.assumptions }));
+      }
+      const lockedChunks = this.getImportChunks(tripId, lockedRow.source_id);
+      const allConfirmableSelected = lockedDraft.items.length > 0
+        && lockedDraft.items.every((item, index) => isConfirmableDraftItem(item) && lockedRequestedIndexes.has(index) && !isItemFromIncompleteChunk(item, lockedChunks))
+        && !lockedChunks.some((chunk) => chunk.status !== "completed");
       const confirmedAt = now();
-      const payload = unresolvedIssues.length > 0 ? {
+      const unresolvedIssues = unresolvedDraftIssues(lockedDraft);
+      const payload = unresolvedIssues.length > 0 || !allConfirmableSelected ? {
         items: lockedDraft.items,
         missing: lockedDraft.missing,
         assumptions: lockedDraft.assumptions,
-        issues: [...lockedDraft.issues, ...unresolvedIssues],
+        issues: [...lockedDraft.issues, ...unresolvedIssues, ...(!allConfirmableSelected ? [{ code: "partial_confirmation", message: "僅確認目前已完成且可確認的行程項目；其餘項目仍待處理。" }] : [])],
         sourceExcerpt: lockedDraft.sourceExcerpt,
       } : lockedDraft;
-      const updated = this.db.connection.prepare(`UPDATE extraction_drafts SET status = 'confirmed', payload_json = ?, proposal_ids_json = ?, confirmed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending_confirmation'`)
-        .run(JSON.stringify(payload), JSON.stringify(proposalIds), confirmedAt, confirmedAt, draftId);
+      const nextStatus = allConfirmableSelected ? "confirmed" : "pending_confirmation";
+      const updated = this.db.connection.prepare(`UPDATE extraction_drafts SET status = ?, payload_json = ?, proposal_ids_json = ?, confirmed_at = CASE WHEN ? = 'confirmed' THEN ? ELSE confirmed_at END, updated_at = ? WHERE id = ? AND status = 'pending_confirmation'`)
+        .run(nextStatus, JSON.stringify(payload), JSON.stringify(proposalIds), nextStatus, confirmedAt, confirmedAt, draftId);
       if (updated.changes !== 1) throw new ConflictError(`Extraction Draft ${draftId} changed while it was being confirmed.`);
       this.db.connection.exec("COMMIT");
       const confirmed = this.getExtractionDraft(tripId, draftId);
@@ -1083,8 +1108,8 @@ export class TravelService {
       const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
       const timestamp = now();
       const metadata = metadataOverride ?? { provider: current.provider ?? "unknown", model: current.model ?? "unknown", promptVersion: current.prompt_version ?? EXTRACTION_PROMPT_VERSION };
-      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, NULL, NULL, NULL, ?, ?)`).run(
-        draftId, tripId, current.source_id, current.originating_user_id, revision, current.id, status, JSON.stringify(payload), metadata.provider, metadata.model, metadata.promptVersion, timestamp, timestamp,
+      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`).run(
+        draftId, tripId, current.source_id, current.originating_user_id, revision, current.id, status, JSON.stringify(payload), current.proposal_ids_json ?? "[]", metadata.provider, metadata.model, metadata.promptVersion, timestamp, timestamp,
       );
       const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE id = ?`).get(draftId) as ExtractionDraftRow | undefined;
       if (!persisted) throw new InvalidSourceError(`Extraction Draft ${draftId} could not be persisted.`);
@@ -1666,6 +1691,13 @@ function relatedChunkContext(chunks: ImportChunk[], index: number): string {
     .filter((content): content is string => Boolean(content))
     .map((content) => content.slice(0, 1_000))
     .join("\n---\n");
+}
+
+function isItemFromIncompleteChunk(item: Pick<ExtractedTripItem, "sourceLine">, chunks: ImportChunk[]): boolean {
+  const incompleteChunks = chunks.filter((chunk) => chunk.status !== "completed");
+  if (incompleteChunks.length === 0) return false;
+  if (item.sourceLine === undefined) return true;
+  return incompleteChunks.some((chunk) => item.sourceLine! >= chunk.startLine && item.sourceLine! <= chunk.endLine);
 }
 
 function currentDateInTimezone(timezone: string): string {

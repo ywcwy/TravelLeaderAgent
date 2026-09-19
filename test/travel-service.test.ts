@@ -347,6 +347,10 @@ test("keeps successful chunks when a later chunk fails", async () => {
   assert.equal(draft.status, "pending_confirmation");
   assert.equal(draft.items.length, 1);
   assert.ok(draft.issues.some((issue) => issue.code === "partial_batch"));
+  const partialConfirmation = service.confirmExtractionDraft(trip.id, "U-partial", draft.id, [0]);
+  assert.equal(partialConfirmation.draft.status, "pending_confirmation");
+  assert.equal(partialConfirmation.proposalIds.length, 1);
+  assert.equal(service.reviewTrip(trip.id).pending.length, 1);
   const retried = await service.retryImportChunk(trip.id, "U-partial", chunks[1]!.id, {
     metadata: { provider: "fake", model: "retry", promptVersion: "test" },
     extract: async (input) => ({

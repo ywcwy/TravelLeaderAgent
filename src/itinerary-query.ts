@@ -4,7 +4,7 @@ import { formatLocalDateTime } from "./timezone.ts";
 export type ParsedItineraryMessage = { type: "query"; query: ItineraryQuery } | { type: "help" } | null;
 
 export type ParsedProposalCommand = { type: "confirm"; proposalId: string } | { type: "reject"; proposalId: string; reason: string | null } | { type: "select"; decisionId: string; proposalId: string } | { type: "cancel"; decisionId: string } | { type: "invalid" } | null;
-export type ParsedDraftCommand = { type: "confirm_draft"; draftId: string } | { type: "edit_draft"; draftId: string; content: string } | { type: "cancel_draft"; draftId: string } | { type: "retry_draft"; draftId: string } | { type: "view_draft"; draftId: string; page: number } | { type: "invalid_draft" } | null;
+export type ParsedDraftCommand = { type: "confirm_draft"; draftId: string; itemIndexes?: number[] } | { type: "edit_draft"; draftId: string; content: string } | { type: "cancel_draft"; draftId: string } | { type: "retry_draft"; draftId: string } | { type: "view_draft"; draftId: string; page: number } | { type: "invalid_draft" } | null;
 
 export function parseProposalCommand(text: string): ParsedProposalCommand {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "").trim();
@@ -24,8 +24,11 @@ export const proposalCommandHelp = "指令格式：確認 P-XXXXXXXX、拒絕 P-
 
 export function parseDraftCommand(text: string): ParsedDraftCommand {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "").trim();
-  const confirm = normalized.match(/^(?:確認|confirm)\s+(X-[A-Z0-9]{8})$/i);
-  if (confirm) return { type: "confirm_draft", draftId: confirm[1].toUpperCase() };
+  const confirm = normalized.match(/^(?:確認|confirm)\s+(X-[A-Z0-9]{8})(?:\s+(?:項目|items?)\s*=?\s*([0-9０-９]+(?:\s*[,，、]\s*[0-9０-９]+)*))?$/i);
+  if (confirm) {
+    const itemIndexes = confirm[2]?.split(/\s*[,，、]\s*/u).map((value) => Number(value.replace(/[０-９]/g, (digit) => String("０１２３４５６７８９".indexOf(digit)))) - 1);
+    return { type: "confirm_draft", draftId: confirm[1].toUpperCase(), itemIndexes };
+  }
   const edit = normalized.match(/^(?:修改|edit)\s+(X-[A-Z0-9]{8})\s*[|｜]\s*(.+)$/is);
   if (edit) return { type: "edit_draft", draftId: edit[1].toUpperCase(), content: edit[2].trim() };
   const cancel = normalized.match(/^(?:取消|cancel)\s+(?:Draft\s+)?(X-[A-Z0-9]{8})$/i);
@@ -38,7 +41,7 @@ export function parseDraftCommand(text: string): ParsedDraftCommand {
   return null;
 }
 
-export const draftCommandHelp = "Draft 指令格式：查看 Draft X-XXXXXXXX [頁碼]、確認 X-XXXXXXXX、修改 X-XXXXXXXX｜新內容、取消 Draft X-XXXXXXXX，或重試 Draft X-XXXXXXXX。";
+export const draftCommandHelp = "Draft 指令格式：查看 Draft X-XXXXXXXX [頁碼]、確認 X-XXXXXXXX（或確認 X-XXXXXXXX 項目 1,2）、修改 X-XXXXXXXX｜新內容、取消 Draft X-XXXXXXXX，或重試 Draft X-XXXXXXXX。";
 
 export function parseItineraryMessage(text: string): ParsedItineraryMessage {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "").trim();

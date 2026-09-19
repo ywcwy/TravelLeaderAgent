@@ -96,7 +96,7 @@ export class LineSourceWorker {
           currentDate: event.receivedAt.slice(0, 10),
           provenance: { provider: "line", messageId: event.messageId, groupId: event.groupId, userId: event.userId },
         }, this.extractionAdapter!);
-        if (replyToken) await this.reply(replyToken, renderExtractionDraft(draft));
+        if (replyToken) await this.reply(replyToken, renderExtractionDraft(draft, { chunks: this.travel.getImportChunks(event.tripId, draft.sourceId) }));
         this.inbox.complete(event.eventId, leaseToken);
         return "processed" as const;
       } catch (error) {
@@ -113,10 +113,11 @@ export class LineSourceWorker {
       if (command.type === "view_draft") {
         const draft = this.travel.getExtractionDraft(event.tripId, command.draftId);
         if (!draft) throw new Error(`Extraction Draft ${command.draftId} was not found.`);
-        return renderExtractionDraft(draft, { page: command.page });
+        return renderExtractionDraft(draft, { page: command.page, chunks: this.travel.getImportChunks(event.tripId, draft.sourceId) });
       }
       if (command.type === "confirm_draft") {
-        const result = this.travel.confirmExtractionDraft(event.tripId, event.userId, command.draftId);
+        const result = this.travel.confirmExtractionDraft(event.tripId, event.userId, command.draftId, command.itemIndexes);
+        if (result.draft.status !== "confirmed") return `Draft ${command.draftId} 已部分確認，建立 Proposal：${result.proposalIds.join("、")}；其餘項目仍待處理。`;
         return result.proposalIds.length > 0 ? `已確認 Draft ${command.draftId}，建立 Proposal：${result.proposalIds.join("、")}。` : `Draft ${command.draftId} 已確認。`;
       }
       if (command.type === "cancel_draft") {
@@ -125,7 +126,7 @@ export class LineSourceWorker {
       }
       if (command.type === "retry_draft") {
         const draft = await this.travel.retryExtractionDraft(event.tripId, event.userId, command.draftId, this.extractionAdapter);
-        return renderExtractionDraft(draft);
+        return renderExtractionDraft(draft, { chunks: this.travel.getImportChunks(event.tripId, draft.sourceId) });
       }
       const trip = this.travel.getTrip(event.tripId);
       if (!trip) throw new Error(`Trip ${event.tripId} was not found.`);
@@ -140,7 +141,7 @@ export class LineSourceWorker {
         existingDraft: { items: currentDraft.items, missing: currentDraft.missing, assumptions: currentDraft.assumptions, issues: currentDraft.issues, sourceExcerpt: currentDraft.sourceExcerpt },
       })), `${currentDraft.sourceExcerpt}\n${command.content}`);
       const draft = this.travel.reviseExtractionDraft(event.tripId, event.userId, command.draftId, payload);
-      return renderExtractionDraft(draft);
+      return renderExtractionDraft(draft, { chunks: this.travel.getImportChunks(event.tripId, draft.sourceId) });
     } catch (error) {
       return commandErrorReply(error);
     }

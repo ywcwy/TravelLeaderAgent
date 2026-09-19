@@ -7,7 +7,7 @@ import {
   tripItemStatuses,
   timezoneSources,
 } from "./domain.ts";
-import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload } from "./domain.ts";
+import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk } from "./domain.ts";
 
 export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v3";
 
@@ -266,7 +266,7 @@ export class FakeLlmAdapter implements LlmAdapter {
   }
 }
 
-export function renderExtractionDraft(draft: Pick<ExtractionDraft, "id" | "status" | "items" | "missing" | "assumptions" | "issues">, options: { page?: number; pageSize?: number; maxLength?: number } = {}): string {
+export function renderExtractionDraft(draft: Pick<ExtractionDraft, "id" | "status" | "items" | "missing" | "assumptions" | "issues">, options: { page?: number; pageSize?: number; maxLength?: number; chunks?: Pick<ImportChunk, "ordinal" | "startLine" | "endLine" | "status" | "attempts" | "providerCalls" | "errorCode">[] } = {}): string {
   const page = Math.max(1, options.page ?? 1);
   const pageSize = Math.max(1, options.pageSize ?? 8);
   const maxLength = Math.max(500, options.maxLength ?? 4_500);
@@ -278,6 +278,7 @@ export function renderExtractionDraft(draft: Pick<ExtractionDraft, "id" | "statu
   const totalPages = Math.max(1, Math.ceil(itemLines.length / pageSize));
   const lines = [`Extraction Draft ${draft.id}｜${draft.status}｜第 ${Math.min(page, totalPages)}/${totalPages} 頁`, ...(itemLines.length > 0 ? itemLines.slice((page - 1) * pageSize, page * pageSize) : ["- 尚未解析出行程項目"])] as string[];
   if (page === 1) {
+    if (options.chunks?.length) lines.push(`Chunks：${options.chunks.map((chunk) => `${chunk.ordinal + 1}（${chunk.startLine}-${chunk.endLine}）${chunk.status}/重試${chunk.attempts}/呼叫${chunk.providerCalls}${chunk.errorCode ? `/${chunk.errorCode}` : ""}`).join("、")}`);
     if (draft.missing.length > 0) lines.push(`必要資訊待補：${draft.missing.map((entry) => `${entry.field}${entry.required ? "（必要）" : "（可選）"}${entry.message ? `｜${entry.message}` : ""}`).join("；")}`);
     if (draft.assumptions.length > 0) lines.push(`模型假設：${draft.assumptions.join("；")}`);
     const ignored = draft.issues.filter((issue) => /^(?:low_information_item|duplicate_item|contextual_phrase|contradictory_item)$/.test(issue.code));

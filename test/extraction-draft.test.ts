@@ -435,7 +435,7 @@ test("confirms valid items from a mixed Draft and leaves unresolved items review
 
   const confirmed = service.confirmExtractionDraft(trip.id, "U-origin", draft.id);
   assert.equal(confirmed.proposalIds.length, 1);
-  assert.equal(confirmed.draft.status, "confirmed");
+  assert.equal(confirmed.draft.status, "pending_confirmation");
   assert.equal(confirmed.draft.missing.length, 1);
   assert.equal(service.reviewTrip(trip.id).pending.length, 1);
   db.close();
@@ -458,8 +458,8 @@ test("records a Review Issue when a required clock time is unresolved", async ()
 
   const confirmed = service.confirmExtractionDraft(trip.id, "U-origin", draft.id);
   assert.equal(confirmed.proposalIds.length, 1);
-  assert.equal(confirmed.draft.status, "confirmed");
-  assert.match(confirmed.draft.issues.at(-1)?.message ?? "", /必要的開始時間/);
+  assert.equal(confirmed.draft.status, "pending_confirmation");
+  assert.ok(confirmed.draft.issues.some((issue) => /必要的開始時間/.test(issue.message)));
   db.close();
 });
 
