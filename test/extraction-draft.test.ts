@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FakeLlmAdapter, renderExtractionDraft, validateExtractionDraftPayload } from "../src/extraction-draft.ts";
+import { FakeLlmAdapter, guardExtractionDraftPayload, renderExtractionDraft, validateExtractionDraftPayload } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
 import { TravelDatabase } from "../src/database.ts";
 import { ConflictError, PermissionError, TravelService } from "../src/travel-service.ts";
@@ -52,6 +52,24 @@ test("persists one pending Extraction Draft without creating a Proposal", async 
   assert.match(renderExtractionDraft(draft), new RegExp(`Extraction Draft ${draft.id}`));
   assert.match(renderExtractionDraft(draft), /請確認：確認 X-/);
   db.close();
+});
+
+test("quality guard fills rental venue location and independent route timezones", () => {
+  const payload = fixture("quality");
+  payload.items[0]!.kind = "rental_car";
+  payload.items[0]!.kinds = ["rental_car"];
+  payload.items[0]!.title = "McCarran Rent-A-Car Center";
+  payload.items[0]!.location = undefined;
+  payload.items.push({ ...payload.items[0]!, kind: "transport", kinds: ["transport"], shape: "route", title: "Las Vegas → Page", location: undefined, origin: "Las Vegas", destination: "Page", originTimezone: undefined, destinationTimezone: undefined });
+
+  const guarded = guardExtractionDraftPayload(payload, "quality");
+  assert.equal(guarded.items[0]?.location, "McCarran Rent-A-Car Center");
+  assert.equal(guarded.items[1]?.originTimezone, "America/Los_Angeles");
+  assert.equal(guarded.items[1]?.destinationTimezone, "America/Phoenix");
+
+  payload.items.push({ ...payload.items[0]!, kind: "activity", kinds: ["activity"], shape: "point", title: "下羚羊谷報到", location: undefined });
+  const activityGuarded = guardExtractionDraftPayload(payload, "quality");
+  assert.equal(activityGuarded.items.at(-1)?.location, "下羚羊谷");
 });
 
 test("renders long Drafts in bounded pages with a continuation command", () => {

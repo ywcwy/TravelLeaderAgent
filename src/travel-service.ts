@@ -1095,6 +1095,7 @@ interface ParsedItineraryCandidate {
 }
 
 function parseItineraryCandidate(line: string, sourceLine: number): ParsedItineraryCandidate {
+  if (isIgnorableMarkdownLine(line)) return {};
   const markdown = parseMarkdownCandidate(line, sourceLine);
   if (markdown.item || markdown.items || markdown.issue || markdown.issues) return markdown;
   return parseFreeformCandidate(line, sourceLine);
@@ -1102,7 +1103,7 @@ function parseItineraryCandidate(line: string, sourceLine: number): ParsedItiner
 
 function parseFreeformCandidate(line: string, sourceLine: number): ParsedItineraryCandidate {
   const original = line.trim();
-  if (!original || isFreeformQuestion(original)) return {};
+  if (!original || isFreeformQuestion(original) || isExplanatoryRouteNote(original)) return {};
   const text = original.replace(/^@[^\s]+\s+/, "").trim();
   const dateMatch = text.match(/\b(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?|\d{1,2}\/\d{1,2})\b/);
   const startsAt = dateMatch?.[1];
@@ -1245,6 +1246,20 @@ function parseMarkdownCandidate(line: string, sourceLine: number): ParsedItinera
   };
 }
 
+/** Natural Markdown contains reference links and driving advice that look like
+ * bullets/routes but are not itinerary candidates. Keep them in Source without
+ * turning them into review failures. */
+function isIgnorableMarkdownLine(line: string): boolean {
+  const text = line.trim();
+  return /^-\s*\[\[.+\]\(https?:\/\/[^)]+\)\s*$/iu.test(text)
+    || /^-\s*https?:\/\/\S+$/iu.test(text);
+}
+
+function isExplanatoryRouteNote(text: string): boolean {
+  if (!/^(?:從|from)\s+.+?(?:前往|到|至|to).+$/iu.test(text)) return false;
+  return /(?:中間|沿途|會經過|建議|強烈建議|加滿|油箱|沙漠|零星|價錢|價格|recommend|advis|沿路)/iu.test(text);
+}
+
 function isIanaTimezone(timezone: string): boolean {
   if (!timezone || (timezone !== "UTC" && !timezone.includes("/"))) return false;
   try {
@@ -1360,6 +1375,7 @@ function currentDateInTimezone(timezone: string): string {
 
 function findUnparseableLineIssues(sourceId: string, markdown: string): ReviewIssue[] {
   return markdown.split(/\r?\n/).flatMap((line, index) => {
+    if (isIgnorableMarkdownLine(line)) return [];
     const parsed = parseItineraryCandidate(line, index + 1);
     if (!/^\s*-\s*\[/.test(line) && !parsed.issue && !parsed.issues?.length) return [];
     if (parsed.issue) return [{ ...parsed.issue, sourceId, sourceLine: index + 1, sourceExcerpt: line.trim(), proposalIds: [] }];

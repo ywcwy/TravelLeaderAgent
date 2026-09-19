@@ -131,7 +131,7 @@ export function validateExtractionDraftPayload(payload: unknown): ExtractionDraf
 
 /** Apply deterministic guards after model extraction while retaining the immutable Source. */
 export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sourceContent: string): ExtractionDraftPayload {
-  const items = [...payload.items];
+  const items = payload.items.map((item) => enrichExtractionItem(item));
   const issues = [...payload.issues];
   const hasSeparateArrival = /(?:separate|separately|another|另外|獨立|單獨).{0,24}(?:arrival|arriv|抵達|到達)/iu.test(sourceContent)
     || /(?:arrival|arriv|抵達|到達).{0,24}(?:separate|separately|another|另外|獨立|單獨)/iu.test(sourceContent);
@@ -175,6 +175,36 @@ export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sou
   const retainedTransport = kept.some((item) => item.kind === "transport" || item.kinds.includes("transport"));
   const actionableIssues = issues.filter((issue) => !(/retain transportation .*remove lodging context/i.test(issue.message) && !retainedTransport));
   return { ...payload, items: kept, issues: actionableIssues };
+}
+
+/** Fill high-signal structural fields the model can omit when a venue appears
+ * in prose. These are conservative enrichments, not free-form guessing. */
+function enrichExtractionItem(item: ExtractionDraftItem): ExtractionDraftItem {
+  const enriched = { ...item };
+  if (!enriched.location && enriched.kind === "rental_car" && enriched.title.trim()) {
+    enriched.location = enriched.title.trim();
+  }
+  if (!enriched.location && enriched.shape === "point" && enriched.kind === "activity") {
+    enriched.location = extractKnownActivityLocation(enriched.title);
+  }
+  if (enriched.shape === "route") {
+    enriched.originTimezone ??= inferKnownLocationTimezone(enriched.origin);
+    enriched.destinationTimezone ??= inferKnownLocationTimezone(enriched.destination);
+  }
+  return enriched;
+}
+
+function extractKnownActivityLocation(title: string): string | undefined {
+  const match = title.match(/(下羚羊谷|上羚羊谷|大峽谷|Lower Antelope Canyon|Upper Antelope Canyon|Grand Canyon)/iu);
+  return match?.[1];
+}
+
+function inferKnownLocationTimezone(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (/(?:las vegas|mccarran|los angeles)/iu.test(value)) return "America/Los_Angeles";
+  if (/(?:st\.? george|kanab)/iu.test(value)) return "America/Denver";
+  if (/(?:page|lake powell|antelope|tusayan|grand canyon)/iu.test(value)) return "America/Phoenix";
+  return undefined;
 }
 
 function isArrivalCandidate(item: ExtractionDraftItem): boolean {
@@ -335,7 +365,11 @@ const extractionInstructions = [
   "A vague part-of-day phrase such as 晚上, tonight, or in the evening is a timeWindow, not an exact timestamp: set startTimeFlexibility and endTimeFlexibility to flexible unless the source explicitly says the time is fixed or tied to a ticket/tour/reservation.",
   "When a calendar date is known but no exact clock time is stated, set localDate to the ISO date, keep startsAt null, and preserve any part-of-day phrase in timeWindow.",
   "When the source says arriving at, going to, staying in, or lodging in a named place (for example, 到 Page，想住 Holiday Inn), set location to that named place and keep the lodging property in title or notes.",
+  "When a rental-car pickup or drop-off names a venue such as McCarran Rent-A-Car Center, set location to that venue; do not leave location null when the venue is present in the source.",
+  "For an activity at a named attraction, set location to the attraction name even when the title also contains an action such as 報到, 參觀, or tour.",
+  "For a Route, set originTimezone and destinationTimezone independently from the named endpoints. For example, Las Vegas uses America/Los_Angeles and Page uses America/Phoenix; never copy the origin timezone to the destination when the endpoints differ.",
   "Group one user intention into one itinerary item: arrival wording used only to explain where a lodging is should remain context, not become a second item. Keep a separate Arrival only when the source explicitly requests it or provides an independently actionable time/location.",
+  "Do not create itinerary items for reference links, guidebook links, headings, or explanatory travel advice. When a reference link clearly belongs to the nearest itinerary item, preserve the full Markdown link (label and URL) in that item's notes so a user can open it later; if no relationship is clear, keep it only as Source context. A phrase such as 從 Kingman 到 Barstow is a Route only when the source presents it as a planned leg; if it is advice about what happens along the way, do not emit a Route.",
   "Exclude low-information candidates such as Arrival with neither a usable location nor a date/time; report them in issues with code low_information_item. Do not invent recommendations. Do not emit duplicate candidates; if two candidates conflict, keep the source facts and report the ambiguity in issues.",
   "When existingDraft is present, treat sourceContent as a natural-language correction to that Draft and return the complete revised item batch. Preserve unchanged items, apply additions, and remove items the user explicitly excludes; do not create Proposals at extraction time.",
 ].join(" ");

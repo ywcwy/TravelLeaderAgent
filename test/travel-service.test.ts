@@ -4,6 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { TravelDatabase } from "../src/database.ts";
+import { FakeLlmAdapter } from "../src/extraction-draft.ts";
 import { ConflictError, InvalidSourceError, InvalidTimezoneError, PermissionError, TravelService, TripNotActiveError } from "../src/travel-service.ts";
 import { renderItineraryQuery } from "../src/itinerary-query.ts";
 
@@ -307,6 +308,22 @@ test("retains a Source and Review Issue when a Route Proposal lacks an endpoint"
   const routeIssue = issues.find((issue) => issue.code === "missing_route_endpoint");
   assert.ok(routeIssue);
   assert.equal(routeIssue.sourceId, result.sourceId);
+  db.close();
+});
+
+test("ignores reference links and explanatory route advice in natural Markdown review", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-natural-markdown-notes");
+  const source = [
+    "- [[2026] Grand Canyon guide](https://example.com/guide)",
+    "從 Kingman（金曼）到 Barstow（巴斯托）中間會經過大片荒涼的沙漠，強烈建議在 Kingman 把油箱加滿。",
+  ].join("\n");
+  await service.createExtractionDraft(tripId, source, { idempotencyKey: "draft:natural-markdown-notes" }, new FakeLlmAdapter({
+    [source]: { items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: source },
+  }));
+  const issues = service.reviewTrip(tripId).issues;
+  assert.equal(issues.some((issue) => issue.code === "unparseable_line" || issue.code === "missing_route_endpoint"), false);
   db.close();
 });
 
