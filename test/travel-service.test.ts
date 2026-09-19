@@ -297,6 +297,42 @@ test("imports explicit Point and Route Proposal structure and infers legacy Poin
   db.close();
 });
 
+test("persists ordered Import Chunks for a multi-section Markdown batch", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-import-chunks");
+  const markdown = [
+    "## 10/1 Las Vegas  ",
+    "- [provisional] 租車 | 2026-10-01T11:00:00-07:00 | Las Vegas | kinds=rental_car",
+    "## 10/2 Page",
+    "- [provisional] 下羚羊谷 | 2026-10-02T09:45:00-07:00 | Page | kinds=activity",
+  ].join("\n");
+
+  const result = service.importMarkdownDraftBatch(tripId, markdown, "batch:chunks");
+  const chunks = service.getImportChunks(tripId, result.sourceId);
+  assert.equal(result.chunkCount, 2);
+  assert.deepEqual(chunks.map((chunk) => ({ ordinal: chunk.ordinal, startLine: chunk.startLine, endLine: chunk.endLine, status: chunk.status })), [
+    { ordinal: 0, startLine: 1, endLine: 2, status: "completed" },
+    { ordinal: 1, startLine: 3, endLine: 4, status: "completed" },
+  ]);
+  assert.notEqual(chunks[0]?.contentHash, chunks[1]?.contentHash);
+  assert.equal(chunks[0]?.content.endsWith(" "), false);
+  db.close();
+});
+
+test("splits an oversized section at a paragraph boundary", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-import-chunks-large");
+  const lines = ["## 10/1 Las Vegas", ...Array.from({ length: 78 }, (_, index) => `行程備註 ${index + 1}`), "", ...Array.from({ length: 5 }, (_, index) => `後續行程 ${index + 1}`)];
+  const result = service.importMarkdownDraftBatch(tripId, lines.join("\n"), "batch:chunks-large");
+  const chunks = service.getImportChunks(tripId, result.sourceId);
+  assert.equal(chunks.length, 2);
+  assert.equal(chunks[0]?.content.endsWith("行程備註 78"), true);
+  assert.equal(chunks[1]?.content.startsWith("後續行程 1"), true);
+  db.close();
+});
+
 test("retains a Source and Review Issue when a Route Proposal lacks an endpoint", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

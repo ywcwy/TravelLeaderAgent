@@ -21,6 +21,8 @@ export type TripStatus = "active" | "archived";
 export type DecisionStatus = "open" | "resolved" | "needs_options" | "cancelled";
 export const extractionDraftStatuses = ["pending_confirmation", "confirmed", "cancelled", "failed"] as const;
 export type ExtractionDraftStatus = (typeof extractionDraftStatuses)[number];
+export const importChunkStatuses = ["pending", "completed", "failed", "blocked", "removed"] as const;
+export type ImportChunkStatus = (typeof importChunkStatuses)[number];
 export const timeFlexibilities = ["required", "estimated", "flexible"] as const;
 export type TimeFlexibility = (typeof timeFlexibilities)[number];
 export const timeWindows = ["morning", "afternoon", "evening", "night"] as const;
@@ -123,6 +125,22 @@ export interface Source {
   content: string;
   sourceTime: string;
   provenance: SourceProvenance | null;
+}
+
+export interface ImportChunk {
+  id: string;
+  tripId: string;
+  sourceId: string;
+  importBatchId: string;
+  ordinal: number;
+  startLine: number;
+  endLine: number;
+  contentHash: string;
+  content: string;
+  status: ImportChunkStatus;
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TripItem extends ExtractedTripItem {

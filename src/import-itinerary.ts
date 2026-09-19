@@ -50,6 +50,7 @@ async function importNaturalMarkdown(travel: TravelService, database: TravelData
     itemCount: draft.items.length,
     reviewIssueCount: draft.issues.length + draft.missing.length,
     dateRange: dateRange(draft.items),
+    chunkCount: travel.getImportChunks(tripIdValue, draft.sourceId).length,
     outcome: existing ? "reused" : "created",
   } as const;
 }

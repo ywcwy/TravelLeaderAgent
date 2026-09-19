@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
 import { EXTRACTION_PROMPT_VERSION, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
-import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -35,6 +35,7 @@ export interface MarkdownDraftImportResult extends MarkdownImportResult {
   itemCount: number;
   reviewIssueCount: number;
   dateRange: { from: string | null; to: string | null };
+  chunkCount: number;
 }
 
 export interface ExtractionDraftReview {
@@ -263,7 +264,7 @@ export class TravelService {
       const draft = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(existing.id) as ExtractionDraftRow | undefined;
       if (!draft) throw new ConflictError(`Import Batch ${batchId} already exists without an Extraction Draft.`);
       const parsed = toExtractionDraft(draft);
-      return { sourceId: existing.id, draftId: parsed.id, proposalIds: parsed.proposalIds, itemCount: parsed.items.length, reviewIssueCount: parsed.issues.length + parsed.missing.length, dateRange: draftDateRange(parsed), outcome: "reused" };
+      return { sourceId: existing.id, draftId: parsed.id, proposalIds: parsed.proposalIds, itemCount: parsed.items.length, reviewIssueCount: parsed.issues.length + parsed.missing.length, dateRange: draftDateRange(parsed), chunkCount: this.getImportChunks(tripId, existing.id).length, outcome: "reused" };
     }
 
     const sourceId = randomUUID();
@@ -284,12 +285,41 @@ export class TravelService {
       this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, '[]', 'deterministic-markdown', 'markdown-parser', 'markdown-draft-v1', NULL, NULL, NULL, ?, ?)`).run(
         draftId, tripId, sourceId, originatingUserId, status, JSON.stringify(payload), timestamp, timestamp,
       );
+      this.persistImportChunks(tripId, sourceId, batchId, markdown, "completed", timestamp);
       this.db.connection.exec("COMMIT");
     } catch (error) {
       this.db.connection.exec("ROLLBACK");
       throw error;
     }
-    return { sourceId, draftId, proposalIds: [], itemCount: payload.items.length, reviewIssueCount: payload.issues.length + payload.missing.length, dateRange: draftDateRange(payload), outcome: "created" };
+    return { sourceId, draftId, proposalIds: [], itemCount: payload.items.length, reviewIssueCount: payload.issues.length + payload.missing.length, dateRange: draftDateRange(payload), chunkCount: this.getImportChunks(tripId, sourceId).length, outcome: "created" };
+  }
+
+  getImportChunks(tripId: string, sourceId: string): ImportChunk[] {
+    this.requireTrip(tripId);
+    const rows = this.db.connection.prepare(`SELECT * FROM import_chunks WHERE trip_id = ? AND source_id = ? ORDER BY ordinal`).all(tripId, sourceId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: row.id as string,
+      tripId: row.trip_id as string,
+      sourceId: row.source_id as string,
+      importBatchId: row.import_batch_id as string,
+      ordinal: row.ordinal as number,
+      startLine: row.start_line as number,
+      endLine: row.end_line as number,
+      contentHash: row.content_hash as string,
+      content: row.content as string,
+      status: row.status as ImportChunk["status"],
+      attempts: row.attempts as number,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+    }));
+  }
+
+  private persistImportChunks(tripId: string, sourceId: string, importBatchId: string, markdown: string, status: ImportChunkStatus, timestamp: string): void {
+    const chunks = splitMarkdownIntoChunks(markdown);
+    const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO import_chunks (id, trip_id, source_id, import_batch_id, ordinal, start_line, end_line, content_hash, content, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`);
+    for (const chunk of chunks) {
+      insert.run(`C-${randomUUID().replaceAll("-", "").slice(0, 20).toUpperCase()}`, tripId, sourceId, importBatchId, chunk.ordinal, chunk.startLine, chunk.endLine, createHash("sha256").update(chunk.content).digest("hex"), chunk.content, status, timestamp, timestamp);
+    }
   }
 
   getLatestExtractionDrafts(tripId: string): ExtractionDraftReview[] {
@@ -328,7 +358,12 @@ export class TravelService {
     if (source.content !== content) throw new ConflictError(`Source Idempotency Key ${idempotencyKey} already contains different content.`);
 
     const existing = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(source.id) as ExtractionDraftRow | undefined;
-    if (existing) return toExtractionDraft(existing);
+    if (existing) {
+      if (this.getImportChunks(tripId, source.id).length === 0) {
+        this.persistImportChunks(tripId, source.id, idempotencyKey, source.content, existing.status === "failed" ? "failed" : "completed", now());
+      }
+      return toExtractionDraft(existing);
+    }
 
     const currentDate = options.currentDate ?? currentDateInTimezone(trip.timezone);
     const input = { sourceContent: content, tripTimezone: trip.timezone, currentDate, inputType: options.inputType ?? options.type ?? "freeform" };
@@ -354,6 +389,7 @@ export class TravelService {
     );
     const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(source.id) as ExtractionDraftRow | undefined;
     if (!persisted) throw new InvalidSourceError("The Extraction Draft could not be persisted.");
+    this.persistImportChunks(tripId, source.id, idempotencyKey, content, status === "failed" ? "failed" : "completed", timestamp);
     return toExtractionDraft(persisted);
   }
 
@@ -1365,6 +1401,55 @@ function draftDateRange(draft: Pick<ExtractionDraftPayload, "items">): { from: s
     .filter((value): value is string => Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value)))
     .sort();
   return { from: dates[0] ?? null, to: dates.at(-1) ?? null };
+}
+
+interface MarkdownChunkSlice {
+  ordinal: number;
+  startLine: number;
+  endLine: number;
+  content: string;
+}
+
+function splitMarkdownIntoChunks(markdown: string, maxLines = 80): MarkdownChunkSlice[] {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const slices: MarkdownChunkSlice[] = [];
+  const sections: Array<{ start: number; end: number }> = [];
+  let sectionStart = 0;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (/^\s{0,3}#{1,6}\s+\S/.test(lines[index] ?? "")) {
+      sections.push({ start: sectionStart, end: index });
+      sectionStart = index;
+    }
+  }
+  sections.push({ start: sectionStart, end: lines.length });
+
+  for (const section of sections) {
+    let start = section.start;
+    while (start < section.end) {
+      const target = Math.min(start + maxLines, section.end);
+      const end = target < section.end ? preferredChunkBoundary(lines, start, target) : target;
+      const content = normalizeChunkContent(lines.slice(start, end).join("\n"));
+      if (content) slices.push({ ordinal: slices.length, startLine: start + 1, endLine: end, content });
+      start = end;
+    }
+  }
+  return slices.length > 0 ? slices : [{ ordinal: 0, startLine: 1, endLine: 1, content: markdown.trim() }];
+}
+
+function preferredChunkBoundary(lines: string[], start: number, target: number): number {
+  for (let index = target; index > start + 1; index -= 1) {
+    if ((lines[index - 1] ?? "").trim() === "") return index;
+  }
+  if (/^\s*\|/.test(lines[target] ?? "")) {
+    for (let index = target; index > start + 1; index -= 1) {
+      if (!/^\s*\|/.test(lines[index - 1] ?? "")) return index;
+    }
+  }
+  return target;
+}
+
+function normalizeChunkContent(content: string): string {
+  return content.split("\n").map((line) => line.trimEnd()).join("\n").trim();
 }
 
 function currentDateInTimezone(timezone: string): string {

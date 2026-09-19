@@ -16,7 +16,8 @@ if (!tripId?.trim()) {
     const trip = travel.getTrip(tripId.trim());
     if (!trip) throw new NotFoundError(`Trip ${tripId} was not found.`);
     const review = travel.reviewTrip(trip.id);
-    const result = toResult(trip, review, travel.getLatestExtractionDrafts(trip.id));
+    const extractionDrafts = travel.getLatestExtractionDrafts(trip.id).map((entry) => ({ ...entry, chunks: travel.getImportChunks(trip.id, entry.draft.sourceId) }));
+    const result = toResult(trip, review, extractionDrafts);
     process.stdout.write(flags.includes("--json") ? `${JSON.stringify(result)}\n` : `${renderHuman(result)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -26,7 +27,7 @@ if (!tripId?.trim()) {
   }
 }
 
-function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, review: TripReview, extractionDrafts: ReturnType<TravelService["getLatestExtractionDrafts"]>) {
+function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, review: TripReview, extractionDrafts: Array<ReturnType<TravelService["getLatestExtractionDrafts"]>[number] & { chunks: ReturnType<TravelService["getImportChunks"]> }>) {
   return {
     trip,
     effectiveItinerary: review.confirmed,
@@ -58,9 +59,10 @@ function renderHuman(result: ReturnType<typeof toResult>): string {
     `Decisions (${result.counts.decisions})`,
     ...result.decisions.map((decision) => `- ${decision.id} | ${decision.status} | ${decision.title}${decision.selectedProposalId ? ` | selected: ${decision.selectedProposalId}` : ""}${decision.cancelledBy ? ` | cancelled by: ${decision.cancelledBy}` : ""}`),
     `Extraction Drafts (${result.counts.extractionDrafts})`,
-    ...result.extractionDrafts.map(({ draft, importBatchId }) => {
+    ...result.extractionDrafts.map(({ draft, importBatchId, chunks }) => {
       const dates = draftDateRange(draft);
-      return `- ${draft.id} | batch ${importBatchId} | ${draft.status} | revision ${draft.revision} | ${draft.items.length} items | ${dates.from ?? "undated"}${dates.to && dates.to !== dates.from ? `..${dates.to}` : ""} | Review Issues ${draft.issues.length + draft.missing.length}`;
+      const chunkSummary = chunks.length > 0 ? ` | Chunks ${chunks.length} (${chunks.map((chunk) => `${chunk.ordinal + 1}:${chunk.status}`).join(",")})` : "";
+      return `- ${draft.id} | batch ${importBatchId} | ${draft.status} | revision ${draft.revision} | ${draft.items.length} items | ${dates.from ?? "undated"}${dates.to && dates.to !== dates.from ? `..${dates.to}` : ""} | Review Issues ${draft.issues.length + draft.missing.length}${chunkSummary}`;
     }),
     `Review Issues (${result.counts.reviewIssues})`,
     ...result.reviewIssues.map((issue) => `- [${issue.code}] ${issue.message}${issue.sourceLine ? ` (line ${issue.sourceLine})` : ""}`),

@@ -76,6 +76,24 @@ export class TravelDatabase {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS import_chunks (
+        id TEXT PRIMARY KEY,
+        trip_id TEXT NOT NULL REFERENCES trips(id),
+        source_id TEXT NOT NULL REFERENCES sources(id),
+        import_batch_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed', 'blocked', 'removed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (source_id, ordinal)
+      );
+      CREATE INDEX IF NOT EXISTS import_chunks_source_ordinal ON import_chunks(source_id, ordinal);
+
       CREATE UNIQUE INDEX IF NOT EXISTS extraction_draft_source_revision ON extraction_drafts(source_id, revision);
 
       CREATE TABLE IF NOT EXISTS members (
