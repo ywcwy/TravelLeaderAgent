@@ -114,6 +114,20 @@ export class TravelDatabase {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS guard_revisions (
+        id TEXT PRIMARY KEY,
+        trip_id TEXT NOT NULL REFERENCES trips(id),
+        source_id TEXT NOT NULL REFERENCES sources(id),
+        chunk_id TEXT REFERENCES import_chunks(id),
+        draft_id TEXT REFERENCES extraction_drafts(id),
+        rule_version TEXT NOT NULL,
+        field_path TEXT NOT NULL,
+        before_json TEXT NOT NULL,
+        after_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS guard_revisions_source ON guard_revisions(source_id, created_at);
+
       CREATE UNIQUE INDEX IF NOT EXISTS extraction_draft_source_revision ON extraction_drafts(source_id, revision);
 
       CREATE TABLE IF NOT EXISTS members (

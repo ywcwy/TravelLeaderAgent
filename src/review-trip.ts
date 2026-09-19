@@ -16,7 +16,7 @@ if (!tripId?.trim()) {
     const trip = travel.getTrip(tripId.trim());
     if (!trip) throw new NotFoundError(`Trip ${tripId} was not found.`);
     const review = travel.reviewTrip(trip.id);
-    const extractionDrafts = travel.getLatestExtractionDrafts(trip.id).map((entry) => ({ ...entry, chunks: travel.getImportChunks(trip.id, entry.draft.sourceId) }));
+    const extractionDrafts = travel.getLatestExtractionDrafts(trip.id).map((entry) => ({ ...entry, chunks: travel.getImportChunks(trip.id, entry.draft.sourceId), guardRevisions: travel.getGuardRevisions(trip.id, entry.draft.sourceId) }));
     const result = toResult(trip, review, extractionDrafts, travel.getExtractionBudget());
     process.stdout.write(flags.includes("--json") ? `${JSON.stringify(result)}\n` : `${renderHuman(result)}\n`);
   } catch (error) {
@@ -27,7 +27,7 @@ if (!tripId?.trim()) {
   }
 }
 
-function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, review: TripReview, extractionDrafts: Array<ReturnType<TravelService["getLatestExtractionDrafts"]>[number] & { chunks: ReturnType<TravelService["getImportChunks"]> }>, budget: ReturnType<TravelService["getExtractionBudget"]>) {
+function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, review: TripReview, extractionDrafts: Array<ReturnType<TravelService["getLatestExtractionDrafts"]>[number] & { chunks: ReturnType<TravelService["getImportChunks"]>; guardRevisions: ReturnType<TravelService["getGuardRevisions"]> }>, budget: ReturnType<TravelService["getExtractionBudget"]>) {
   return {
     trip,
     effectiveItinerary: review.confirmed,
@@ -60,11 +60,12 @@ function renderHuman(result: ReturnType<typeof toResult>): string {
     `Decisions (${result.counts.decisions})`,
     ...result.decisions.map((decision) => `- ${decision.id} | ${decision.status} | ${decision.title}${decision.selectedProposalId ? ` | selected: ${decision.selectedProposalId}` : ""}${decision.cancelledBy ? ` | cancelled by: ${decision.cancelledBy}` : ""}`),
     `Extraction Drafts (${result.counts.extractionDrafts})`,
-    ...result.extractionDrafts.map(({ draft, importBatchId, chunks }) => {
+    ...result.extractionDrafts.map(({ draft, importBatchId, chunks, guardRevisions }) => {
       const dates = draftDateRange(draft);
       const usedCalls = chunks.reduce((total, chunk) => total + chunk.providerCalls, 0);
       const chunkSummary = chunks.length > 0 ? ` | Chunks ${chunks.length} (${chunks.map((chunk) => `${chunk.ordinal + 1}:${chunk.status}/attempts=${chunk.attempts}/calls=${chunk.providerCalls}${chunk.errorCode ? `/${chunk.errorCode}` : ""}`).join(",")}) | Provider calls ${usedCalls}/${result.budget.maxProviderCalls} (estimated max ${chunks.length * result.budget.maxChunkAttempts})` : "";
-      return `- ${draft.id} | batch ${importBatchId} | ${draft.status} | revision ${draft.revision} | ${draft.items.length} items | ${dates.from ?? "undated"}${dates.to && dates.to !== dates.from ? `..${dates.to}` : ""} | Review Issues ${draft.issues.length + draft.missing.length}${chunkSummary}`;
+      const guardSummary = guardRevisions.length > 0 ? ` | Guard revisions ${guardRevisions.length}` : "";
+      return `- ${draft.id} | batch ${importBatchId} | ${draft.status} | revision ${draft.revision} | ${draft.items.length} items | ${dates.from ?? "undated"}${dates.to && dates.to !== dates.from ? `..${dates.to}` : ""} | Review Issues ${draft.issues.length + draft.missing.length}${chunkSummary}${guardSummary}`;
     }),
     `Review Issues (${result.counts.reviewIssues})`,
     ...result.reviewIssues.map((issue) => `- [${issue.code}] ${issue.message}${issue.sourceLine ? ` (line ${issue.sourceLine})` : ""}`),

@@ -73,6 +73,24 @@ test("quality guard fills rental venue location and independent route timezones"
   assert.equal(activityGuarded.items.at(-1)?.location, "下羚羊谷");
 });
 
+test("persists Guard Revisions without changing immutable Source content", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-guard-audit", "Guard Audit 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Guard Audit 旅程", "Asia/Taipei");
+  const source = "2026-10-01 租車";
+  const payload = fixture(source);
+  payload.items[0]!.kind = "rental_car";
+  payload.items[0]!.kinds = ["rental_car"];
+  payload.items[0]!.title = "McCarran Rent-A-Car Center";
+  payload.items[0]!.location = undefined;
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "guard:audit" }, new FakeLlmAdapter({ [source]: payload }));
+  const revisions = service.getGuardRevisions(trip.id, draft.sourceId);
+  assert.ok(revisions.some((revision) => revision.ruleVersion === "guard-v1" && revision.fieldPath === "items[0].location" && revision.after === "McCarran Rent-A-Car Center"));
+  assert.equal(service.getSource(draft.sourceId)?.content, source);
+  db.close();
+});
+
 test("renders long Drafts in bounded pages with a continuation command", () => {
   const draft = { id: "X-PAGE0001", status: "pending_confirmation" as const, items: Array.from({ length: 10 }, (_, index) => ({ ...fixture("source"), items: undefined, kind: "other" as const, kinds: ["other" as const], shape: "point" as const, shapeSource: "inferred" as const, title: `行程 ${index + 1}`, status: "provisional" as const, startTimeFlexibility: "flexible" as const, endTimeFlexibility: "flexible" as const, location: "Page" })).map(({ items: _items, ...item }) => item), missing: [], assumptions: [], issues: [] };
   const page = renderExtractionDraft(draft, { pageSize: 2, maxLength: 500 });

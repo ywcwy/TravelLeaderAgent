@@ -147,6 +147,19 @@ export interface ImportChunk {
   updatedAt: string;
 }
 
+export interface GuardRevision {
+  id: string;
+  tripId: string;
+  sourceId: string;
+  chunkId: string | null;
+  draftId: string | null;
+  ruleVersion: string;
+  fieldPath: string;
+  before: unknown;
+  after: unknown;
+  createdAt: string;
+}
+
 export interface TripItem extends ExtractedTripItem {
   id: string;
   sourceId: string;

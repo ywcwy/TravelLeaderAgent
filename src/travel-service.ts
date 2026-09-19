@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
 import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
-import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -334,6 +334,12 @@ export class TravelService {
 
   getExtractionBudget(): Required<ExtractionBudgetOptions> { return { ...this.extractionBudget }; }
 
+  getGuardRevisions(tripId: string, sourceId: string): GuardRevision[] {
+    this.requireTrip(tripId);
+    const rows = this.db.connection.prepare(`SELECT * FROM guard_revisions WHERE trip_id = ? AND source_id = ? ORDER BY created_at, id`).all(tripId, sourceId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({ id: String(row.id), tripId: String(row.trip_id), sourceId: String(row.source_id), chunkId: (row.chunk_id as string | null) ?? null, draftId: (row.draft_id as string | null) ?? null, ruleVersion: String(row.rule_version), fieldPath: String(row.field_path), before: JSON.parse(String(row.before_json)), after: JSON.parse(String(row.after_json)), createdAt: String(row.created_at) }));
+  }
+
   async retryImportChunk(tripId: string, userId: string, chunkId: string, adapter: LlmAdapter): Promise<ImportChunk> {
     const trip = this.requireActiveTrip(tripId);
     const row = this.db.connection.prepare(`SELECT chunk.*, source.provider_user_id, source.type AS source_type FROM import_chunks chunk JOIN sources source ON source.id = chunk.source_id WHERE chunk.id = ? AND chunk.trip_id = ?`).get(chunkId, tripId) as (Record<string, unknown> & { provider_user_id: string | null }) | undefined;
@@ -428,7 +434,10 @@ export class TravelService {
     const cacheKey = createHash("sha256").update(JSON.stringify({ contentHash: chunk.contentHash, contextKey, provider: metadata.provider, model: metadata.model, promptVersion: metadata.promptVersion })).digest("hex");
     const cached = this.db.connection.prepare(`SELECT status, payload_json, error_message, expires_at FROM extraction_cache WHERE cache_key = ?`).get(cacheKey) as { status: "success" | "error"; payload_json: string | null; error_message: string | null; expires_at: string | null } | undefined;
     if (cached?.status === "success" && cached.payload_json) {
-      return guardExtractionDraftPayload(validateExtractionDraftPayload(JSON.parse(cached.payload_json)), chunk.content);
+      const raw = validateExtractionDraftPayload(JSON.parse(cached.payload_json));
+      const guarded = guardExtractionDraftPayload(raw, chunk.content);
+      this.recordGuardRevisions(chunk.tripId, chunk.sourceId, chunk.id, null, raw, guarded, now());
+      return guarded;
     }
     if (cached?.status === "error" && cached.expires_at && Date.parse(cached.expires_at) > Date.now()) {
       throw new LlmProviderError(cached.error_message ?? "LLM provider request failed.");
@@ -445,7 +454,9 @@ export class TravelService {
       const saveCache = (key: string, cacheMetadata: ExtractionDraftMetadata) => this.db.connection.prepare(`INSERT INTO extraction_cache (cache_key, content_hash, context_key, provider, model, prompt_version, status, payload_json, error_code, error_message, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'success', ?, NULL, NULL, NULL, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET status = 'success', payload_json = excluded.payload_json, error_code = NULL, error_message = NULL, expires_at = NULL, updated_at = excluded.updated_at`).run(key, chunk.contentHash, contextKey, cacheMetadata.provider, cacheMetadata.model, cacheMetadata.promptVersion, JSON.stringify(raw), timestamp, timestamp);
       saveCache(cacheKey, metadata);
       if (resolvedKey !== cacheKey) saveCache(resolvedKey, resolvedMetadata);
-      return guardExtractionDraftPayload(raw, chunk.content);
+      const guarded = guardExtractionDraftPayload(raw, chunk.content);
+      this.recordGuardRevisions(chunk.tripId, chunk.sourceId, chunk.id, null, raw, guarded, timestamp);
+      return guarded;
     } catch (error) {
       const additionalCalls = Math.max(0, (adapter.lastProviderCallCount ?? 1) - 1);
       if (additionalCalls > 0) this.db.connection.prepare(`UPDATE import_chunks SET provider_calls = provider_calls + ?, updated_at = ? WHERE id = ?`).run(additionalCalls, now(), chunk.id);
@@ -457,6 +468,12 @@ export class TravelService {
       }
       throw error;
     }
+  }
+
+  private recordGuardRevisions(tripId: string, sourceId: string, chunkId: string | null, draftId: string | null, before: ExtractionDraftPayload, after: ExtractionDraftPayload, timestamp: string, ruleVersion = "guard-v1"): void {
+    const changes = payloadChanges(before, after);
+    const insert = this.db.connection.prepare(`INSERT INTO guard_revisions (id, trip_id, source_id, chunk_id, draft_id, rule_version, field_path, before_json, after_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const change of changes) insert.run(`G-${randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`, tripId, sourceId, chunkId, draftId, ruleVersion, change.path, JSON.stringify(change.before), JSON.stringify(change.after), timestamp);
   }
 
   getLatestExtractionDrafts(tripId: string): ExtractionDraftReview[] {
@@ -559,7 +576,9 @@ export class TravelService {
     const draft = toExtractionDraft(current);
     if (draft.status === "confirmed" || draft.status === "cancelled") throw new ConflictError(`Extraction Draft ${draftId} is locked.`);
     const validated = validateExtractionDraftPayload(payload);
-    return this.insertDraftRevision(tripId, current, "pending_confirmation", validated);
+    const revised = this.insertDraftRevision(tripId, current, "pending_confirmation", validated);
+    this.recordGuardRevisions(tripId, current.source_id, null, revised.id, draft, validated, revised.updatedAt, "manual-v1");
+    return revised;
   }
 
   cancelExtractionDraft(tripId: string, userId: string, draftId: string): ExtractionDraft {
@@ -1265,6 +1284,18 @@ function classifyChunkFailure(error: unknown): { code: string; message: string }
 
 function parseChunkPayload(value: string): ExtractionDraftPayload | undefined {
   try { return validateExtractionDraftPayload(JSON.parse(value)); } catch { return undefined; }
+}
+
+function payloadChanges(before: ExtractionDraftPayload, after: ExtractionDraftPayload): Array<{ path: string; before: unknown; after: unknown }> {
+  const changes: Array<{ path: string; before: unknown; after: unknown }> = [];
+  before.items.forEach((item, index) => {
+    const next = after.items[index];
+    if (!next) return;
+    for (const field of ["location", "originTimezone", "destinationTimezone", "timezone"] as const) {
+      if (item[field] !== next[field]) changes.push({ path: `items[${index}].${field}`, before: item[field] ?? null, after: next[field] ?? null });
+    }
+  });
+  return changes;
 }
 
 function toTripItem(row: Record<string, unknown>, kinds = [row.kind as TripItem["kind"]]): TripItem {
