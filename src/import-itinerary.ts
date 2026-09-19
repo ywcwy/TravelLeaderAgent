@@ -17,9 +17,8 @@ if (!tripId?.trim() || !importBatchId?.trim() || !markdownPath?.trim()) {
     if (size > maxImportBytes) throw new InvalidSourceError(`Markdown file exceeds the ${maxImportBytes}-byte import limit.`);
     const markdown = readFileSync(markdownPath, "utf8");
     const travel = new TravelService(database, administratorId);
-    const result = travel.importMarkdownBatch(tripId.trim(), markdown, importBatchId.trim());
-    const review = travel.reviewTrip(tripId.trim());
-    process.stdout.write(`${JSON.stringify({ ...result, reviewIssueCount: review.issues.length })}\n`);
+    const result = travel.importMarkdownDraftBatch(tripId.trim(), markdown, importBatchId.trim(), administratorId);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

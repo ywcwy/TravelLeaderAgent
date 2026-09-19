@@ -25,14 +25,20 @@ test("Phase 5 workflow resets, imports, and reviews one Trip end to end", () => 
   assert.equal(reset.archivedTrip.status, "archived");
 
   const importOutput = execFileSync(process.execPath, ["--experimental-strip-types", "src/import-itinerary.ts", reset.activeTrip.id, "phase5:e2e", markdownPath], { cwd: process.cwd(), env, encoding: "utf8" });
-  const imported = JSON.parse(importOutput) as { outcome: string; proposalIds: string[] };
+  const imported = JSON.parse(importOutput) as { outcome: string; draftId: string; proposalIds: string[]; itemCount: number };
   assert.equal(imported.outcome, "created");
-  assert.equal(imported.proposalIds.length, 2);
+  assert.match(imported.draftId, /^X-[0-9A-F]{8}$/);
+  assert.equal(imported.proposalIds.length, 0);
+  assert.equal(imported.itemCount, 2);
 
   const reviewOutput = execFileSync(process.execPath, ["--experimental-strip-types", "src/review-trip.ts", reset.activeTrip.id, "--json"], { cwd: process.cwd(), env, encoding: "utf8" });
-  const review = JSON.parse(reviewOutput) as { trip: { id: string }; pendingProposals: Array<{ id: string }>; effectiveItinerary: unknown[] };
+  const review = JSON.parse(reviewOutput) as { trip: { id: string }; pendingProposals: Array<{ id: string }>; effectiveItinerary: unknown[]; extractionDrafts: Array<{ importBatchId: string; draft: { id: string; status: string; items: unknown[] } }> };
   assert.equal(review.trip.id, reset.activeTrip.id);
-  assert.deepEqual(review.pendingProposals.map((proposal) => proposal.id), imported.proposalIds);
+  assert.deepEqual(review.pendingProposals, []);
   assert.equal(review.effectiveItinerary.length, 0);
+  assert.equal(review.extractionDrafts.length, 1);
+  assert.equal(review.extractionDrafts[0]?.importBatchId, "phase5:e2e");
+  assert.equal(review.extractionDrafts[0]?.draft.status, "pending_confirmation");
+  assert.equal(review.extractionDrafts[0]?.draft.items.length, 2);
   rmSync(directory, { recursive: true, force: true });
 });

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
 import { EXTRACTION_PROMPT_VERSION, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
-import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftMetadata, ExtractionDraftPayload, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 
@@ -28,6 +28,18 @@ export interface MarkdownImportResult {
   sourceId: string;
   proposalIds: string[];
   outcome: "created" | "reused";
+}
+
+export interface MarkdownDraftImportResult extends MarkdownImportResult {
+  draftId: string;
+  itemCount: number;
+  reviewIssueCount: number;
+  dateRange: { from: string | null; to: string | null };
+}
+
+export interface ExtractionDraftReview {
+  draft: ExtractionDraft;
+  importBatchId: string;
 }
 
 export interface ExtractionDraftOptions extends SourceImportOptions {
@@ -236,6 +248,54 @@ export class TravelService {
     }
     const created = this.importMarkdown(tripId, markdown, { idempotencyKey: batchId, type: "markdown" });
     return { ...created, outcome: "created" };
+  }
+
+  importMarkdownDraftBatch(tripId: string, markdown: string, importBatchId: string, originatingUserId = this.systemAdministratorId): MarkdownDraftImportResult {
+    this.requireSystemAdministrator(originatingUserId);
+    this.requireActiveTrip(tripId);
+    const batchId = importBatchId.trim();
+    if (!batchId) throw new InvalidSourceError("An Import Batch ID is required.");
+    if (containsSensitiveTravelData(markdown)) throw new InvalidSourceError("Sensitive Travel Data must be removed before importing this Source.");
+
+    const existing = this.db.connection.prepare(`SELECT id, content FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, batchId) as { id: string; content: string } | undefined;
+    if (existing) {
+      if (existing.content !== markdown) throw new ConflictError(`Import Batch ${batchId} already contains different content.`);
+      const draft = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(existing.id) as ExtractionDraftRow | undefined;
+      if (!draft) throw new ConflictError(`Import Batch ${batchId} already exists without an Extraction Draft.`);
+      const parsed = toExtractionDraft(draft);
+      return { sourceId: existing.id, draftId: parsed.id, proposalIds: parsed.proposalIds, itemCount: parsed.items.length, reviewIssueCount: parsed.issues.length + parsed.missing.length, dateRange: draftDateRange(parsed), outcome: "reused" };
+    }
+
+    const sourceId = randomUUID();
+    const parsed = parseMarkdownDraft(markdown);
+    const payload: ExtractionDraftPayload = {
+      items: parsed.items.map(toDraftItem),
+      missing: parsed.items.filter((item) => !item.startsAt && !item.localDate).map((item) => ({ field: "localDate", message: `「${item.title}」缺少日期。`, required: true })),
+      assumptions: ["Structured Markdown was parsed deterministically; no Proposal is created until Draft confirmation."],
+      issues: parsed.issues,
+      sourceExcerpt: markdown.trim().slice(0, 500),
+    };
+    const status: ExtractionDraft["status"] = payload.items.length > 0 ? "pending_confirmation" : "failed";
+    const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const timestamp = now();
+    this.db.connection.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, idempotency_key, content, source_time, provider, provider_message_id, provider_group_id, provider_user_id, created_at) VALUES (?, ?, 'markdown', ?, ?, ?, NULL, NULL, NULL, ?, ?)`).run(sourceId, tripId, batchId, markdown, timestamp, originatingUserId, timestamp);
+      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, '[]', 'deterministic-markdown', 'markdown-parser', 'markdown-draft-v1', NULL, NULL, NULL, ?, ?)`).run(
+        draftId, tripId, sourceId, originatingUserId, status, JSON.stringify(payload), timestamp, timestamp,
+      );
+      this.db.connection.exec("COMMIT");
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
+    return { sourceId, draftId, proposalIds: [], itemCount: payload.items.length, reviewIssueCount: payload.issues.length + payload.missing.length, dateRange: draftDateRange(payload), outcome: "created" };
+  }
+
+  getLatestExtractionDrafts(tripId: string): ExtractionDraftReview[] {
+    this.requireTrip(tripId);
+    const rows = this.db.connection.prepare(`SELECT draft.*, source.idempotency_key FROM extraction_drafts draft JOIN sources source ON source.id = draft.source_id WHERE draft.trip_id = ? AND NOT EXISTS (SELECT 1 FROM extraction_drafts newer WHERE newer.source_id = draft.source_id AND newer.revision > draft.revision) ORDER BY draft.updated_at DESC, draft.id`).all(tripId) as unknown as Array<ExtractionDraftRow & { idempotency_key: string }>;
+    return rows.map((row) => ({ draft: toExtractionDraft(row), importBatchId: row.idempotency_key }));
   }
 
   getSource(sourceId: string): Source | null {
@@ -678,7 +738,8 @@ export class TravelService {
       const sourceIssues = findUnparseableLineIssues(source.id, source.content);
       issues.push(...sourceIssues);
       const sourceId = source.id;
-      if (!proposalSourceIds.has(sourceId) && sourceIssues.length === 0) {
+      const draft = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(sourceId) as ExtractionDraftRow | undefined;
+      if (!proposalSourceIds.has(sourceId) && !draft && sourceIssues.length === 0) {
         issues.push({ code: "source_unparsed", message: "Source has no parseable itinerary candidates.", sourceId, proposalIds: [] });
       }
     }
@@ -1154,11 +1215,20 @@ function parseMarkdownCandidate(line: string, sourceLine: number): ParsedItinera
   }
   if (originTimezone && !validOriginTimezone) issues.push({ code: "invalid_endpoint_timezone", message: `第 ${sourceLine} 行的 origin_timezone 不是有效的 IANA timezone：${originTimezone}。` });
   if (destinationTimezone && !validDestinationTimezone) issues.push({ code: "invalid_endpoint_timezone", message: `第 ${sourceLine} 行的 destination_timezone 不是有效的 IANA timezone：${destinationTimezone}。` });
+  const startTimeFlexibility = fields.start_time_flexibility?.toLowerCase();
+  const endTimeFlexibility = fields.end_time_flexibility?.toLowerCase();
+  const timeWindow = fields.time_window?.toLowerCase();
+  if (startTimeFlexibility && !["required", "estimated", "flexible"].includes(startTimeFlexibility)) issues.push({ code: "unparseable_line", message: `第 ${sourceLine} 行的 start_time_flexibility 不支援：${startTimeFlexibility}。` });
+  if (endTimeFlexibility && !["required", "estimated", "flexible"].includes(endTimeFlexibility)) issues.push({ code: "unparseable_line", message: `第 ${sourceLine} 行的 end_time_flexibility 不支援：${endTimeFlexibility}。` });
+  if (timeWindow && !["morning", "afternoon", "evening", "night"].includes(timeWindow)) issues.push({ code: "unparseable_line", message: `第 ${sourceLine} 行的 time_window 不支援：${timeWindow}。` });
   return {
     item: {
       kind: kinds[0], kinds, shape, shapeSource, title, status: status as TripItemStatus,
       startsAt: startsAt || undefined, endsAt: fields.ends_at || undefined, location: location || undefined, origin, destination, originTimezone: validOriginTimezone, destinationTimezone: validDestinationTimezone,
       notes: notes || undefined, timezone: validTimezone, timezoneSource: validTimezone ? "explicit" : (explicitTimezone ? "fallback" : undefined), deadlineAt: fields.deadline || undefined,
+      startTimeFlexibility: startTimeFlexibility === "required" || startTimeFlexibility === "estimated" || startTimeFlexibility === "flexible" ? startTimeFlexibility : undefined,
+      endTimeFlexibility: endTimeFlexibility === "required" || endTimeFlexibility === "estimated" || endTimeFlexibility === "flexible" ? endTimeFlexibility : undefined,
+      timeWindow: timeWindow === "morning" || timeWindow === "afternoon" || timeWindow === "evening" || timeWindow === "night" ? timeWindow : undefined,
       sourceLine, sourceExcerpt: line.trim(),
     },
     issues,
@@ -1209,6 +1279,41 @@ function inferLocationTimezone(value: string | undefined): string | undefined {
 function containsSensitiveTravelData(markdown: string): boolean {
   return /(?:護照(?:號碼|号码)?|passport(?:\s*(?:number|no\.?))?)\s*[:：#-]?\s*[A-Z0-9]{6,}/i.test(markdown)
     || /(?:信用卡|credit\s*card|card\s*number|卡號)\s*[:：#-]?\s*\d[\d -]{7,}/i.test(markdown);
+}
+
+function parseMarkdownDraft(markdown: string): { items: ExtractedTripItem[]; issues: Array<{ code: string; message: string }> } {
+  const items: ExtractedTripItem[] = [];
+  const issues: Array<{ code: string; message: string }> = [];
+  markdown.split(/\r?\n/).forEach((line, index) => {
+    const parsed = parseItineraryCandidate(line, index + 1);
+    if (parsed.item) items.push(parsed.item);
+    if (parsed.items) items.push(...parsed.items);
+    if (parsed.issue) issues.push(parsed.issue);
+    if (parsed.issues) issues.push(...parsed.issues);
+    if (/^\s*-\s*\[/.test(line) && !parsed.item && !parsed.items?.length && !parsed.issue && !parsed.issues?.length) {
+      issues.push({ code: "unparseable_line", message: `第 ${index + 1} 行無法解析為有效行程候選。` });
+    }
+  });
+  return { items, issues };
+}
+
+function toDraftItem(item: ExtractedTripItem): ExtractionDraftItem {
+  const dateOnlyStart = Boolean(item.startsAt && isDateOnly(item.startsAt));
+  return {
+    ...item,
+    localDate: item.localDate ?? (dateOnlyStart ? item.startsAt : undefined),
+    startsAt: dateOnlyStart ? undefined : item.startsAt,
+    startTimeFlexibility: item.startTimeFlexibility ?? (item.startsAt && !dateOnlyStart ? "required" : "flexible"),
+    endTimeFlexibility: item.endTimeFlexibility ?? (item.endsAt ? "required" : "flexible"),
+  };
+}
+
+function draftDateRange(draft: Pick<ExtractionDraftPayload, "items">): { from: string | null; to: string | null } {
+  const dates = draft.items
+    .flatMap((item) => [item.localDate, item.startsAt?.slice(0, 10), item.endsAt?.slice(0, 10)])
+    .filter((value): value is string => Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value)))
+    .sort();
+  return { from: dates[0] ?? null, to: dates.at(-1) ?? null };
 }
 
 function currentDateInTimezone(timezone: string): string {

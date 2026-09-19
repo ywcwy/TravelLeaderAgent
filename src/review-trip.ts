@@ -16,7 +16,7 @@ if (!tripId?.trim()) {
     const trip = travel.getTrip(tripId.trim());
     if (!trip) throw new NotFoundError(`Trip ${tripId} was not found.`);
     const review = travel.reviewTrip(trip.id);
-    const result = toResult(trip, review);
+    const result = toResult(trip, review, travel.getLatestExtractionDrafts(trip.id));
     process.stdout.write(flags.includes("--json") ? `${JSON.stringify(result)}\n` : `${renderHuman(result)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -26,7 +26,7 @@ if (!tripId?.trim()) {
   }
 }
 
-function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, review: TripReview) {
+function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, review: TripReview, extractionDrafts: ReturnType<TravelService["getLatestExtractionDrafts"]>) {
   return {
     trip,
     effectiveItinerary: review.confirmed,
@@ -34,12 +34,14 @@ function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, revie
     rejectedProposals: review.rejected,
     decisions: review.decisions,
     reviewIssues: review.issues,
+    extractionDrafts,
     counts: {
       confirmed: review.confirmed.length,
       pending: review.pending.length,
       rejected: review.rejected.length,
       decisions: review.decisions.length,
       reviewIssues: review.issues.length,
+      extractionDrafts: extractionDrafts.length,
     },
   };
 }
@@ -55,10 +57,20 @@ function renderHuman(result: ReturnType<typeof toResult>): string {
     ...result.rejectedProposals.map((proposal) => `${formatProposal(proposal)}${proposal.rejectionReason ? ` | reason: ${proposal.rejectionReason}` : ""}${proposal.rejectedBy ? ` | by: ${proposal.rejectedBy}` : ""}`),
     `Decisions (${result.counts.decisions})`,
     ...result.decisions.map((decision) => `- ${decision.id} | ${decision.status} | ${decision.title}${decision.selectedProposalId ? ` | selected: ${decision.selectedProposalId}` : ""}${decision.cancelledBy ? ` | cancelled by: ${decision.cancelledBy}` : ""}`),
+    `Extraction Drafts (${result.counts.extractionDrafts})`,
+    ...result.extractionDrafts.map(({ draft, importBatchId }) => {
+      const dates = draftDateRange(draft);
+      return `- ${draft.id} | batch ${importBatchId} | ${draft.status} | revision ${draft.revision} | ${draft.items.length} items | ${dates.from ?? "undated"}${dates.to && dates.to !== dates.from ? `..${dates.to}` : ""} | Review Issues ${draft.issues.length + draft.missing.length}`;
+    }),
     `Review Issues (${result.counts.reviewIssues})`,
     ...result.reviewIssues.map((issue) => `- [${issue.code}] ${issue.message}${issue.sourceLine ? ` (line ${issue.sourceLine})` : ""}`),
   ];
   return lines.join("\n");
+}
+
+function draftDateRange(draft: { items: Array<{ localDate?: string; startsAt?: string; endsAt?: string }> }): { from: string | null; to: string | null } {
+  const dates = draft.items.flatMap((item) => [item.localDate, item.startsAt?.slice(0, 10), item.endsAt?.slice(0, 10)]).filter((value): value is string => Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value))).sort();
+  return { from: dates[0] ?? null, to: dates.at(-1) ?? null };
 }
 
 function formatTripItem(item: TripItem): string {
