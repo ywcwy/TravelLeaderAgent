@@ -11,7 +11,7 @@ test("import:trip CLI persists a Markdown batch as a reviewable Draft without Pr
   const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-import-cli-"));
   const databasePath = join(directory, "travel.sqlite");
   const markdownPath = join(directory, "itinerary.md");
-  writeFileSync(markdownPath, "- [provisional] 東京住宿 | 2026-10-16 | 東京 | | start_time_flexibility=estimated | time_window=evening\n- [provisional 東京活動 | 2026-10-17 | 東京");
+  writeFileSync(markdownPath, "@TravelLeaderAgent - [provisional] 東京住宿 | 2026-10-16 | 東京 | | start_time_flexibility=estimated | time_window=evening\n- [provisional 東京活動 | 2026-10-17 | 東京");
   const database = new TravelDatabase(databasePath);
   const travel = new TravelService(database, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-import-cli", "CLI Import");
