@@ -97,6 +97,22 @@ export class TravelDatabase {
       );
       CREATE INDEX IF NOT EXISTS import_chunks_source_ordinal ON import_chunks(source_id, ordinal);
 
+      CREATE TABLE IF NOT EXISTS extraction_cache (
+        cache_key TEXT PRIMARY KEY,
+        content_hash TEXT NOT NULL,
+        context_key TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('success', 'error')),
+        payload_json TEXT,
+        error_code TEXT,
+        error_message TEXT,
+        expires_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE UNIQUE INDEX IF NOT EXISTS extraction_draft_source_revision ON extraction_drafts(source_id, revision);
 
       CREATE TABLE IF NOT EXISTS members (

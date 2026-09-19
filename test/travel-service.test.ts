@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { TravelDatabase } from "../src/database.ts";
-import { FakeLlmAdapter, type LlmAdapter } from "../src/extraction-draft.ts";
+import { FakeLlmAdapter, LlmProviderError, type LlmAdapter } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
 import { ConflictError, InvalidSourceError, InvalidTimezoneError, PermissionError, TravelService, TripNotActiveError } from "../src/travel-service.ts";
 import { renderItineraryQuery } from "../src/itinerary-query.ts";
@@ -359,6 +359,52 @@ test("keeps successful chunks when a later chunk fails", async () => {
   const rebuilt = service.getExtractionDraft(trip.id, draft.id);
   assert.equal(rebuilt?.items.length, 2);
   assert.equal(rebuilt?.issues.some((issue) => issue.code === "partial_batch"), false);
+  db.close();
+});
+
+test("reuses extraction cache across equivalent chunks and misses on model changes", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-cache", "Cache 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Cache 旅程", "Asia/Taipei");
+  const source = "# Day 1\n10/1 住宿 Page";
+  let calls = 0;
+  const adapter = (model: string) => ({
+    metadata: { provider: "fake", model, promptVersion: "cache-test" },
+    extract: async (input: { sourceContent: string }) => {
+      calls += 1;
+      return {
+        items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Page lodging", status: "provisional", localDate: "2026-10-01", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" }],
+        missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
+      } satisfies import("../src/domain.ts").ExtractionDraftPayload;
+    },
+  });
+
+  await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:one", type: "markdown" }, adapter("model-a"));
+  await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:two", type: "markdown" }, adapter("model-a"));
+  assert.equal(calls, 1);
+  await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:three", type: "markdown" }, adapter("model-b"));
+  assert.equal(calls, 2);
+  assert.equal((db.connection.prepare("SELECT COUNT(*) AS count FROM extraction_cache WHERE status = 'success'").get() as { count: number }).count, 2);
+  db.close();
+});
+
+test("temporarily caches provider errors without permanently blocking retry", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-cache-error", "Cache Error 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Cache Error 旅程", "Asia/Taipei");
+  const source = "# Day 1\n10/1 住宿 Page";
+  let calls = 0;
+  const failing = { metadata: { provider: "fake", model: "error-model", promptVersion: "cache-test" }, extract: async () => { calls += 1; throw new LlmProviderError("LLM provider request timed out."); } };
+  const first = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:error:one", type: "markdown" }, failing);
+  const second = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:error:two", type: "markdown" }, failing);
+  assert.equal(first.status, "failed");
+  assert.equal(second.status, "failed");
+  assert.equal(calls, 1);
+  db.connection.prepare("UPDATE extraction_cache SET expires_at = ?").run(new Date(Date.now() - 1_000).toISOString());
+  await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:error:three", type: "markdown" }, failing);
+  assert.equal(calls, 2);
   db.close();
 });
 
