@@ -22,6 +22,38 @@ export interface LlmExtractionInput {
 export interface LlmAdapter {
   extract(input: LlmExtractionInput): ExtractionDraftPayload | Promise<ExtractionDraftPayload>;
   readonly metadata?: ExtractionDraftMetadata;
+  readonly lastProviderCallCount?: number;
+}
+
+/** Uses a fallback provider only for transport timeouts; malformed output is never silently rerouted. */
+export class TimeoutFallbackLlmAdapter implements LlmAdapter {
+  private activeMetadata: ExtractionDraftMetadata;
+  lastProviderCallCount = 0;
+  private readonly primary: LlmAdapter;
+  private readonly fallback: LlmAdapter;
+
+  constructor(primary: LlmAdapter, fallback: LlmAdapter) {
+    this.primary = primary;
+    this.fallback = fallback;
+    this.activeMetadata = primary.metadata ?? { provider: "unknown", model: "unknown", promptVersion: EXTRACTION_PROMPT_VERSION };
+  }
+
+  get metadata(): ExtractionDraftMetadata { return this.activeMetadata; }
+
+  async extract(input: LlmExtractionInput): Promise<ExtractionDraftPayload> {
+    this.lastProviderCallCount = 1;
+    try {
+      const result = await this.primary.extract(input);
+      this.activeMetadata = this.primary.metadata ?? this.activeMetadata;
+      return result;
+    } catch (error) {
+      if (!(error instanceof LlmProviderError) || !/timed out/i.test(error.message)) throw error;
+      this.lastProviderCallCount = 2;
+      const result = await this.fallback.extract(input);
+      this.activeMetadata = this.fallback.metadata ?? this.activeMetadata;
+      return result;
+    }
+  }
 }
 
 export class ExtractionDraftValidationError extends Error {}

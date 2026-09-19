@@ -330,7 +330,7 @@ test("keeps successful chunks when a later chunk fails", async () => {
   const adapter: LlmAdapter = {
     metadata: { provider: "fake", model: "partial", promptVersion: "test" },
     extract: async (input: { sourceContent: string }) => {
-      if (input.sourceContent.includes("Day 2")) throw new Error("simulated provider failure");
+      if (input.sourceContent.split("[Related itinerary context]")[0]!.includes("Day 2")) throw new Error("simulated provider failure");
       return {
         items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Day 1 lodging", status: "provisional", localDate: "2026-10-01", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" }],
         missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
@@ -383,6 +383,8 @@ test("reuses extraction cache across equivalent chunks and misses on model chang
   await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:one", type: "markdown" }, adapter("model-a"));
   await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:two", type: "markdown" }, adapter("model-a"));
   assert.equal(calls, 1);
+  const cachedSource = db.connection.prepare("SELECT id FROM sources WHERE idempotency_key = ?").get("cache:two") as { id: string };
+  assert.equal(service.getImportChunks(trip.id, cachedSource.id)[0]?.providerCalls, 0);
   await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:three", type: "markdown" }, adapter("model-b"));
   assert.equal(calls, 2);
   assert.equal((db.connection.prepare("SELECT COUNT(*) AS count FROM extraction_cache WHERE status = 'success'").get() as { count: number }).count, 2);
@@ -405,6 +407,27 @@ test("temporarily caches provider errors without permanently blocking retry", as
   db.connection.prepare("UPDATE extraction_cache SET expires_at = ?").run(new Date(Date.now() - 1_000).toISOString());
   await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:error:three", type: "markdown" }, failing);
   assert.equal(calls, 2);
+  db.close();
+});
+
+test("blocks new chunk calls when the batch provider budget is exhausted", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin", { maxProviderCalls: 1, maxChunkAttempts: 2 });
+  const group = service.createTravelGroup("system-admin", "C-budget", "Budget 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Budget 旅程", "Asia/Taipei");
+  let calls = 0;
+  const adapter: LlmAdapter = {
+    metadata: { provider: "fake", model: "budget", promptVersion: "budget-test" },
+    extract: async (input) => {
+      calls += 1;
+      return { items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: input.sourceContent.includes("Day 2") ? "Day 2" : "Day 1", status: "provisional", localDate: "2026-10-01", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" }], missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent } satisfies ExtractionDraftPayload;
+    },
+  };
+  const draft = await service.createExtractionDraft(trip.id, "# Day 1\n10/1 Page\n\n# Day 2\n10/2 Page", { idempotencyKey: "budget:one", type: "markdown" }, adapter);
+  const chunks = service.getImportChunks(trip.id, draft.sourceId);
+  assert.equal(calls, 1);
+  assert.deepEqual(chunks.map((chunk) => chunk.status), ["completed", "blocked"]);
+  assert.ok(draft.issues.some((issue) => issue.code === "batch_budget_exceeded"));
   db.close();
 });
 

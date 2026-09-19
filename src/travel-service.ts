@@ -48,14 +48,28 @@ export interface ExtractionDraftOptions extends SourceImportOptions {
   inputType?: string;
 }
 
+export interface ExtractionBudgetOptions {
+  maxChunkAttempts?: number;
+  maxProviderCalls?: number;
+}
+
+const DEFAULT_MAX_CHUNK_ATTEMPTS = 2;
+const DEFAULT_MAX_PROVIDER_CALLS = 20;
+
 export class TravelService {
   private readonly db: TravelDatabase;
   private readonly systemAdministratorId: string;
+  private readonly extractionBudget: Required<ExtractionBudgetOptions>;
   private readonly queryTokens = new Map<string, { tripId: string; memberId: string; query: Omit<ItineraryQuery, "continuationToken">; offset: number; expiresAt: number }>();
 
-  constructor(db: TravelDatabase, systemAdministratorId: string) {
+  constructor(db: TravelDatabase, systemAdministratorId: string, extractionBudget: ExtractionBudgetOptions = {}) {
     this.db = db;
     this.systemAdministratorId = systemAdministratorId;
+    this.extractionBudget = {
+      maxChunkAttempts: extractionBudget.maxChunkAttempts ?? DEFAULT_MAX_CHUNK_ATTEMPTS,
+      maxProviderCalls: extractionBudget.maxProviderCalls ?? DEFAULT_MAX_PROVIDER_CALLS,
+    };
+    if (this.extractionBudget.maxChunkAttempts < 1 || this.extractionBudget.maxProviderCalls < 1) throw new InvalidSourceError("Extraction budget limits must be positive.");
   }
 
   createTravelGroup(administratorId: string, lineGroupId: string, displayName: string): TravelGroup {
@@ -309,6 +323,7 @@ export class TravelService {
       content: row.content as string,
       status: row.status as ImportChunk["status"],
       attempts: row.attempts as number,
+      providerCalls: row.provider_calls as number,
       ...(typeof row.error_code === "string" ? { errorCode: row.error_code } : {}),
       ...(typeof row.error_message === "string" ? { errorMessage: row.error_message } : {}),
       ...(typeof row.result_json === "string" ? { extractionPayload: parseChunkPayload(row.result_json) } : {}),
@@ -317,16 +332,20 @@ export class TravelService {
     }));
   }
 
+  getExtractionBudget(): Required<ExtractionBudgetOptions> { return { ...this.extractionBudget }; }
+
   async retryImportChunk(tripId: string, userId: string, chunkId: string, adapter: LlmAdapter): Promise<ImportChunk> {
     const trip = this.requireActiveTrip(tripId);
     const row = this.db.connection.prepare(`SELECT chunk.*, source.provider_user_id, source.type AS source_type FROM import_chunks chunk JOIN sources source ON source.id = chunk.source_id WHERE chunk.id = ? AND chunk.trip_id = ?`).get(chunkId, tripId) as (Record<string, unknown> & { provider_user_id: string | null }) | undefined;
     if (!row) throw new NotFoundError(`Import Chunk ${chunkId} was not found.`);
     if (userId !== this.systemAdministratorId && (!row.provider_user_id || row.provider_user_id !== userId)) throw new PermissionError("Only the originating user or System Administrator can retry an Import Chunk.");
-    if (row.status !== "failed") throw new ConflictError(`Import Chunk ${chunkId} is not failed and cannot be retried.`);
+    if (row.status !== "failed" && row.status !== "blocked") throw new ConflictError(`Import Chunk ${chunkId} is not failed or blocked and cannot be retried.`);
     const currentDraft = this.db.connection.prepare(`SELECT status FROM extraction_drafts WHERE trip_id = ? AND source_id = ? ORDER BY revision DESC LIMIT 1`).get(tripId, String(row.source_id)) as { status: ExtractionDraft["status"] } | undefined;
     if (!currentDraft) throw new NotFoundError(`Extraction Draft for Import Chunk ${chunkId} was not found.`);
     if (currentDraft.status === "confirmed" || currentDraft.status === "cancelled") throw new ConflictError(`Import Chunk ${chunkId} cannot be retried after its Extraction Draft is ${currentDraft.status}.`);
     const attempts = Number(row.attempts) + 1;
+    if (attempts > this.extractionBudget.maxChunkAttempts) throw new ConflictError(`Import Chunk ${chunkId} reached the maximum ${this.extractionBudget.maxChunkAttempts} provider attempts.`);
+    if (this.providerAttempts(String(row.source_id)) >= this.extractionBudget.maxProviderCalls) throw new ConflictError(`Import Batch reached the maximum ${this.extractionBudget.maxProviderCalls} provider calls.`);
     let payload: ExtractionDraftPayload | null = null;
     let status: ImportChunkStatus = "completed";
     let errorCode: string | null = null;
@@ -334,7 +353,8 @@ export class TravelService {
     try {
       const chunk = this.getImportChunks(tripId, String(row.source_id)).find((candidate) => candidate.id === chunkId);
       if (!chunk) throw new NotFoundError(`Import Chunk ${chunkId} was not found.`);
-      payload = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDateInTimezone(trip.timezone), String(row.source_type ?? "markdown"));
+      const chunks = this.getImportChunks(tripId, String(row.source_id));
+      payload = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDateInTimezone(trip.timezone), String(row.source_type ?? "markdown"), relatedChunkContext(chunks, chunks.findIndex((candidate) => candidate.id === chunkId)));
     } catch (error) {
       status = "failed";
       const failure = classifyChunkFailure(error);
@@ -347,6 +367,13 @@ export class TravelService {
     const updated = this.getImportChunks(tripId, String(row.source_id)).find((chunk) => chunk.id === chunkId);
     if (!updated) throw new InvalidSourceError(`Import Chunk ${chunkId} disappeared after retry.`);
     return updated;
+  }
+
+  resetImportBatchBudget(tripId: string, administratorId: string, sourceId: string): number {
+    this.requireActiveTrip(tripId);
+    this.requireSystemAdministrator(administratorId);
+    const result = this.db.connection.prepare(`UPDATE import_chunks SET status = CASE WHEN status = 'blocked' THEN 'failed' ELSE status END, attempts = CASE WHEN status = 'blocked' THEN 0 ELSE attempts END, provider_calls = 0, error_code = CASE WHEN status = 'blocked' THEN NULL ELSE error_code END, error_message = CASE WHEN status = 'blocked' THEN NULL ELSE error_message END, updated_at = ? WHERE trip_id = ? AND source_id = ?`).run(now(), tripId, sourceId);
+    return Number(result.changes);
   }
 
   private rebuildExtractionDraftFromChunks(tripId: string, sourceId: string, timestamp: string): void {
@@ -362,9 +389,9 @@ export class TravelService {
     let failed = 0;
     for (const row of rows) {
       const chunkPayload = typeof row.result_json === "string" ? parseChunkPayload(row.result_json) : undefined;
-      if (row.status === "failed") {
+      if (row.status === "failed" || row.status === "blocked") {
         failed += 1;
-        if (typeof row.error_code === "string") payload.issues.push({ code: row.error_code, message: `第 ${row.start_line}-${row.end_line} 行 Chunk 解析失敗：${row.error_message ?? "LLM extraction failed."}` });
+        if (typeof row.error_code === "string") payload.issues.push({ code: row.error_code, message: `第 ${row.start_line}-${row.end_line} 行 Chunk 未完成：${row.error_message ?? "LLM extraction failed."}` });
       }
       if (!chunkPayload) continue;
       payload.items.push(...chunkPayload.items.map((item) => item.sourceLine ? { ...item, sourceLine: item.sourceLine + Number(row.start_line) - 1 } : item));
@@ -386,13 +413,18 @@ export class TravelService {
     }
   }
 
+  private providerAttempts(sourceId: string): number {
+    const row = this.db.connection.prepare(`SELECT COALESCE(SUM(provider_calls), 0) AS calls FROM import_chunks WHERE source_id = ?`).get(sourceId) as { calls: number };
+    return row.calls;
+  }
+
   private updateImportChunk(chunkId: string, status: ImportChunkStatus, attempts: number, errorCode: string | null, errorMessage: string | null, extractionPayload: ExtractionDraftPayload | null, timestamp: string): void {
     this.db.connection.prepare(`UPDATE import_chunks SET status = ?, attempts = ?, error_code = ?, error_message = ?, result_json = ?, updated_at = ? WHERE id = ?`).run(status, attempts, errorCode, errorMessage, extractionPayload ? JSON.stringify(extractionPayload) : null, timestamp, chunkId);
   }
 
-  private async extractChunkWithCache(adapter: LlmAdapter, chunk: ImportChunk, tripTimezone: string, currentDate: string, inputType: string): Promise<ExtractionDraftPayload> {
+  private async extractChunkWithCache(adapter: LlmAdapter, chunk: ImportChunk, tripTimezone: string, currentDate: string, inputType: string, relatedContext = ""): Promise<ExtractionDraftPayload> {
     const metadata = adapter.metadata ?? defaultExtractionMetadata();
-    const contextKey = JSON.stringify({ tripTimezone, currentDate, inputType });
+    const contextKey = JSON.stringify({ tripTimezone, currentDate, inputType, relatedContext });
     const cacheKey = createHash("sha256").update(JSON.stringify({ contentHash: chunk.contentHash, contextKey, provider: metadata.provider, model: metadata.model, promptVersion: metadata.promptVersion })).digest("hex");
     const cached = this.db.connection.prepare(`SELECT status, payload_json, error_message, expires_at FROM extraction_cache WHERE cache_key = ?`).get(cacheKey) as { status: "success" | "error"; payload_json: string | null; error_message: string | null; expires_at: string | null } | undefined;
     if (cached?.status === "success" && cached.payload_json) {
@@ -402,11 +434,21 @@ export class TravelService {
       throw new LlmProviderError(cached.error_message ?? "LLM provider request failed.");
     }
     try {
-      const raw = validateExtractionDraftPayload(await adapter.extract({ sourceContent: chunk.content, tripTimezone, currentDate, inputType }));
+      this.db.connection.prepare(`UPDATE import_chunks SET provider_calls = provider_calls + 1, updated_at = ? WHERE id = ?`).run(now(), chunk.id);
+      const sourceContent = relatedContext ? `${chunk.content}\n\n[Related itinerary context]\n${relatedContext}` : chunk.content;
+      const raw = validateExtractionDraftPayload(await adapter.extract({ sourceContent, tripTimezone, currentDate, inputType }));
+      const additionalCalls = Math.max(0, (adapter.lastProviderCallCount ?? 1) - 1);
+      if (additionalCalls > 0) this.db.connection.prepare(`UPDATE import_chunks SET provider_calls = provider_calls + ?, updated_at = ? WHERE id = ?`).run(additionalCalls, now(), chunk.id);
       const timestamp = now();
-      this.db.connection.prepare(`INSERT INTO extraction_cache (cache_key, content_hash, context_key, provider, model, prompt_version, status, payload_json, error_code, error_message, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'success', ?, NULL, NULL, NULL, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET status = 'success', payload_json = excluded.payload_json, error_code = NULL, error_message = NULL, expires_at = NULL, updated_at = excluded.updated_at`).run(cacheKey, chunk.contentHash, contextKey, metadata.provider, metadata.model, metadata.promptVersion, JSON.stringify(raw), timestamp, timestamp);
+      const resolvedMetadata = adapter.metadata ?? metadata;
+      const resolvedKey = createHash("sha256").update(JSON.stringify({ contentHash: chunk.contentHash, contextKey, provider: resolvedMetadata.provider, model: resolvedMetadata.model, promptVersion: resolvedMetadata.promptVersion })).digest("hex");
+      const saveCache = (key: string, cacheMetadata: ExtractionDraftMetadata) => this.db.connection.prepare(`INSERT INTO extraction_cache (cache_key, content_hash, context_key, provider, model, prompt_version, status, payload_json, error_code, error_message, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'success', ?, NULL, NULL, NULL, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET status = 'success', payload_json = excluded.payload_json, error_code = NULL, error_message = NULL, expires_at = NULL, updated_at = excluded.updated_at`).run(key, chunk.contentHash, contextKey, cacheMetadata.provider, cacheMetadata.model, cacheMetadata.promptVersion, JSON.stringify(raw), timestamp, timestamp);
+      saveCache(cacheKey, metadata);
+      if (resolvedKey !== cacheKey) saveCache(resolvedKey, resolvedMetadata);
       return guardExtractionDraftPayload(raw, chunk.content);
     } catch (error) {
+      const additionalCalls = Math.max(0, (adapter.lastProviderCallCount ?? 1) - 1);
+      if (additionalCalls > 0) this.db.connection.prepare(`UPDATE import_chunks SET provider_calls = provider_calls + ?, updated_at = ? WHERE id = ?`).run(additionalCalls, now(), chunk.id);
       if (error instanceof LlmProviderError) {
         const timestamp = now();
         const expiresAt = new Date(Date.now() + 60_000).toISOString();
@@ -466,10 +508,15 @@ export class TravelService {
     const chunks = this.getImportChunks(tripId, source.id);
     const aggregate: ExtractionDraftPayload = { items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: content.trim().slice(0, 500) };
     let failedChunkCount = 0;
-    for (const chunk of chunks) {
+    for (const [chunkIndex, chunk] of chunks.entries()) {
       const attempts = chunk.attempts + 1;
+      if (attempts > this.extractionBudget.maxChunkAttempts || this.providerAttempts(source.id) >= this.extractionBudget.maxProviderCalls) {
+        this.updateImportChunk(chunk.id, "blocked", chunk.attempts, "batch_budget_exceeded", "Extraction Batch budget or per-Chunk attempt limit reached.", null, now());
+        aggregate.issues.push({ code: "batch_budget_exceeded", message: `第 ${chunk.startLine}-${chunk.endLine} 行 Chunk 未執行：已達 Extraction Batch budget。` });
+        continue;
+      }
       try {
-        const extracted = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDate, inputType);
+        const extracted = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDate, inputType, relatedChunkContext(chunks, chunkIndex));
         aggregate.items.push(...extracted.items.map((item) => item.sourceLine ? { ...item, sourceLine: item.sourceLine + chunk.startLine - 1 } : item));
         aggregate.missing.push(...extracted.missing);
         aggregate.assumptions.push(...extracted.assumptions);
@@ -540,10 +587,14 @@ export class TravelService {
     const trip = this.requireTrip(tripId);
     if (this.getImportChunks(tripId, source.id).length === 0) this.persistImportChunks(tripId, source.id, source.idempotencyKey, source.content, "failed", now());
     const chunks = this.getImportChunks(tripId, source.id);
-    for (const chunk of chunks.filter((candidate) => candidate.status === "failed")) {
+    for (const chunk of chunks.filter((candidate) => candidate.status === "failed" || candidate.status === "blocked")) {
       const attempts = chunk.attempts + 1;
+      if (attempts > this.extractionBudget.maxChunkAttempts || this.providerAttempts(source.id) >= this.extractionBudget.maxProviderCalls) {
+        this.updateImportChunk(chunk.id, "blocked", chunk.attempts, "batch_budget_exceeded", "Extraction Batch budget or per-Chunk attempt limit reached.", null, now());
+        continue;
+      }
       try {
-        const payload = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDateInTimezone(trip.timezone), source.type);
+        const payload = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDateInTimezone(trip.timezone), source.type, relatedChunkContext(chunks, chunks.findIndex((candidate) => candidate.id === chunk.id)));
         this.updateImportChunk(chunk.id, "completed", attempts, null, null, payload, now());
       } catch (error) {
         const failure = classifyChunkFailure(error);
@@ -1576,6 +1627,14 @@ function preferredChunkBoundary(lines: string[], start: number, target: number):
 
 function normalizeChunkContent(content: string): string {
   return content.split("\n").map((line) => line.trimEnd()).join("\n").trim();
+}
+
+function relatedChunkContext(chunks: ImportChunk[], index: number): string {
+  if (index < 0) return "";
+  return [chunks[index - 1]?.content, chunks[index + 1]?.content]
+    .filter((content): content is string => Boolean(content))
+    .map((content) => content.slice(0, 1_000))
+    .join("\n---\n");
 }
 
 function currentDateInTimezone(timezone: string): string {

@@ -17,7 +17,7 @@ if (!tripId?.trim()) {
     if (!trip) throw new NotFoundError(`Trip ${tripId} was not found.`);
     const review = travel.reviewTrip(trip.id);
     const extractionDrafts = travel.getLatestExtractionDrafts(trip.id).map((entry) => ({ ...entry, chunks: travel.getImportChunks(trip.id, entry.draft.sourceId) }));
-    const result = toResult(trip, review, extractionDrafts);
+    const result = toResult(trip, review, extractionDrafts, travel.getExtractionBudget());
     process.stdout.write(flags.includes("--json") ? `${JSON.stringify(result)}\n` : `${renderHuman(result)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -27,7 +27,7 @@ if (!tripId?.trim()) {
   }
 }
 
-function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, review: TripReview, extractionDrafts: Array<ReturnType<TravelService["getLatestExtractionDrafts"]>[number] & { chunks: ReturnType<TravelService["getImportChunks"]> }>) {
+function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, review: TripReview, extractionDrafts: Array<ReturnType<TravelService["getLatestExtractionDrafts"]>[number] & { chunks: ReturnType<TravelService["getImportChunks"]> }>, budget: ReturnType<TravelService["getExtractionBudget"]>) {
   return {
     trip,
     effectiveItinerary: review.confirmed,
@@ -36,6 +36,7 @@ function toResult(trip: NonNullable<ReturnType<TravelService["getTrip"]>>, revie
     decisions: review.decisions,
     reviewIssues: review.issues,
     extractionDrafts,
+    budget,
     counts: {
       confirmed: review.confirmed.length,
       pending: review.pending.length,
@@ -61,7 +62,8 @@ function renderHuman(result: ReturnType<typeof toResult>): string {
     `Extraction Drafts (${result.counts.extractionDrafts})`,
     ...result.extractionDrafts.map(({ draft, importBatchId, chunks }) => {
       const dates = draftDateRange(draft);
-      const chunkSummary = chunks.length > 0 ? ` | Chunks ${chunks.length} (${chunks.map((chunk) => `${chunk.ordinal + 1}:${chunk.status}/attempts=${chunk.attempts}${chunk.errorCode ? `/${chunk.errorCode}` : ""}`).join(",")})` : "";
+      const usedCalls = chunks.reduce((total, chunk) => total + chunk.providerCalls, 0);
+      const chunkSummary = chunks.length > 0 ? ` | Chunks ${chunks.length} (${chunks.map((chunk) => `${chunk.ordinal + 1}:${chunk.status}/attempts=${chunk.attempts}/calls=${chunk.providerCalls}${chunk.errorCode ? `/${chunk.errorCode}` : ""}`).join(",")}) | Provider calls ${usedCalls}/${result.budget.maxProviderCalls} (estimated max ${chunks.length * result.budget.maxChunkAttempts})` : "";
       return `- ${draft.id} | batch ${importBatchId} | ${draft.status} | revision ${draft.revision} | ${draft.items.length} items | ${dates.from ?? "undated"}${dates.to && dates.to !== dates.from ? `..${dates.to}` : ""} | Review Issues ${draft.issues.length + draft.missing.length}${chunkSummary}`;
     }),
     `Review Issues (${result.counts.reviewIssues})`,

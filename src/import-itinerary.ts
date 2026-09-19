@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { TravelDatabase } from "./database.ts";
-import { OpenAiCompatibleLlmAdapter, type LlmAdapter } from "./extraction-draft.ts";
+import { OpenAiCompatibleLlmAdapter, TimeoutFallbackLlmAdapter, type LlmAdapter } from "./extraction-draft.ts";
 import { InvalidSourceError, TravelService } from "./travel-service.ts";
 
 const [tripId, importBatchId, markdownPath] = process.argv.slice(2);
@@ -60,15 +60,24 @@ function configuredLlmAdapter(): LlmAdapter {
   if (selected === "openai") {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) throw new InvalidSourceError("Raw Markdown import requires OPENAI_API_KEY when TRAVEL_EXTRACTION_ADAPTER=openai.");
-    return new OpenAiCompatibleLlmAdapter({ apiKey, model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini", timeoutMs: Number(process.env.OPENAI_TIMEOUT_MS) || 60_000 });
+    const primary = new OpenAiCompatibleLlmAdapter({ apiKey, model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini", timeoutMs: Number(process.env.OPENAI_TIMEOUT_MS) || 60_000 });
+    return withConfiguredFallback(primary, "openai");
   }
   if (selected === "grok") {
     const apiKey = process.env.XAI_API_KEY?.trim();
     if (!apiKey) throw new InvalidSourceError("Raw Markdown import requires XAI_API_KEY when TRAVEL_EXTRACTION_ADAPTER=grok.");
-    return new OpenAiCompatibleLlmAdapter({ apiKey, model: process.env.XAI_MODEL?.trim() || "grok-4.6", timeoutMs: Number(process.env.XAI_TIMEOUT_MS) || 60_000, endpoint: "https://api.x.ai/v1/responses" });
+    const primary = new OpenAiCompatibleLlmAdapter({ apiKey, model: process.env.XAI_MODEL?.trim() || "grok-4.6", timeoutMs: Number(process.env.XAI_TIMEOUT_MS) || 60_000, endpoint: "https://api.x.ai/v1/responses" });
+    return withConfiguredFallback(primary, "grok");
   }
   if (selected === "fake") throw new InvalidSourceError("Raw Markdown import requires TRAVEL_EXTRACTION_ADAPTER=openai or grok; fake extraction only supports structured test fixtures.");
   throw new InvalidSourceError("TRAVEL_EXTRACTION_ADAPTER must be 'openai' or 'grok' for raw Markdown import.");
+}
+
+function withConfiguredFallback(primary: LlmAdapter, selected: "openai" | "grok"): LlmAdapter {
+  const fallback = process.env.TRAVEL_EXTRACTION_FALLBACK_ADAPTER?.trim().toLowerCase();
+  if (fallback === "openai" && selected !== "openai" && process.env.OPENAI_API_KEY?.trim()) return new TimeoutFallbackLlmAdapter(primary, new OpenAiCompatibleLlmAdapter({ apiKey: process.env.OPENAI_API_KEY.trim(), model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini", timeoutMs: Number(process.env.OPENAI_TIMEOUT_MS) || 60_000 }));
+  if (fallback === "grok" && selected !== "grok" && process.env.XAI_API_KEY?.trim()) return new TimeoutFallbackLlmAdapter(primary, new OpenAiCompatibleLlmAdapter({ apiKey: process.env.XAI_API_KEY.trim(), model: process.env.XAI_MODEL?.trim() || "grok-4.6", timeoutMs: Number(process.env.XAI_TIMEOUT_MS) || 60_000, endpoint: "https://api.x.ai/v1/responses" }));
+  return primary;
 }
 
 function isStructuredMarkdown(markdown: string): boolean {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OpenAiCompatibleLlmAdapter, LlmProviderError } from "../src/extraction-draft.ts";
+import { OpenAiCompatibleLlmAdapter, LlmProviderError, TimeoutFallbackLlmAdapter, type LlmAdapter } from "../src/extraction-draft.ts";
 
 const input = { sourceContent: "10/1 在 Page 住宿", tripTimezone: "Asia/Taipei", currentDate: "2026-09-17", inputType: "line_text" };
 const output = { items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Page 住宿", status: "provisional", startsAt: "2026-10-01T18:00:00+08:00", endsAt: null, timezone: "Asia/Taipei", timezoneSource: "explicit", originTimezone: null, destinationTimezone: null, location: "Page", origin: null, destination: null, notes: null, deadlineAt: null, sourceLine: null, sourceExcerpt: "10/1 在 Page 住宿", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", timeWindow: "evening", assumptions: [] }], missing: [], assumptions: [], issues: [], sourceExcerpt: "10/1 在 Page 住宿" };
@@ -40,4 +40,18 @@ test("Grok-compatible adapter turns provider failures and malformed output into 
 test("Grok-compatible adapter applies a bounded timeout", async () => {
   const timeout = new OpenAiCompatibleLlmAdapter({ apiKey: "secret-key", model: "test-model", timeoutMs: 1, fetchImpl: async (_url, init) => new Promise((_resolve, reject) => { init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))); }) });
   await assert.rejects(timeout.extract(input), (error: unknown) => error instanceof LlmProviderError && error.message === "LLM provider request timed out.");
+});
+
+test("uses fallback only for timeout errors, not malformed output", async () => {
+  let fallbackCalls = 0;
+  const timeoutPrimary: LlmAdapter = { metadata: { provider: "primary", model: "a", promptVersion: "test" }, extract: async () => { throw new LlmProviderError("LLM provider request timed out."); } };
+  const fallback: LlmAdapter = { metadata: { provider: "fallback", model: "b", promptVersion: "test" }, extract: async () => { fallbackCalls += 1; return output as unknown as import("../src/domain.ts").ExtractionDraftPayload; } };
+  const adapter = new TimeoutFallbackLlmAdapter(timeoutPrimary, fallback);
+  await adapter.extract(input);
+  assert.equal(fallbackCalls, 1);
+  assert.equal(adapter.metadata?.provider, "fallback");
+
+  const malformedPrimary: LlmAdapter = { metadata: { provider: "primary", model: "a", promptVersion: "test" }, extract: async () => { throw new LlmProviderError("LLM provider returned malformed structured JSON."); } };
+  await assert.rejects(new TimeoutFallbackLlmAdapter(malformedPrimary, fallback).extract(input), /malformed structured JSON/);
+  assert.equal(fallbackCalls, 1);
 });

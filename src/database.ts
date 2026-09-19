@@ -88,6 +88,7 @@ export class TravelDatabase {
         content TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed', 'blocked', 'removed')),
         attempts INTEGER NOT NULL DEFAULT 0,
+        provider_calls INTEGER NOT NULL DEFAULT 0,
         error_code TEXT,
         error_message TEXT,
         result_json TEXT,
@@ -299,6 +300,7 @@ export class TravelDatabase {
     if (!importChunkColumns.some((column) => column.name === "error_code")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN error_code TEXT`);
     if (!importChunkColumns.some((column) => column.name === "error_message")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN error_message TEXT`);
     if (!importChunkColumns.some((column) => column.name === "result_json")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN result_json TEXT`);
+    if (!importChunkColumns.some((column) => column.name === "provider_calls")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN provider_calls INTEGER NOT NULL DEFAULT 0`);
     const decisionColumns = this.connection.prepare(`PRAGMA table_info(decisions)`).all() as Array<{ name: string }>;
     const decisionTable = this.connection.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'decisions'`).get() as { sql: string } | undefined;
     if (decisionTable && !decisionTable.sql.includes("needs_options")) {

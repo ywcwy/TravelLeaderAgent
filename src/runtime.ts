@@ -9,7 +9,7 @@ import { LineSourceWorker } from "./line-source-worker.ts";
 import { loadRuntimeConfig, type RuntimeConfig } from "./runtime-config.ts";
 import { TravelService } from "./travel-service.ts";
 import { WebhookInbox } from "./webhook-inbox.ts";
-import { FakeLlmAdapter, OpenAiCompatibleLlmAdapter } from "./extraction-draft.ts";
+import { FakeLlmAdapter, OpenAiCompatibleLlmAdapter, TimeoutFallbackLlmAdapter, type LlmAdapter } from "./extraction-draft.ts";
 
 export interface RuntimePoller { start(): void | Promise<void>; stop(): void | Promise<void>; }
 
@@ -23,7 +23,7 @@ export class TravelLeaderRuntime {
   private readonly poller: RuntimePoller;
   private stopped = false;
 
-  constructor(config: RuntimeConfig, poller?: RuntimePoller) {
+  constructor(config: RuntimeConfig, poller?: RuntimePoller, environment: Record<string, string | undefined> = process.env) {
     this.config = config;
     if (config.databasePath !== ":memory:") mkdirSync(dirname(config.databasePath), { recursive: true });
     this.database = new TravelDatabase(config.databasePath);
@@ -32,11 +32,13 @@ export class TravelLeaderRuntime {
     this.inbox = new WebhookInbox(this.database);
     const ingress = new LineWebhookIngress(handler, this.inbox);
     const replyClient = new LineReplyApiClient(config.channelAccessToken);
-    const extractionAdapter = config.extractionAdapter === "fake"
+    const primaryAdapter: LlmAdapter = config.extractionAdapter === "fake"
       ? new FakeLlmAdapter()
       : config.extractionAdapter === "grok"
         ? new OpenAiCompatibleLlmAdapter({ apiKey: config.xAiApiKey!, model: config.xAiModel, timeoutMs: config.xAiTimeoutMs, endpoint: "https://api.x.ai/v1/responses" })
         : new OpenAiCompatibleLlmAdapter({ apiKey: config.openAiApiKey!, model: config.openAiModel, timeoutMs: config.openAiTimeoutMs, endpoint: "https://api.openai.com/v1/responses" });
+    const fallbackAdapter = configuredTimeoutFallback(config, environment);
+    const extractionAdapter = fallbackAdapter ? new TimeoutFallbackLlmAdapter(primaryAdapter, fallbackAdapter) : primaryAdapter;
     this.worker = new LineSourceWorker(this.inbox, this.service, (replyToken, text) => replyClient.reply(replyToken, text), extractionAdapter);
     this.poller = poller ?? { start: () => this.worker.start(config.workerPollMs), stop: () => this.worker.stop() };
     this.server = new LineWebhookHttpServer({ ingress, bodyLimitBytes: config.bodyLimitBytes, requestTimeoutMs: config.requestTimeoutMs, health: () => this.database.connection.prepare("SELECT 1").get() !== undefined });
@@ -53,8 +55,16 @@ export class TravelLeaderRuntime {
   }
 }
 
+function configuredTimeoutFallback(config: RuntimeConfig, environment: Record<string, string | undefined>): LlmAdapter | null {
+  const selected = environment.TRAVEL_EXTRACTION_FALLBACK_ADAPTER?.trim().toLowerCase();
+  if (!selected || selected === "fake" || selected === config.extractionAdapter) return null;
+  if (selected === "openai" && config.openAiApiKey) return new OpenAiCompatibleLlmAdapter({ apiKey: config.openAiApiKey, model: config.openAiModel, timeoutMs: config.openAiTimeoutMs, endpoint: "https://api.openai.com/v1/responses" });
+  if (selected === "grok" && config.xAiApiKey) return new OpenAiCompatibleLlmAdapter({ apiKey: config.xAiApiKey, model: config.xAiModel, timeoutMs: config.xAiTimeoutMs, endpoint: "https://api.x.ai/v1/responses" });
+  return null;
+}
+
 export function createRuntime(environment: Record<string, string | undefined> = process.env): TravelLeaderRuntime {
   const config = loadRuntimeConfig(environment);
   if (config.databasePath === ":memory:") throw new Error("TRAVEL_DATABASE_PATH must use persistent storage for the deployable runtime.");
-  return new TravelLeaderRuntime(config);
+  return new TravelLeaderRuntime(config, undefined, environment);
 }
