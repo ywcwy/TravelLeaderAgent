@@ -415,16 +415,16 @@ export class TravelService {
     const draft = toExtractionDraft(row);
     if (draft.status === "confirmed") return { draft, proposalIds: draft.proposalIds };
     if (draft.status !== "pending_confirmation") throw new ConflictError(`Extraction Draft ${draftId} is not pending confirmation.`);
-    const blockingMissing = [
-      ...draft.missing.filter((entry) => entry.required),
-      ...draft.items.flatMap((item) => !item.startsAt && !item.localDate ? [{ field: "localDate" }] : []),
-      ...draft.items.flatMap((item) => [
-        item.startTimeFlexibility === "required" && !item.startsAt ? { field: "startsAt" } : null,
-        item.endTimeFlexibility === "required" && !item.endsAt ? { field: "endsAt" } : null,
-      ].filter((entry): entry is { field: string } => entry !== null)),
-    ];
-    if (blockingMissing.length > 0) throw new ConflictError(`Extraction Draft ${draftId} is missing required information: ${blockingMissing.map((entry) => entry.field).join(", ")}.`);
-    if (draft.items.length === 0) throw new ConflictError(`Extraction Draft ${draftId} contains no itinerary items.`);
+    const eligibleItems = draft.items.filter(isConfirmableDraftItem);
+    if (eligibleItems.length === 0) {
+      const blockingFields = draft.items.flatMap((item) => [
+        !item.startsAt && !item.localDate ? "localDate" : null,
+        item.startTimeFlexibility === "required" && !item.startsAt ? "startsAt" : null,
+        item.endTimeFlexibility === "required" && !item.endsAt ? "endsAt" : null,
+      ].filter((field): field is string => field !== null));
+      if (blockingFields.length > 0) throw new ConflictError(`Extraction Draft ${draftId} is missing required information: ${blockingFields.join(", ")}.`);
+      throw new ConflictError(`Extraction Draft ${draftId} contains no itinerary items.`);
+    }
 
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
@@ -438,10 +438,20 @@ export class TravelService {
         return { draft: lockedDraft, proposalIds: lockedDraft.proposalIds };
       }
       if (lockedDraft.status !== "pending_confirmation") throw new ConflictError(`Extraction Draft ${draftId} is not pending confirmation.`);
-      const proposalIds = lockedDraft.items.map((item) => this.createProposal(tripId, lockedRow.source_id, { ...item, assumptions: lockedDraft.assumptions }));
+      const unresolvedIssues = unresolvedDraftIssues(lockedDraft);
+      const proposalIds = lockedDraft.items
+        .filter(isConfirmableDraftItem)
+        .map((item) => this.createProposal(tripId, lockedRow.source_id, { ...item, assumptions: lockedDraft.assumptions }));
       const confirmedAt = now();
-      const updated = this.db.connection.prepare(`UPDATE extraction_drafts SET status = 'confirmed', proposal_ids_json = ?, confirmed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending_confirmation'`)
-        .run(JSON.stringify(proposalIds), confirmedAt, confirmedAt, draftId);
+      const payload = unresolvedIssues.length > 0 ? {
+        items: lockedDraft.items,
+        missing: lockedDraft.missing,
+        assumptions: lockedDraft.assumptions,
+        issues: [...lockedDraft.issues, ...unresolvedIssues],
+        sourceExcerpt: lockedDraft.sourceExcerpt,
+      } : lockedDraft;
+      const updated = this.db.connection.prepare(`UPDATE extraction_drafts SET status = 'confirmed', payload_json = ?, proposal_ids_json = ?, confirmed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending_confirmation'`)
+        .run(JSON.stringify(payload), JSON.stringify(proposalIds), confirmedAt, confirmedAt, draftId);
       if (updated.changes !== 1) throw new ConflictError(`Extraction Draft ${draftId} changed while it was being confirmed.`);
       this.db.connection.exec("COMMIT");
       const confirmed = this.getExtractionDraft(tripId, draftId);
@@ -1306,6 +1316,32 @@ function toDraftItem(item: ExtractedTripItem): ExtractionDraftItem {
     startTimeFlexibility: item.startTimeFlexibility ?? (item.startsAt && !dateOnlyStart ? "required" : "flexible"),
     endTimeFlexibility: item.endTimeFlexibility ?? (item.endsAt ? "required" : "flexible"),
   };
+}
+
+function isConfirmableDraftItem(item: ExtractionDraftItem): boolean {
+  return Boolean(item.startsAt || item.localDate)
+    && !(item.startTimeFlexibility === "required" && !item.startsAt)
+    && !(item.endTimeFlexibility === "required" && !item.endsAt);
+}
+
+function unresolvedDraftIssues(draft: Pick<ExtractionDraft, "items" | "issues">): Array<{ code: string; message: string }> {
+  const existing = new Set(draft.issues.map((issue) => `${issue.code}|${issue.message}`));
+  const issues: Array<{ code: string; message: string }> = [];
+  for (const item of draft.items) {
+    if (isConfirmableDraftItem(item)) continue;
+    const candidates = [
+      !item.startsAt && !item.localDate ? { code: "missing_start_time", message: `「${item.title}」缺少日期。` } : null,
+      item.startTimeFlexibility === "required" && !item.startsAt ? { code: "missing_start_time", message: `「${item.title}」缺少必要的開始時間。` } : null,
+      item.endTimeFlexibility === "required" && !item.endsAt ? { code: "missing_end_time", message: `「${item.title}」缺少必要的結束時間。` } : null,
+    ].filter((issue): issue is { code: string; message: string } => issue !== null);
+    for (const issue of candidates) {
+      if (!existing.has(`${issue.code}|${issue.message}`)) {
+        existing.add(`${issue.code}|${issue.message}`);
+        issues.push(issue);
+      }
+    }
+  }
+  return issues;
 }
 
 function draftDateRange(draft: Pick<ExtractionDraftPayload, "items">): { from: string | null; to: string | null } {

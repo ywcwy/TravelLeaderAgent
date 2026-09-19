@@ -384,6 +384,48 @@ test("a date-less Draft remains unconfirmed even when time-of-day is flexible", 
   db.close();
 });
 
+test("confirms valid items from a mixed Draft and leaves unresolved items reviewable", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-partial", "Partial Draft 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Partial Draft 旅程", "Asia/Taipei");
+  const source = "多日行程";
+  const payload = fixture(source);
+  payload.items[0]!.endTimeFlexibility = "flexible";
+  payload.items.push({ ...payload.items[0]!, title: "缺日期行程", startsAt: undefined, endsAt: undefined, localDate: undefined });
+  payload.missing = [{ field: "localDate", message: "缺日期行程需要日期。", required: true }];
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:partial", provenance: { provider: "line", messageId: "partial", userId: "U-origin" } }, new FakeLlmAdapter({ [source]: payload }));
+
+  const confirmed = service.confirmExtractionDraft(trip.id, "U-origin", draft.id);
+  assert.equal(confirmed.proposalIds.length, 1);
+  assert.equal(confirmed.draft.status, "confirmed");
+  assert.equal(confirmed.draft.missing.length, 1);
+  assert.equal(service.reviewTrip(trip.id).pending.length, 1);
+  db.close();
+});
+
+test("records a Review Issue when a required clock time is unresolved", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-draft-required-time", "Required time 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Required time 旅程", "Asia/Taipei");
+  const source = "有日期但缺開始時間";
+  const payload = fixture(source);
+  payload.items[0]!.endTimeFlexibility = "flexible";
+  payload.items[0]!.localDate = "2026-10-02";
+  payload.items[0]!.startsAt = undefined;
+  payload.items[0]!.startTimeFlexibility = "required";
+  payload.missing = [];
+  payload.items.push({ ...payload.items[0]!, title: "Valid item", startsAt: "2026-10-02T09:00:00+08:00", localDate: undefined, startTimeFlexibility: "required" });
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:required-time", provenance: { provider: "line", messageId: "required-time", userId: "U-origin" } }, new FakeLlmAdapter({ [source]: payload }));
+
+  const confirmed = service.confirmExtractionDraft(trip.id, "U-origin", draft.id);
+  assert.equal(confirmed.proposalIds.length, 1);
+  assert.equal(confirmed.draft.status, "confirmed");
+  assert.match(confirmed.draft.issues.at(-1)?.message ?? "", /必要的開始時間/);
+  db.close();
+});
+
 test("concurrent Source redelivery reuses one persisted Draft", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

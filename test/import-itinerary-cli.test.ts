@@ -40,6 +40,16 @@ test("import:trip CLI persists a Markdown batch as a reviewable Draft without Pr
   assert.equal(draftPayload.items[0]?.timeWindow, "evening");
   verificationDatabase.close();
 
+  const confirmationOutput = execFileSync(process.execPath, ["--experimental-strip-types", "src/confirm-trip-draft.ts", trip.id, result.draftId, "system-admin"], {
+    cwd: process.cwd(),
+    env: { ...process.env, TRAVEL_DATABASE_PATH: databasePath, TRAVEL_SYSTEM_ADMINISTRATOR_ID: "system-admin" },
+    encoding: "utf8",
+  });
+  const confirmation = JSON.parse(confirmationOutput) as { status: string; proposalIds: string[]; remainingReviewIssueCount: number };
+  assert.equal(confirmation.status, "confirmed");
+  assert.equal(confirmation.proposalIds.length, 1);
+  assert.equal(confirmation.remainingReviewIssueCount, 1);
+
   const replayOutput = execFileSync(process.execPath, ["--experimental-strip-types", "src/import-itinerary.ts", trip.id, "batch-cli-1", markdownPath], {
     cwd: process.cwd(),
     env: { ...process.env, TRAVEL_DATABASE_PATH: databasePath, TRAVEL_SYSTEM_ADMINISTRATOR_ID: "system-admin" },
