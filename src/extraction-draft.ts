@@ -9,7 +9,7 @@ import {
 } from "./domain.ts";
 import type { DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftIssue, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk } from "./domain.ts";
 
-export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v6";
+export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v7";
 
 export interface LlmExtractionInput {
   sourceContent: string;
