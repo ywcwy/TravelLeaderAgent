@@ -38,6 +38,10 @@ LLM 負責理解自由格式，例如判斷住宿、路線與活動；程式負�
 
 每個 Chunk 與整個 Batch 都有 retry／provider call budget，避免局部錯誤導致整份文件重跑。
 
+Chunk splitter 不是單純按固定字數切割，而是結構感知的切分：優先以 Markdown heading 分隔段落，接近最大行數時尋找空白行，並避免切斷 Markdown table。這能保留局部語意與鄰近日期／地點上下文，再交給相鄰 Chunk context 補足跨段資訊。
+
+目前的限制是極短的 heading 或孤立段落可能形成一行 Chunk，增加 provider call 與 malformed output 風險。後續可加入最小 Chunk 大小，將過短區段與前後段落合併，並以 Chunk boundary regression fixtures 驗證切分品質。
+
 ### 6. Partial failure handling
 
 某個 Chunk malformed 或 provider timeout 時，成功 Chunk 仍會保存；失敗 Chunk 帶有狀態、錯誤碼、attempts 與 retry 指令。Draft 在所有必要問題處理前維持 `pending_confirmation`。
@@ -104,4 +108,3 @@ Webhook Inbox 保存事件與處理狀態，Chunk 保存輸入範圍與結果，
 遇到「如何處理模型不可靠？」時，可以回答：
 
 > 模型只負責理解語意；日期、時間、timezone、route endpoint、重複與衝突由 deterministic guard 驗證。無法安全判斷時保留 Source 並建立 Review Issue，而不是猜一個值寫入行程。
-
