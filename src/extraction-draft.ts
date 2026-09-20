@@ -9,7 +9,7 @@ import {
 } from "./domain.ts";
 import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftIssue, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk } from "./domain.ts";
 
-export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v4";
+export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v5";
 
 export interface LlmExtractionInput {
   sourceContent: string;
@@ -447,6 +447,7 @@ const extractionInstructions = [
   "Extract itinerary candidates from the user's source content. Return only JSON matching the extraction_draft schema.",
   "Preserve uncertainty as assumptions or missing fields; do not invent exact dates, times, or locations.",
   "Treat dates and years as evidence-bound: copy dates from the Source or its explicit itinerary context only. Never replace an itinerary date with today's date, the runtime date, or a guessed year.",
+  "For a document import whose currentDate is unknown, never use the runtime date as a fallback. Relative phrases such as today, tomorrow, or tonight must remain undated and be reported in missing or issues unless the Source provides an explicit date context.",
   "Every non-null startsAt or endsAt must be an ISO 8601 local date-time or offset date-time. A clock-only value such as 12:00 is invalid output; combine it with the evidenced localDate only when that date is explicit, otherwise leave the timestamp null and report a missing field.",
   "Do not reinterpret a stop, arrival, or intermediate location as the final destination of a Route. Route origin and destination must be the endpoints explicitly stated by the Source; preserve intermediate stops in notes or separate items.",
   "A vague part-of-day phrase such as 晚上, tonight, or in the evening is a timeWindow, not an exact timestamp: set startTimeFlexibility and endTimeFlexibility to flexible unless the source explicitly says the time is fixed or tied to a ticket/tour/reservation.",

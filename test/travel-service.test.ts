@@ -395,6 +395,25 @@ test("reuses extraction cache across equivalent chunks and misses on model chang
   db.close();
 });
 
+test("does not inject the runtime date into Markdown extraction", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-markdown-date", "Markdown 日期群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Markdown 日期旅程", "America/Los_Angeles");
+  const seen: Array<{ currentDate: string; inputType: string }> = [];
+  const adapter: LlmAdapter = {
+    metadata: { provider: "fake", model: "date-context", promptVersion: "date-context-test" },
+    extract: async (input) => {
+      seen.push({ currentDate: input.currentDate, inputType: input.inputType });
+      return { items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent } satisfies ExtractionDraftPayload;
+    },
+  };
+
+  await service.createExtractionDraft(trip.id, "晚上到 Page，沒有指定日期", { idempotencyKey: "markdown:date-context", type: "markdown" }, adapter);
+  assert.deepEqual(seen, [{ currentDate: "unknown", inputType: "markdown" }]);
+  db.close();
+});
+
 test("temporarily caches provider errors without permanently blocking retry", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

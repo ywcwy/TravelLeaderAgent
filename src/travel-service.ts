@@ -360,7 +360,9 @@ export class TravelService {
       const chunk = this.getImportChunks(tripId, String(row.source_id)).find((candidate) => candidate.id === chunkId);
       if (!chunk) throw new NotFoundError(`Import Chunk ${chunkId} was not found.`);
       const chunks = this.getImportChunks(tripId, String(row.source_id));
-      payload = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDateInTimezone(trip.timezone), String(row.source_type ?? "markdown"), relatedChunkContext(chunks, chunks.findIndex((candidate) => candidate.id === chunkId)));
+      const inputType = String(row.source_type ?? "markdown");
+      const currentDate = inputType === "markdown" ? "unknown" : currentDateInTimezone(trip.timezone);
+      payload = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDate, inputType, relatedChunkContext(chunks, chunks.findIndex((candidate) => candidate.id === chunkId)));
     } catch (error) {
       status = "failed";
       const failure = classifyChunkFailure(error);
@@ -526,8 +528,8 @@ export class TravelService {
       return toExtractionDraft(existing);
     }
 
-    const currentDate = options.currentDate ?? currentDateInTimezone(trip.timezone);
     const inputType = options.inputType ?? options.type ?? "freeform";
+    const currentDate = options.currentDate ?? (inputType === "markdown" ? "unknown" : currentDateInTimezone(trip.timezone));
     this.persistImportChunks(tripId, source.id, idempotencyKey, content, "pending", now());
     const chunks = this.getImportChunks(tripId, source.id);
     const aggregate: ExtractionDraftPayload = { items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: content.trim().slice(0, 500) };
@@ -624,7 +626,8 @@ export class TravelService {
         continue;
       }
       try {
-        const payload = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDateInTimezone(trip.timezone), source.type, relatedChunkContext(chunks, chunks.findIndex((candidate) => candidate.id === chunk.id)));
+        const currentDate = source.type === "markdown" ? "unknown" : currentDateInTimezone(trip.timezone);
+        const payload = await this.extractChunkWithCache(adapter, chunk, trip.timezone, currentDate, source.type, relatedChunkContext(chunks, chunks.findIndex((candidate) => candidate.id === chunk.id)));
         this.updateImportChunk(chunk.id, "completed", attempts, null, null, payload, now());
       } catch (error) {
         const failure = classifyChunkFailure(error);

@@ -48,7 +48,7 @@ test("persists one pending Extraction Draft without creating a Proposal", async 
   assert.equal(draft.missing[0]?.required, false);
   assert.equal(draft.sourceExcerpt, source);
   assert.equal(service.getImportChunks(trip.id, draft.sourceId).length, 1);
-  assert.deepEqual(draft.metadata, { provider: "fake", model: "fake", promptVersion: "extraction-draft-v4" });
+  assert.deepEqual(draft.metadata, { provider: "fake", model: "fake", promptVersion: "extraction-draft-v5" });
   assert.equal(service.reviewTrip(trip.id).pending.length, 0);
   assert.match(renderExtractionDraft(draft), new RegExp(`Extraction Draft ${draft.id}`));
   assert.match(renderExtractionDraft(draft), /請確認：確認 X-/);
