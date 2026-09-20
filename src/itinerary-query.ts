@@ -71,8 +71,8 @@ export function parseItineraryMessage(text: string): ParsedItineraryMessage {
 
 export function renderItineraryQuery(result: ItineraryQueryResult): string {
   const lines = [`${result.trip.title}｜${result.trip.status === "active" ? "Active" : "Archived"} Trip`];
-  if (result.confirmed.length) lines.push(`Confirmed：${result.confirmed.map(formatItem).join("、")}`);
-  if (result.pending.length) lines.push(`Pending：${result.pending.map((item) => `${item.id} ${formatItem(item)}`).join("、")}`);
+  if (result.confirmed.length) lines.push(`Confirmed：${result.confirmed.map((item) => formatItem(item, "confirmed")).join("、")}`);
+  if (result.pending.length) lines.push(`Pending：${result.pending.map((item) => `${item.id} ${formatItem(item, "pending")}`).join("、")}`);
   if (result.openDecisions.length) lines.push(`Open Decision：${result.openDecisions.map((decision) => `${decision.id} ${decision.title}`).join("、")}`);
   if (result.issues.length) lines.push(`Review Issues：${result.issues.length} 筆`);
   if (result.sources.length) lines.push(`Source 原文：${result.sources.map((source) => `${source.id}｜${source.content}`).join("\n")}`);
@@ -83,10 +83,12 @@ export function renderItineraryQuery(result: ItineraryQueryResult): string {
 
 export const itineraryQueryHelp = "可用查詢：查詢行程、查詢 2026-10-01 下午 Page、查詢 confirmed、查詢 pending、查詢歷史 <Trip ID>、查詢繼續 Q-XXXXXXXX。";
 
-function formatItem(item: { title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string }): string {
+function formatItem(item: { title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string; origin?: string; destination?: string; notes?: string }, status: "confirmed" | "pending"): string {
   const time = item.startsAt ? `｜${item.timezone ? formatLocalDateTime(item.startsAt, item.timezone) : item.startsAt}` : item.localDate ? `｜${item.localDate}${item.timeWindow ? ` ${item.timeWindow}` : ""}` : item.timeWindow ? `｜${item.timeWindow}` : "";
   const endpointZones = item.originTimezone || item.destinationTimezone ? `｜${item.originTimezone ?? item.timezone ?? "?"} → ${item.destinationTimezone ?? item.timezone ?? "?"}` : "";
-  return `${item.title}${time}${item.timezone ? `｜${item.timezone}` : ""}${endpointZones}${item.timezoneSource === "fallback" ? "｜timezone fallback" : ""}${item.location ? `｜${item.location}` : ""}`;
+  const place = item.origin && item.destination ? `｜Route: ${item.origin} → ${item.destination}` : item.location ? `｜${item.location}` : "";
+  const notes = item.notes ? `｜備註: ${item.notes}` : "";
+  return `${item.title}${time}${place}｜${status}${notes}${item.timezone ? `｜${item.timezone}` : ""}${endpointZones}${item.timezoneSource === "fallback" ? "｜timezone fallback" : ""}`;
 }
 
 function parseKind(value: string): TripItemKind | undefined {

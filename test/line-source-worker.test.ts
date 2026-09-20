@@ -188,6 +188,30 @@ test("normalizes fixed-format Time Window synonyms without creating itinerary ev
   db.close();
 });
 
+test("renders query results in separate readable sections with route details and Proposal IDs", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-render-line", "查詢顯示群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "查詢顯示旅程", "America/Los_Angeles");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
+  const imported = travel.importMarkdown(trip.id, [
+    "- [provisional] Las Vegas → Page | 2026-10-02T09:00:00-07:00 | | 車程約 4 小時 | shape=route | origin=Las Vegas | destination=Page | timezone=America/Los_Angeles",
+    "- [provisional] Page 午餐 | 2026-10-02T12:00:00-07:00 | Page | 訂位待確認 | timezone=America/Phoenix",
+  ].join("\n"), { idempotencyKey: "query:render:line" });
+  travel.confirmProposal(trip.id, "U-owner", imported.proposalIds[0]);
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEQUERYRENDER00000000", messageId: "message-query-render", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢行程", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-query-render" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Confirmed：.*Las Vegas → Page.*Route: Las Vegas → Page.*confirmed.*車程約 4 小時/);
+  assert.match(replies[0] ?? "", new RegExp(`Pending：.*${imported.proposalIds[1]}.*Page 午餐.*Page.*pending.*訂位待確認`));
+  assert.doesNotMatch(replies[0] ?? "", /S-[A-Z0-9]/);
+  db.close();
+});
+
 test("handles owner Proposal commands and keeps non-owner commands read-only", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");

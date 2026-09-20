@@ -1081,6 +1081,11 @@ test("isolates Archived Trip queries, Source visibility, and pagination tokens",
   const lines = Array.from({ length: 12 }, (_, index) => `- [provisional] 行程 ${index + 1} | 2026-11-${String(index + 1).padStart(2, "0")} | Page | | timezone=Asia/Taipei`).join("\n");
   const imported = service.importMarkdown(tripId, lines, { idempotencyKey: "query:archive-pagination" });
   for (const proposalId of imported.proposalIds) service.confirmProposal(tripId, "owner", proposalId);
+  const defaultPage = service.queryTrip(tripId, "member", { date: "2026-11-01" });
+  assert.equal(defaultPage.confirmed.length, 1);
+  const overviewPage = service.queryTrip(tripId, "member", {});
+  assert.equal(overviewPage.confirmed.length, 8);
+  assert.ok(overviewPage.nextPageToken);
   const firstPage = service.queryTrip(tripId, "member", { pageSize: 3 });
   assert.equal(firstPage.confirmed.length, 3);
   assert.ok(firstPage.nextPageToken);
