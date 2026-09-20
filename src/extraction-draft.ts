@@ -292,9 +292,9 @@ function extractKnownActivityLocation(title: string): string | undefined {
 
 function inferKnownLocationTimezone(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  if (/(?:las vegas|mccarran|los angeles)/iu.test(value)) return "America/Los_Angeles";
+  if (/(?:las vegas|mccarran|los angeles|洛杉磯|barstow|ludlow)/iu.test(value)) return "America/Los_Angeles";
   if (/(?:st\.? george|kanab)/iu.test(value)) return "America/Denver";
-  if (/(?:page|lake powell|antelope|tusayan|grand canyon|mather point|yavapai point|cameron)/iu.test(value)) return "America/Phoenix";
+  if (/(?:page|lake powell|antelope|tusayan|grand canyon|大峽谷|mather point|yavapai point|cameron|williams|seligman|kingman|phoenix)/iu.test(value)) return "America/Phoenix";
   return undefined;
 }
 
@@ -458,6 +458,7 @@ function isIsoCalendarDate(value: string): boolean {
 const extractionInstructions = [
   "Extract itinerary candidates from the user's source content. Return only JSON matching the extraction_draft schema.",
   "When documentContext is present, use its currentSection and date directory as structural evidence. Inherit a current Date Section date only within that section; an undated section remains undated. Explicit item-level or cross-day dates override the section default and must retain their source evidence.",
+  "The primary Chunk content is the only authority for creating itinerary items. Related itinerary context is reference-only for resolving dates, pronouns, or route endpoints; never create an item solely because it appears in related context.",
   "Preserve uncertainty as assumptions or missing fields; do not invent exact dates, times, or locations.",
   "Treat dates and years as evidence-bound: copy dates from the Source or its explicit itinerary context only. Never replace an itinerary date with today's date, the runtime date, or a guessed year.",
   "For a document import whose currentDate is unknown, never use the runtime date as a fallback. Relative phrases such as today, tomorrow, or tonight must remain undated and be reported in missing or issues unless the Source provides an explicit date context.",

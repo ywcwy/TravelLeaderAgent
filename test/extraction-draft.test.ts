@@ -68,6 +68,10 @@ test("quality guard fills rental venue location and independent route timezones"
   assert.equal(guarded.items[1]?.originTimezone, "America/Los_Angeles");
   assert.equal(guarded.items[1]?.destinationTimezone, "America/Phoenix");
 
+  const usRoadTrip = guardExtractionDraftPayload({ ...payload, items: [{ ...payload.items[0]!, kind: "transport", kinds: ["transport"], title: "開車至洛杉磯", location: "洛杉磯", timezone: "Asia/Taipei", timezoneSource: "explicit" }] }, "10/4 開車至洛杉磯");
+  assert.equal(usRoadTrip.items[0]?.timezone, "America/Los_Angeles");
+  assert.equal(usRoadTrip.items[0]?.timezoneSource, "inferred");
+
   payload.items.push({ ...payload.items[0]!, kind: "activity", kinds: ["activity"], shape: "point", title: "下羚羊谷報到", location: undefined });
   const activityGuarded = guardExtractionDraftPayload(payload, "quality");
   assert.equal(activityGuarded.items.at(-1)?.location, "下羚羊谷");

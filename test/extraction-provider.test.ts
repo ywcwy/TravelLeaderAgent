@@ -26,6 +26,7 @@ test("Grok-compatible adapter sends the contract and validates structured output
   assert.match(body.instructions, /low_information_item/);
   assert.match(body.instructions, /full Markdown link/);
   assert.match(body.instructions, /notes/);
+  assert.match(body.instructions, /Related itinerary context is reference-only/);
 });
 
 test("Grok-compatible adapter turns provider failures and malformed output into safe errors", async () => {

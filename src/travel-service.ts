@@ -1639,9 +1639,9 @@ function resolveEndpointTimezones(item: ExtractedTripItem): { origin?: string; d
 function inferLocationTimezone(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const normalized = value.toLocaleLowerCase();
-  if (/(?:las vegas|mccarran|primrose|wolfgang puck|egg works)/i.test(normalized)) return "America/Los_Angeles";
+  if (/(?:las vegas|mccarran|primrose|wolfgang puck|egg works|los angeles|洛杉磯|barstow|ludlow)/i.test(normalized)) return "America/Los_Angeles";
   if (/(?:st\.? george|kanab)/i.test(normalized)) return "America/Denver";
-  if (/(?:page|lake powell)/i.test(normalized)) return "America/Phoenix";
+  if (/(?:page|lake powell|tusayan|grand canyon|大峽谷|williams|seligman|kingman|phoenix)/i.test(normalized)) return "America/Phoenix";
   return undefined;
 }
 
