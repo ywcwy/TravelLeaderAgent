@@ -326,14 +326,14 @@ test("merges duplicate and conflicting candidates across Chunk boundaries", asyn
   const service = new TravelService(db, "system-admin");
   const group = service.createTravelGroup("system-admin", "C-cross-chunk-merge", "跨 Chunk 合併群組");
   const trip = service.createActiveTrip("system-admin", group.id, "跨 Chunk 合併旅程", "Asia/Taipei");
-  const markdown = ["# 10/1 Las Vegas", "住宿 Page", "# 10/2 Page", "住宿 Page"].join("\n");
+  const markdown = ["# Day 1 Las Vegas", "住宿 Page", "# Day 2 Page", "住宿 Page"].join("\n");
   const adapter: LlmAdapter = {
     metadata: { provider: "fake", model: "cross-chunk", promptVersion: "test" },
     extract: async (input) => ({
       items: [
-        { kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Page 住宿", status: "provisional", localDate: "2026-10-01", startsAt: "2026-10-01T18:00:00-07:00", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" },
-        { kind: "meal", kinds: ["meal"], shape: "point", shapeSource: "inferred", title: "Page 晚餐", status: "provisional", localDate: "2026-10-01", startsAt: input.documentContext?.currentSection?.dateLabel === "10/2" ? "2026-10-01T19:00:00-07:00" : "2026-10-01T18:00:00-07:00", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" },
-        { kind: "activity", kinds: ["activity"], shape: "point", shapeSource: "inferred", title: "Page 景點", status: "provisional", localDate: "2026-10-01", startsAt: input.documentContext?.currentSection?.dateLabel === "10/2" ? "2026-10-01T20:00:00-07:00" : undefined, startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" },
+        { kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Page 住宿", status: "provisional", localDate: "2026-10-01", startsAt: "2026-10-01T18:00:00-07:00", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page", sourceExcerpt: "住宿 Page", sourceLine: (input.documentContext?.sourceLineRange.start ?? 1) + 1 },
+        { kind: "meal", kinds: ["meal"], shape: "point", shapeSource: "inferred", title: "Page 晚餐", status: "provisional", localDate: "2026-10-01", startsAt: input.documentContext?.sourceLineRange.start === 3 ? "2026-10-01T19:00:00-07:00" : "2026-10-01T18:00:00-07:00", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page", sourceExcerpt: "住宿 Page", sourceLine: (input.documentContext?.sourceLineRange.start ?? 1) + 1 },
+        { kind: "activity", kinds: ["activity"], shape: "point", shapeSource: "inferred", title: "Page 景點", status: "provisional", localDate: "2026-10-01", startsAt: input.documentContext?.sourceLineRange.start === 3 ? "2026-10-01T20:00:00-07:00" : undefined, startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page", sourceExcerpt: "住宿 Page", sourceLine: (input.documentContext?.sourceLineRange.start ?? 1) + 1 },
       ],
       missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
     } satisfies ExtractionDraftPayload),
@@ -348,6 +348,32 @@ test("merges duplicate and conflicting candidates across Chunk boundaries", asyn
   db.close();
 });
 
+test("rejects an item whose source evidence exists only outside the primary Chunk", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-primary-evidence", "Primary Evidence 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Primary Evidence 旅程", "Asia/Taipei");
+  const markdown = ["## 10/1 Day 1", "Primary activity", "## 10/2 Day 2", "Adjacent activity"].join("\n");
+  const adapter: LlmAdapter = {
+    metadata: { provider: "fake", model: "primary-evidence", promptVersion: "test" },
+    extract: async (input) => ({
+      items: input.documentContext?.sourceLineRange.start === 1
+        ? [
+          { kind: "activity", kinds: ["activity"], shape: "point", shapeSource: "inferred", title: "Primary activity", status: "provisional", localDate: "2026-10-01", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Primary activity", sourceExcerpt: "Primary   activity", sourceLine: 2 },
+          { kind: "activity", kinds: ["activity"], shape: "point", shapeSource: "inferred", title: "Adjacent activity", status: "provisional", localDate: "2026-10-02", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Adjacent activity", sourceExcerpt: "Adjacent activity", sourceLine: 4 },
+          { kind: "activity", kinds: ["activity"], shape: "point", shapeSource: "inferred", title: "Un evidenced activity", status: "provisional", localDate: "2026-10-01", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Unknown" },
+        ]
+        : [],
+      missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
+    } satisfies ExtractionDraftPayload),
+  };
+
+  const draft = await service.createExtractionDraft(trip.id, markdown, { idempotencyKey: "primary-evidence:one", type: "markdown" }, adapter);
+  assert.deepEqual(draft.items.map((item) => item.title), ["Primary activity"]);
+  assert.equal(draft.issues.some((issue) => issue.code === "unsupported_item"), true);
+  db.close();
+});
+
 test("keeps successful chunks when a later chunk fails", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
@@ -356,10 +382,10 @@ test("keeps successful chunks when a later chunk fails", async () => {
   const markdown = ["# Day 1", "10/1 住宿 Page", "", "# Day 2", "10/2 住宿 Kanab"].join("\n");
   const adapter: LlmAdapter = {
     metadata: { provider: "fake", model: "partial", promptVersion: "test" },
-    extract: async (input: { sourceContent: string }) => {
+    extract: async (input: { sourceContent: string; documentContext?: { sourceLineRange: { start: number; end: number } } }) => {
       if (input.sourceContent.split("[Related itinerary context]")[0]!.includes("Day 2")) throw new Error("simulated provider failure");
       return {
-        items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Day 1 lodging", status: "provisional", localDate: "2026-10-01", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" }],
+        items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Day 1 lodging", status: "provisional", localDate: "2026-10-01", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page", sourceExcerpt: "10/1 住宿 Page", sourceLine: (input.documentContext?.sourceLineRange.start ?? 1) + 1 }],
         missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
       } satisfies ExtractionDraftPayload;
     },
@@ -381,7 +407,7 @@ test("keeps successful chunks when a later chunk fails", async () => {
   const retried = await service.retryImportChunk(trip.id, "U-partial", chunks[1]!.id, {
     metadata: { provider: "fake", model: "retry", promptVersion: "test" },
     extract: async (input) => ({
-      items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Day 2 lodging", status: "provisional", localDate: "2026-10-02", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Kanab" }],
+      items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Day 2 lodging", status: "provisional", localDate: "2026-10-02", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Kanab", sourceExcerpt: "10/2 住宿 Kanab", sourceLine: (input.documentContext?.sourceLineRange.start ?? 1) + 1 }],
       missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
     } satisfies ExtractionDraftPayload),
   });
