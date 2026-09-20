@@ -48,7 +48,7 @@ test("persists one pending Extraction Draft without creating a Proposal", async 
   assert.equal(draft.missing[0]?.required, false);
   assert.equal(draft.sourceExcerpt, source);
   assert.equal(service.getImportChunks(trip.id, draft.sourceId).length, 1);
-  assert.deepEqual(draft.metadata, { provider: "fake", model: "fake", promptVersion: "extraction-draft-v7" });
+  assert.deepEqual(draft.metadata, { provider: "fake", model: "fake", promptVersion: "extraction-draft-v8" });
   assert.equal(service.reviewTrip(trip.id).pending.length, 0);
   assert.match(renderExtractionDraft(draft), new RegExp(`Extraction Draft ${draft.id}`));
   assert.match(renderExtractionDraft(draft), /請確認：確認 X-/);
@@ -88,6 +88,14 @@ test("quality guard rejects dates and timestamps outside Source evidence", () =>
   assert.equal(guarded.items[0]?.timezone, "America/Phoenix");
   assert.ok(guarded.issues.some((issue) => issue.code === "date_outside_source"));
   assert.ok(guarded.issues.some((issue) => issue.code === "timezone_corrected"));
+});
+
+test("quality guard rejects source lines outside a primary Chunk range", () => {
+  const payload = fixture("Primary activity");
+  payload.items[0]!.sourceLine = 3;
+  const guarded = guardExtractionDraftPayload(payload, "Primary activity", { sourceLineRange: { start: 1, end: 2 } });
+  assert.equal(guarded.items.length, 0);
+  assert.ok(guarded.issues.some((issue) => issue.code === "unsupported_item"));
 });
 
 test("quality guard deduplicates undated lodging context at the same location", () => {

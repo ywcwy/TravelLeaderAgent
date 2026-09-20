@@ -311,7 +311,7 @@ export class TravelService {
 
   getImportChunks(tripId: string, sourceId: string): ImportChunk[] {
     this.requireTrip(tripId);
-    const rows = this.db.connection.prepare(`SELECT * FROM import_chunks WHERE trip_id = ? AND source_id = ? ORDER BY ordinal`).all(tripId, sourceId) as Array<Record<string, unknown>>;
+    const rows = this.db.connection.prepare(`SELECT import_chunks.*, sources.type AS source_type FROM import_chunks JOIN sources ON sources.id = import_chunks.source_id WHERE import_chunks.trip_id = ? AND import_chunks.source_id = ? ORDER BY import_chunks.ordinal`).all(tripId, sourceId) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       id: row.id as string,
       tripId: row.trip_id as string,
@@ -405,7 +405,7 @@ export class TravelService {
   }
 
   private composePayloadFromChunks(tripId: string, sourceId: string): { payload: ExtractionDraftPayload; status: ExtractionDraft["status"] } {
-    const rows = this.db.connection.prepare(`SELECT * FROM import_chunks WHERE trip_id = ? AND source_id = ? ORDER BY ordinal`).all(tripId, sourceId) as Array<Record<string, unknown>>;
+    const rows = this.db.connection.prepare(`SELECT import_chunks.*, sources.type AS source_type FROM import_chunks JOIN sources ON sources.id = import_chunks.source_id WHERE import_chunks.trip_id = ? AND import_chunks.source_id = ? ORDER BY import_chunks.ordinal`).all(tripId, sourceId) as Array<Record<string, unknown>>;
     const payload: ExtractionDraftPayload = { items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: "" };
     let failed = 0;
     for (const row of rows) {
@@ -415,16 +415,20 @@ export class TravelService {
         if (typeof row.error_code === "string") payload.issues.push({ code: row.error_code, message: `第 ${row.start_line}-${row.end_line} 行 Chunk 未完成：${row.error_message ?? "LLM extraction failed."}` });
       }
       if (!chunkPayload) continue;
-      payload.items.push(...chunkPayload.items.map((item) => ({
+      const guardedChunk = guardExtractionDraftPayload(chunkPayload, String(row.content ?? ""), {
+        sourceLineRange: { start: Number(row.start_line), end: Number(row.end_line) },
+        requireSourceEvidence: String(row.source_type ?? "") === "markdown",
+      });
+      payload.items.push(...guardedChunk.items.map((item) => ({
         ...item,
         // Providers may omit sourceLine; anchor the item to the chunk start so
         // confirmation can still distinguish completed from incomplete chunks.
-        sourceLine: item.sourceLine ? item.sourceLine + Number(row.start_line) - 1 : Number(row.start_line),
+        sourceLine: item.sourceLine ?? Number(row.start_line),
       })));
-      payload.missing.push(...chunkPayload.missing);
-      payload.assumptions.push(...chunkPayload.assumptions);
-      payload.issues.push(...chunkPayload.issues);
-      if (!payload.sourceExcerpt) payload.sourceExcerpt = chunkPayload.sourceExcerpt;
+      payload.missing.push(...guardedChunk.missing);
+      payload.assumptions.push(...guardedChunk.assumptions);
+      payload.issues.push(...guardedChunk.issues);
+      if (!payload.sourceExcerpt) payload.sourceExcerpt = guardedChunk.sourceExcerpt;
     }
     const source = this.db.connection.prepare(`SELECT content FROM sources WHERE id = ?`).get(sourceId) as { content: string } | undefined;
     payload.items = mergeChunkItems(payload.items, payload.issues);
@@ -463,8 +467,8 @@ export class TravelService {
 
   private async extractChunkWithCache(adapter: LlmAdapter, chunk: ImportChunk, tripTimezone: string, currentDate: string, inputType: string, relatedContext = ""): Promise<ExtractionDraftPayload> {
     const metadata = adapter.metadata ?? defaultExtractionMetadata();
-    const sourceEvidence = (this.db.connection.prepare(`SELECT content FROM sources WHERE id = ?`).get(chunk.sourceId) as { content: string } | undefined)?.content ?? chunk.content;
-    const guardEvidence = relatedContext ? `${sourceEvidence}\n\n${relatedContext}` : sourceEvidence;
+    const guardEvidence = chunk.content;
+    const sourceLineRange = { start: chunk.startLine, end: chunk.endLine };
     const documentContext = this.getDocumentContext(chunk.tripId, chunk.sourceId);
     const llmDocumentContext = documentContext ? toLlmDocumentContext(documentContext, chunk) : undefined;
     const documentContextVersion = documentContext?.version ?? chunk.documentContextVersion ?? "legacy-context";
@@ -473,7 +477,7 @@ export class TravelService {
     const cached = this.db.connection.prepare(`SELECT status, payload_json, error_message, expires_at FROM extraction_cache WHERE cache_key = ?`).get(cacheKey) as { status: "success" | "error"; payload_json: string | null; error_message: string | null; expires_at: string | null } | undefined;
     if (cached?.status === "success" && cached.payload_json) {
       const raw = validateExtractionDraftPayload(JSON.parse(cached.payload_json));
-      const guarded = guardExtractionDraftPayload(raw, guardEvidence);
+      const guarded = guardExtractionDraftPayload(raw, guardEvidence, { sourceLineRange, requireSourceEvidence: inputType === "markdown" });
       this.recordGuardRevisions(chunk.tripId, chunk.sourceId, chunk.id, null, raw, guarded, now());
       return guarded;
     }
@@ -492,7 +496,7 @@ export class TravelService {
       const saveCache = (key: string, cacheMetadata: ExtractionDraftMetadata) => this.db.connection.prepare(`INSERT INTO extraction_cache (cache_key, content_hash, context_key, provider, model, prompt_version, status, payload_json, error_code, error_message, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'success', ?, NULL, NULL, NULL, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET status = 'success', payload_json = excluded.payload_json, error_code = NULL, error_message = NULL, expires_at = NULL, updated_at = excluded.updated_at`).run(key, chunk.contentHash, contextKey, cacheMetadata.provider, cacheMetadata.model, cacheMetadata.promptVersion, JSON.stringify(raw), timestamp, timestamp);
       saveCache(cacheKey, metadata);
       if (resolvedKey !== cacheKey) saveCache(resolvedKey, resolvedMetadata);
-      const guarded = guardExtractionDraftPayload(raw, guardEvidence);
+      const guarded = guardExtractionDraftPayload(raw, guardEvidence, { sourceLineRange, requireSourceEvidence: inputType === "markdown" });
       this.recordGuardRevisions(chunk.tripId, chunk.sourceId, chunk.id, null, raw, guarded, timestamp);
       return guarded;
     } catch (error) {
@@ -575,7 +579,7 @@ export class TravelService {
         aggregate.items.push(...extracted.items.map((item) => ({
           ...item,
           // Keep a chunk anchor even when the provider omits sourceLine.
-          sourceLine: item.sourceLine ? item.sourceLine + chunk.startLine - 1 : chunk.startLine,
+          sourceLine: item.sourceLine ?? chunk.startLine,
         })));
         aggregate.missing.push(...extracted.missing);
         aggregate.assumptions.push(...extracted.assumptions);

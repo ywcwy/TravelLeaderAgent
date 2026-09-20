@@ -9,7 +9,7 @@ import {
 } from "./domain.ts";
 import type { DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftIssue, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk } from "./domain.ts";
 
-export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v7";
+export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v8";
 
 export interface LlmExtractionInput {
   sourceContent: string;
@@ -174,11 +174,38 @@ export function validateExtractionDraftPayload(payload: unknown): ExtractionDraf
 }
 
 /** Apply deterministic guards after model extraction while retaining the immutable Source. */
-export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sourceContent: string): ExtractionDraftPayload {
+export interface ExtractionEvidenceGuardOptions {
+  sourceLineRange?: { start: number; end: number };
+  requireSourceEvidence?: boolean;
+}
+
+export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sourceContent: string, options: ExtractionEvidenceGuardOptions = {}): ExtractionDraftPayload {
   const temporalIssues: ExtractionDraftIssue[] = [];
-  const items = payload.items.map((item) => guardTemporalConsistency(enrichExtractionItem(item), sourceContent, temporalIssues));
+  const evidenceIssues: ExtractionDraftIssue[] = [];
+  const items = payload.items.flatMap((item) => {
+    const enriched = enrichExtractionItem(item);
+    if (options.sourceLineRange && enriched.sourceLine !== undefined
+      && (enriched.sourceLine < options.sourceLineRange.start || enriched.sourceLine > options.sourceLineRange.end)) {
+      evidenceIssues.push({ code: "unsupported_item", message: `排除無法回溯至目前 Chunk 的行程「${enriched.title}」：sourceLine ${enriched.sourceLine} 不在 Chunk 範圍內。` });
+      return [];
+    }
+    if (options.requireSourceEvidence && !enriched.sourceExcerpt) {
+      evidenceIssues.push({ code: "unsupported_item", message: `排除缺少 primary Chunk 原文證據的行程「${enriched.title}」。` });
+      return [];
+    }
+    if (options.requireSourceEvidence && enriched.sourceLine === undefined) {
+      evidenceIssues.push({ code: "unsupported_item", message: `排除缺少 primary Chunk 行號證據的行程「${enriched.title}」。` });
+      return [];
+    }
+    if (options.sourceLineRange && enriched.sourceExcerpt && !normalizedEvidence(sourceContent).includes(normalizedEvidence(enriched.sourceExcerpt))) {
+      evidenceIssues.push({ code: "unsupported_item", message: `排除無法回溯至目前 Chunk 原文的行程「${enriched.title}」。` });
+      return [];
+    }
+    return [guardTemporalConsistency(enriched, sourceContent, temporalIssues)];
+  });
   const issues = [...payload.issues];
   issues.push(...temporalIssues);
+  issues.push(...evidenceIssues);
   const hasSeparateArrival = /(?:separate|separately|another|另外|獨立|單獨).{0,24}(?:arrival|arriv|抵達|到達)/iu.test(sourceContent)
     || /(?:arrival|arriv|抵達|到達).{0,24}(?:separate|separately|another|另外|獨立|單獨)/iu.test(sourceContent);
   const lodgingLocations = new Set(items.filter((item) => item.kind === "lodging" && item.location).map((item) => item.location!.trim().toLocaleLowerCase()));
@@ -227,6 +254,10 @@ export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sou
   const retainedTransport = kept.some((item) => item.kind === "transport" || item.kinds.includes("transport"));
   const actionableIssues = issues.filter((issue) => !(/retain transportation .*remove lodging context/i.test(issue.message) && !retainedTransport));
   return { ...payload, items: kept, issues: actionableIssues };
+}
+
+function normalizedEvidence(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
 }
 
 function guardTemporalConsistency(item: ExtractionDraftItem, sourceContent: string, issues: ExtractionDraftIssue[]): ExtractionDraftItem {
@@ -459,6 +490,8 @@ const extractionInstructions = [
   "Extract itinerary candidates from the user's source content. Return only JSON matching the extraction_draft schema.",
   "When documentContext is present, use its currentSection and date directory as structural evidence. Inherit a current Date Section date only within that section; an undated section remains undated. Explicit item-level or cross-day dates override the section default and must retain their source evidence.",
   "The primary Chunk content is the only authority for creating itinerary items. Related itinerary context is reference-only for resolving dates, pronouns, or route endpoints; never create an item solely because it appears in related context.",
+  "When an item has sourceExcerpt, copy an exact excerpt from the primary Chunk content; never copy sourceExcerpt from Related itinerary context.",
+  "For Markdown extraction, every item must include sourceExcerpt and sourceLine from the primary Chunk. sourceLine is an absolute document line within documentContext.sourceLineRange; never use a relative Chunk line or a line from Related itinerary context.",
   "Preserve uncertainty as assumptions or missing fields; do not invent exact dates, times, or locations.",
   "Treat dates and years as evidence-bound: copy dates from the Source or its explicit itinerary context only. Never replace an itinerary date with today's date, the runtime date, or a guessed year.",
   "For a document import whose currentDate is unknown, never use the runtime date as a fallback. Relative phrases such as today, tomorrow, or tonight must remain undated and be reported in missing or issues unless the Source provides an explicit date context.",
