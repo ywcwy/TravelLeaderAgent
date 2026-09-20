@@ -223,6 +223,10 @@ function guardTemporalConsistency(item: ExtractionDraftItem, sourceContent: stri
   const itemDate = guarded.localDate ?? guarded.startsAt?.slice(0, 10);
   if (sourceDates.length > 0 && itemDate && !sourceDates.some((date) => itemDate.endsWith(date))) {
     issues.push({ code: "date_outside_source", message: `「${guarded.title}」的日期 ${itemDate} 不在 Source 明示日期範圍內。` });
+    // Do not allow an uncorroborated model date to become confirmable data.
+    if (guarded.localDate && !sourceDates.some((date) => guarded.localDate!.endsWith(date))) guarded.localDate = undefined;
+    if (guarded.startsAt && !sourceDates.some((date) => guarded.startsAt!.startsWith(`2026-${date}`))) guarded.startsAt = undefined;
+    if (guarded.endsAt && !sourceDates.some((date) => guarded.endsAt!.startsWith(`2026-${date}`))) guarded.endsAt = undefined;
   }
   for (const field of ["startsAt", "endsAt"] as const) {
     const value = guarded[field];

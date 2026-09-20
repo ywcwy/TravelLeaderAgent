@@ -73,16 +73,16 @@ test("quality guard fills rental venue location and independent route timezones"
   assert.equal(activityGuarded.items.at(-1)?.location, "下羚羊谷");
 });
 
-test("quality guard normalizes clock-only timestamps and rejects dates outside Source evidence", () => {
+test("quality guard rejects dates and timestamps outside Source evidence", () => {
   const payload = fixture("10/1 行程：Page");
   payload.items[0]!.startsAt = "12:00";
   payload.items[0]!.localDate = "2026-09-20";
   payload.items[0]!.timezone = "Asia/Taipei";
   const guarded = guardExtractionDraftPayload(payload, "10/1 行程：Page");
-  assert.equal(guarded.items[0]?.startsAt, "2026-09-20T12:00:00");
+  assert.equal(guarded.items[0]?.startsAt, undefined);
+  assert.equal(guarded.items[0]?.localDate, undefined);
   assert.equal(guarded.items[0]?.timezone, "America/Phoenix");
   assert.ok(guarded.issues.some((issue) => issue.code === "date_outside_source"));
-  assert.ok(guarded.issues.some((issue) => issue.code === "normalized_timestamp"));
   assert.ok(guarded.issues.some((issue) => issue.code === "timezone_corrected"));
 });
 
