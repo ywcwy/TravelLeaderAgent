@@ -262,7 +262,9 @@ export interface ItineraryQuery {
   continuationToken?: string;
   pageSize?: number;
   date?: string;
+  timeWindow?: TimeWindow;
   location?: string;
+  status?: "confirmed" | "pending";
   kind?: TripItemKind;
   pendingOnly?: boolean;
   reviewIssuesOnly?: boolean;

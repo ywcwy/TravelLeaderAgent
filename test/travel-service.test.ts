@@ -191,6 +191,38 @@ test("queries policy-permitted Active Trip records with stable filters", () => {
   db.close();
 });
 
+test("filters confirmed and pending itinerary entries by Time Window", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-query-time-window");
+  service.ensureGroupMember(tripId, "U-member", "Member");
+  service.addMember("system-admin", tripId, "U-owner", "Owner", "owner");
+  const imported = service.importMarkdown(tripId, [
+    "- [provisional] Page morning confirmed | 2026-10-02T09:00:00-07:00 | Page, Arizona | | timezone=America/Phoenix",
+    "- [provisional] Page afternoon confirmed | 2026-10-02T14:00:00-07:00 | Page, Arizona | | timezone=America/Phoenix",
+    "- [provisional] Page afternoon pending | 2026-10-02 | Page | | time_window=afternoon",
+    "- [provisional] Page evening pending | 2026-10-02T18:00:00-07:00 | Page | | timezone=America/Phoenix",
+  ].join("\n"), { idempotencyKey: "query:time-window" });
+  service.confirmProposal(tripId, "U-owner", imported.proposalIds[0]);
+  service.confirmProposal(tripId, "U-owner", imported.proposalIds[1]);
+
+  const all = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-02", timeWindow: "afternoon", location: "page" });
+  assert.deepEqual(all.confirmed.map((item) => item.title), ["Page afternoon confirmed"]);
+  assert.deepEqual(all.pending.map((item) => item.title), ["Page afternoon pending"]);
+
+  const pending = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-02", timeWindow: "afternoon", status: "pending" });
+  assert.deepEqual(pending.confirmed, []);
+  assert.deepEqual(pending.pending.map((item) => item.title), ["Page afternoon pending"]);
+  assert.deepEqual(pending.openDecisions, []);
+  assert.deepEqual(pending.issues, []);
+
+  const confirmedOnly = service.queryActiveTrip(tripId, "U-member", { status: "confirmed" });
+  assert.deepEqual(confirmedOnly.pending, []);
+  assert.deepEqual(confirmedOnly.openDecisions, []);
+  assert.deepEqual(confirmedOnly.issues, []);
+  db.close();
+});
+
 test("queries each timed item by its local date and renders timezone context", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
@@ -206,7 +238,7 @@ test("queries each timed item by its local date and renders timezone context", (
 
   const localDateResult = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-01" });
   assert.deepEqual(localDateResult.pending.map((item) => item.title).sort(), ["Date-only Page", "Las Vegas evening", "Page lodging", "St George boundary", "Unknown fallback"].sort());
-  assert.equal(localDateResult.pending[0]?.title, "Date-only Page");
+  assert.equal(localDateResult.pending.at(-1)?.title, "Date-only Page");
   const rendered = renderItineraryQuery(localDateResult);
   assert.match(rendered, /America\/Los_Angeles/);
   assert.match(rendered, /America\/Phoenix/);

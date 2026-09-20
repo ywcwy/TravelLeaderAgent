@@ -1,4 +1,4 @@
-import type { ItineraryQuery, ItineraryQueryResult, TripItemKind } from "./domain.ts";
+import type { ItineraryQuery, ItineraryQueryResult, TimeWindow, TripItemKind } from "./domain.ts";
 import { formatLocalDateTime } from "./timezone.ts";
 
 export type ParsedItineraryMessage = { type: "query"; query: ItineraryQuery } | { type: "help" } | null;
@@ -63,6 +63,8 @@ export function parseItineraryMessage(text: string): ParsedItineraryMessage {
   if (/^\d{4}-\d{2}-\d{2}$/.test(rest)) return { type: "query", query: { date: rest } };
   const kind = parseKind(rest);
   if (kind) return { type: "query", query: { kind } };
+  const filter = parseFixedQueryFilter(rest);
+  if (filter) return { type: "query", query: filter };
   if (/^proposal\b/i.test(rest)) return { type: "help" };
   return { type: "query", query: { location: rest } };
 }
@@ -79,7 +81,7 @@ export function renderItineraryQuery(result: ItineraryQueryResult): string {
   return lines.join("\n");
 }
 
-export const itineraryQueryHelp = "可用查詢：查詢行程、查詢歷史 <Trip ID>、查詢 2026-10-01、查詢 Page、查詢待確認、查詢 Review Issues、查詢來源、查詢繼續 Q-XXXXXXXX。";
+export const itineraryQueryHelp = "可用查詢：查詢行程、查詢 2026-10-01 下午 Page、查詢 confirmed、查詢 pending、查詢歷史 <Trip ID>、查詢繼續 Q-XXXXXXXX。";
 
 function formatItem(item: { title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string }): string {
   const time = item.startsAt ? `｜${item.timezone ? formatLocalDateTime(item.startsAt, item.timezone) : item.startsAt}` : item.localDate ? `｜${item.localDate}${item.timeWindow ? ` ${item.timeWindow}` : ""}` : item.timeWindow ? `｜${item.timeWindow}` : "";
@@ -95,4 +97,39 @@ function parseKind(value: string): TripItemKind | undefined {
     other: "other",
   };
   return aliases[value.toLocaleLowerCase()];
+}
+
+function parseFixedQueryFilter(value: string): ItineraryQuery | null {
+  let remainder = value;
+  const query: ItineraryQuery = {};
+  const date = remainder.match(/\b\d{4}-\d{2}-\d{2}\b/);
+  if (date) {
+    query.date = date[0];
+    remainder = remainder.replace(date[0], " ");
+  }
+  const timeWindow = findTimeWindow(remainder);
+  if (timeWindow) {
+    query.timeWindow = timeWindow.value;
+    remainder = remainder.replace(timeWindow.pattern, " ");
+  }
+  const status = remainder.match(/(?:^|\s)(confirmed|已確認|已确认|pending|待確認|待确认)(?=\s|$)/i);
+  if (status) {
+    query.status = /^(?:confirmed|已確認|已确认)$/i.test(status[1]) ? "confirmed" : "pending";
+    remainder = remainder.replace(status[0], " ");
+  }
+  const location = remainder.trim().replace(/\s+/g, " ");
+  if (Object.keys(query).length === 0) return null;
+  if (location) query.location = location;
+  return query;
+}
+
+function findTimeWindow(value: string): { value: TimeWindow; pattern: RegExp } | null {
+  const aliases: Array<[TimeWindow, RegExp]> = [
+    ["morning", /(?:^|\s)(?:morning|上午|早上)(?=\s|$)/i],
+    ["afternoon", /(?:^|\s)(?:afternoon|下午|中午)(?=\s|$)/i],
+    ["evening", /(?:^|\s)(?:evening|傍晚|晚上)(?=\s|$)/i],
+    ["night", /(?:^|\s)(?:night|深夜|夜晚)(?=\s|$)/i],
+  ];
+  for (const [timeWindow, pattern] of aliases) if (pattern.test(value)) return { value: timeWindow, pattern };
+  return null;
 }

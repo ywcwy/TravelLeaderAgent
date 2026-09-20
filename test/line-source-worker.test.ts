@@ -165,6 +165,29 @@ test("handles a mentioned itinerary query without creating a Source", async () =
   db.close();
 });
 
+test("normalizes fixed-format Time Window synonyms without creating itinerary evidence", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-window-line", "查詢時段群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "查詢時段旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, [
+    "- [provisional] Page 下午活動 | 2026-10-02 | Page, Arizona | | time_window=afternoon",
+    "- [provisional] Page 晚餐 | 2026-10-02T18:00:00-07:00 | Page | | timezone=America/Phoenix",
+  ].join("\n"), { idempotencyKey: "query:window:line" });
+  const sourcesBefore = db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number };
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEQUERYWINDOW00000000", messageId: "message-query-window", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 2026-10-02 下午 Page", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-query-window" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Page 下午活動/);
+  assert.doesNotMatch(replies[0] ?? "", /Page 晚餐/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, sourcesBefore.count);
+  db.close();
+});
+
 test("handles owner Proposal commands and keeps non-owner commands read-only", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
