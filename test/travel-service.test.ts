@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { TravelDatabase } from "../src/database.ts";
-import { FakeLlmAdapter, LlmProviderError, type LlmAdapter } from "../src/extraction-draft.ts";
+import { FakeLlmAdapter, LlmProviderError, type LlmAdapter, type LlmDocumentContext } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
 import { ConflictError, InvalidSourceError, InvalidTimezoneError, PermissionError, TravelService, TripNotActiveError } from "../src/travel-service.ts";
 import { renderItineraryQuery } from "../src/itinerary-query.ts";
@@ -428,9 +428,13 @@ test("builds date-first Document Context and carries it across split Chunks", as
     "## 10/2 Page",
     "晚餐與住宿",
   ].join("\n");
+  const seenContexts: LlmDocumentContext[] = [];
   const adapter: LlmAdapter = {
     metadata: { provider: "fake", model: "document-context", promptVersion: "document-context-test" },
-    extract: async (input) => ({ items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent }),
+    extract: async (input) => {
+      if (input.documentContext) seenContexts.push(input.documentContext);
+      return { items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent };
+    },
   };
 
   const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "document-context:one", type: "markdown" }, adapter);
@@ -449,6 +453,10 @@ test("builds date-first Document Context and carries it across split Chunks", as
   assert.equal(chunks.at(-1)?.sectionDateLabel, "10/2");
   assert.equal(context?.dateRange.from, null);
   assert.equal(context?.dateRange.to, null);
+  assert.equal(seenContexts.length, chunks.length);
+  assert.equal(seenContexts.find((value) => value.currentSection?.title === "10/1 Las Vegas")?.currentSection?.dateLabel, "10/1");
+  assert.equal(seenContexts.find((value) => value.currentSection?.title === "10/2 Page")?.currentSection?.dateLabel, "10/2");
+  assert.deepEqual(seenContexts[0]?.dateRange, { from: null, to: null });
   db.close();
 });
 

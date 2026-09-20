@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
-import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
+import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter, type LlmDocumentContext, type LlmDocumentSection } from "./extraction-draft.ts";
 import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
@@ -459,7 +459,9 @@ export class TravelService {
     const metadata = adapter.metadata ?? defaultExtractionMetadata();
     const sourceEvidence = (this.db.connection.prepare(`SELECT content FROM sources WHERE id = ?`).get(chunk.sourceId) as { content: string } | undefined)?.content ?? chunk.content;
     const guardEvidence = relatedContext ? `${sourceEvidence}\n\n${relatedContext}` : sourceEvidence;
-    const contextKey = JSON.stringify({ tripTimezone, currentDate, inputType, relatedContext });
+    const documentContext = this.getDocumentContext(chunk.tripId, chunk.sourceId);
+    const llmDocumentContext = documentContext ? toLlmDocumentContext(documentContext, chunk) : undefined;
+    const contextKey = JSON.stringify({ tripTimezone, currentDate, inputType, relatedContext, documentContext: llmDocumentContext });
     const cacheKey = createHash("sha256").update(JSON.stringify({ contentHash: chunk.contentHash, contextKey, provider: metadata.provider, model: metadata.model, promptVersion: metadata.promptVersion })).digest("hex");
     const cached = this.db.connection.prepare(`SELECT status, payload_json, error_message, expires_at FROM extraction_cache WHERE cache_key = ?`).get(cacheKey) as { status: "success" | "error"; payload_json: string | null; error_message: string | null; expires_at: string | null } | undefined;
     if (cached?.status === "success" && cached.payload_json) {
@@ -474,7 +476,7 @@ export class TravelService {
     try {
       this.db.connection.prepare(`UPDATE import_chunks SET provider_calls = provider_calls + 1, updated_at = ? WHERE id = ?`).run(now(), chunk.id);
       const sourceContent = relatedContext ? `${chunk.content}\n\n[Related itinerary context]\n${relatedContext}` : chunk.content;
-      const raw = validateExtractionDraftPayload(await adapter.extract({ sourceContent, tripTimezone, currentDate, inputType }));
+      const raw = validateExtractionDraftPayload(await adapter.extract({ sourceContent, tripTimezone, currentDate, inputType, documentContext: llmDocumentContext }));
       const additionalCalls = Math.max(0, (adapter.lastProviderCallCount ?? 1) - 1);
       if (additionalCalls > 0) this.db.connection.prepare(`UPDATE import_chunks SET provider_calls = provider_calls + ?, updated_at = ? WHERE id = ?`).run(additionalCalls, now(), chunk.id);
       const timestamp = now();
@@ -1763,6 +1765,23 @@ function buildDocumentContext(tripId: string, sourceId: string, markdown: string
     createdAt: timestamp,
     updatedAt: timestamp,
   };
+}
+
+function toLlmDocumentContext(context: DocumentContext, chunk: ImportChunk): LlmDocumentContext {
+  const currentIndex = context.sections.findIndex((section) => chunk.startLine >= section.startLine && chunk.startLine <= section.endLine);
+  const currentSection = currentIndex >= 0 ? context.sections[currentIndex]! : null;
+    return {
+      version: context.version,
+      dateRange: context.dateRange,
+      globalTimezoneHints: context.globalTimezoneHints,
+      currentSection: currentSection ? toLlmSection(currentSection) : null,
+    adjacentSections: currentIndex < 0 ? [] : [context.sections[currentIndex - 1], context.sections[currentIndex + 1]].filter((section): section is DocumentDateSection => Boolean(section)).map(toLlmSection),
+    sourceLineRange: { start: chunk.startLine, end: chunk.endLine },
+  };
+}
+
+function toLlmSection(section: DocumentDateSection): LlmDocumentSection {
+  return { ordinal: section.ordinal, title: section.title, startLine: section.startLine, endLine: section.endLine, dateLabel: section.dateLabel, localDate: section.localDate, dateProvenance: section.dateProvenance };
 }
 
 function parseMarkdownHeading(line: string): string | null {

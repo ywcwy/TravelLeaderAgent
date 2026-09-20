@@ -7,16 +7,28 @@ import {
   tripItemStatuses,
   timezoneSources,
 } from "./domain.ts";
-import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftIssue, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk } from "./domain.ts";
+import type { DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftIssue, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk } from "./domain.ts";
 
-export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v5";
+export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v6";
 
 export interface LlmExtractionInput {
   sourceContent: string;
   tripTimezone: string;
   currentDate: string;
   inputType: string;
+  documentContext?: LlmDocumentContext;
   existingDraft?: ExtractionDraftPayload;
+}
+
+export type LlmDocumentSection = Pick<DocumentDateSection, "ordinal" | "title" | "startLine" | "endLine" | "dateLabel" | "localDate" | "dateProvenance">;
+
+export interface LlmDocumentContext {
+  version: string;
+  dateRange: DocumentContext["dateRange"];
+  globalTimezoneHints: string[];
+  currentSection: LlmDocumentSection | null;
+  adjacentSections: LlmDocumentSection[];
+  sourceLineRange: { start: number; end: number };
 }
 
 export interface LlmAdapter {
@@ -445,6 +457,7 @@ function isIsoCalendarDate(value: string): boolean {
 
 const extractionInstructions = [
   "Extract itinerary candidates from the user's source content. Return only JSON matching the extraction_draft schema.",
+  "When documentContext is present, use its currentSection and date directory as structural evidence. Inherit a current Date Section date only within that section; an undated section remains undated. Explicit item-level or cross-day dates override the section default and must retain their source evidence.",
   "Preserve uncertainty as assumptions or missing fields; do not invent exact dates, times, or locations.",
   "Treat dates and years as evidence-bound: copy dates from the Source or its explicit itinerary context only. Never replace an itinerary date with today's date, the runtime date, or a guessed year.",
   "For a document import whose currentDate is unknown, never use the runtime date as a fallback. Relative phrases such as today, tomorrow, or tonight must remain undated and be reported in missing or issues unless the Source provides an explicit date context.",
