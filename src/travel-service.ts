@@ -1757,10 +1757,14 @@ function buildDocumentContext(tripId: string, sourceId: string, markdown: string
     sections.push(undatedDocumentSection(1, lines.length));
   } else {
     if (headings[0]!.line > 1) sections.push({ ...undatedDocumentSection(1, headings[0]!.line - 1), ordinal: 0 });
+    let inheritedDate: { dateLabel: string | null; localDate: string | null } = { dateLabel: null, localDate: null };
     for (const [index, heading] of headings.entries()) {
       const endLine = (headings[index + 1]?.line ?? lines.length + 1) - 1;
       const parsed = parseDocumentHeadingDate(heading.title, inferredYear);
-      sections.push({ ordinal: sections.length, title: heading.title, startLine: heading.line, endLine, dateLabel: parsed.dateLabel, localDate: parsed.localDate, dateProvenance: parsed.dateLabel ? "section_heading" : "undated" });
+      const dateLabel = parsed.dateLabel ?? inheritedDate.dateLabel;
+      const localDate = parsed.localDate ?? inheritedDate.localDate;
+      sections.push({ ordinal: sections.length, title: heading.title, startLine: heading.line, endLine, dateLabel, localDate, dateProvenance: parsed.dateLabel ? "section_heading" : dateLabel ? "document_context" : "undated" });
+      inheritedDate = { dateLabel, localDate };
     }
   }
   const dated = sections.map((section) => section.localDate).filter((value): value is string => Boolean(value)).sort();

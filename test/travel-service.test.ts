@@ -523,6 +523,25 @@ test("builds date-first Document Context and carries it across split Chunks", as
   db.close();
 });
 
+test("inherits a dated parent heading through undated Markdown subheadings", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const trip = bootstrapActiveTrip(service, "C-context-subheadings");
+  const adapter: LlmAdapter = {
+    metadata: { provider: "fake", model: "document-context-subheading", promptVersion: "test" },
+    extract: async (input) => ({ items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent }),
+  };
+  const draft = await service.createExtractionDraft(trip, ["## 10/3 大峽谷", "### 上午", "Mather Point", "### 下午", "Hopi Point", "## 10/4 洛杉磯", "出發"].join("\n"), { idempotencyKey: "document-context:subheadings", type: "markdown" }, adapter);
+  const context = service.getDocumentContext(trip, draft.sourceId);
+  assert.deepEqual(context?.sections.map((section) => ({ title: section.title, dateLabel: section.dateLabel, dateProvenance: section.dateProvenance })), [
+    { title: "10/3 大峽谷", dateLabel: "10/3", dateProvenance: "section_heading" },
+    { title: "上午", dateLabel: "10/3", dateProvenance: "document_context" },
+    { title: "下午", dateLabel: "10/3", dateProvenance: "document_context" },
+    { title: "10/4 洛杉磯", dateLabel: "10/4", dateProvenance: "section_heading" },
+  ]);
+  db.close();
+});
+
 test("temporarily caches provider errors without permanently blocking retry", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
