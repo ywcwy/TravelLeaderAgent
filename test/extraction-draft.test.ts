@@ -86,6 +86,17 @@ test("quality guard normalizes clock-only timestamps and rejects dates outside S
   assert.ok(guarded.issues.some((issue) => issue.code === "timezone_corrected"));
 });
 
+test("quality guard deduplicates undated lodging context at the same location", () => {
+  const payload = fixture("Grand Canyon lodging");
+  payload.items = [
+    { ...payload.items[0]!, title: "住宿：大峽谷附近 (Tusayan)", localDate: undefined, startsAt: undefined, endsAt: undefined, timeWindow: undefined, location: "Tusayan" },
+    { ...payload.items[0]!, title: "Accommodation in the vicinity of the Grand Canyon", localDate: undefined, startsAt: undefined, endsAt: undefined, timeWindow: undefined, location: "Tusayan" },
+  ];
+  const guarded = guardExtractionDraftPayload(payload, "Grand Canyon lodging");
+  assert.equal(guarded.items.length, 1);
+  assert.ok(guarded.issues.some((issue) => issue.code === "duplicate_item"));
+});
+
 test("persists Guard Revisions without changing immutable Source content", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

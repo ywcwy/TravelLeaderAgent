@@ -186,6 +186,12 @@ export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sou
       issues.push({ code: "contextual_phrase", message: `「${item.title}」視為住宿情境，不另建立 Arrival 行程。` });
       continue;
     }
+    const lodgingContextDuplicate = item.kind === "lodging" && !hasSchedule && Boolean(locationKey)
+      && kept.some((candidate) => candidate.kind === "lodging" && !candidate.startsAt && !candidate.localDate && !candidate.timeWindow && candidate.location?.trim().toLocaleLowerCase() === locationKey);
+    if (lodgingContextDuplicate) {
+      issues.push({ code: "duplicate_item", message: `排除同地點且無時間資訊的重複住宿候選「${item.title}」。` });
+      continue;
+    }
     const duplicateKey = [item.kind, item.title.trim().toLocaleLowerCase(), locationKey ?? "", item.localDate ?? "", item.startsAt ?? "", item.endsAt ?? ""].join("|");
     const previous = seen.get(duplicateKey);
     if (previous) {
