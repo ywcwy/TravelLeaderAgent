@@ -414,6 +414,44 @@ test("does not inject the runtime date into Markdown extraction", async () => {
   db.close();
 });
 
+test("builds date-first Document Context and carries it across split Chunks", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-document-context", "Document Context 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Document Context 旅程", "Asia/Taipei");
+  const source = [
+    "文件總覽：美西自駕",
+    "",
+    "## 10/1 Las Vegas",
+    ...Array.from({ length: 90 }, (_, index) => `第 1 天備註 ${index + 1}`),
+    "",
+    "## 10/2 Page",
+    "晚餐與住宿",
+  ].join("\n");
+  const adapter: LlmAdapter = {
+    metadata: { provider: "fake", model: "document-context", promptVersion: "document-context-test" },
+    extract: async (input) => ({ items: [], missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent }),
+  };
+
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "document-context:one", type: "markdown" }, adapter);
+  const context = service.getDocumentContext(trip.id, draft.sourceId);
+  assert.ok(context);
+  assert.deepEqual(context?.sections.map((section) => ({ title: section.title, dateLabel: section.dateLabel, startLine: section.startLine })), [
+    { title: null, dateLabel: null, startLine: 1 },
+    { title: "10/1 Las Vegas", dateLabel: "10/1", startLine: 3 },
+    { title: "10/2 Page", dateLabel: "10/2", startLine: 95 },
+  ]);
+  assert.equal(context?.sections[1]?.endLine, 94);
+  const chunks = service.getImportChunks(trip.id, draft.sourceId);
+  assert.ok(chunks.length >= 2);
+  assert.equal(chunks.find((chunk) => chunk.sectionTitle === "10/1 Las Vegas")?.sectionDateLabel, "10/1");
+  assert.equal(chunks.find((chunk) => chunk.startLine >= 4 && chunk.endLine <= 94)?.sectionDateLabel, "10/1");
+  assert.equal(chunks.at(-1)?.sectionDateLabel, "10/2");
+  assert.equal(context?.dateRange.from, null);
+  assert.equal(context?.dateRange.to, null);
+  db.close();
+});
+
 test("temporarily caches provider errors without permanently blocking retry", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

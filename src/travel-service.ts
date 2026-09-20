@@ -2,9 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
 import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
-import type { Decision, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
+const DOCUMENT_CONTEXT_VERSION = "document-context-v1";
 
 export class PermissionError extends Error {}
 export class NotFoundError extends Error {}
@@ -319,6 +320,11 @@ export class TravelService {
       ordinal: row.ordinal as number,
       startLine: row.start_line as number,
       endLine: row.end_line as number,
+      sectionTitle: (row.section_title as string | null) ?? null,
+      sectionDateLabel: (row.section_date_label as string | null) ?? null,
+      sectionLocalDate: (row.section_local_date as string | null) ?? null,
+      sectionDateProvenance: (row.section_date_provenance as DateProvenance | null) ?? "undated",
+      documentContextVersion: (row.document_context_version as string | null) ?? DOCUMENT_CONTEXT_VERSION,
       contentHash: row.content_hash as string,
       content: row.content as string,
       status: row.status as ImportChunk["status"],
@@ -330,6 +336,13 @@ export class TravelService {
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     }));
+  }
+
+  getDocumentContext(tripId: string, sourceId: string): DocumentContext | null {
+    this.requireTrip(tripId);
+    const row = this.db.connection.prepare(`SELECT * FROM import_document_contexts WHERE trip_id = ? AND source_id = ?`).get(tripId, sourceId) as { payload_json: string } | undefined;
+    if (!row) return null;
+    return JSON.parse(row.payload_json) as DocumentContext;
   }
 
   getExtractionBudget(): Required<ExtractionBudgetOptions> { return { ...this.extractionBudget }; }
@@ -420,10 +433,17 @@ export class TravelService {
 
   private persistImportChunks(tripId: string, sourceId: string, importBatchId: string, markdown: string, status: ImportChunkStatus, timestamp: string): void {
     const chunks = splitMarkdownIntoChunks(markdown);
-    const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO import_chunks (id, trip_id, source_id, import_batch_id, ordinal, start_line, end_line, content_hash, content, status, attempts, error_code, error_message, result_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?)`);
+    const context = buildDocumentContext(tripId, sourceId, markdown, timestamp);
+    this.persistDocumentContext(context);
+    const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO import_chunks (id, trip_id, source_id, import_batch_id, ordinal, start_line, end_line, section_title, section_date_label, section_local_date, section_date_provenance, document_context_version, content_hash, content, status, attempts, error_code, error_message, result_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?)`);
     for (const chunk of chunks) {
-      insert.run(`C-${randomUUID().replaceAll("-", "").slice(0, 20).toUpperCase()}`, tripId, sourceId, importBatchId, chunk.ordinal, chunk.startLine, chunk.endLine, createHash("sha256").update(chunk.content).digest("hex"), chunk.content, status, timestamp, timestamp);
+      const section = context.sections.find((candidate) => chunk.startLine >= candidate.startLine && chunk.startLine <= candidate.endLine) ?? undatedDocumentSection(chunk.startLine, chunk.endLine);
+      insert.run(`C-${randomUUID().replaceAll("-", "").slice(0, 20).toUpperCase()}`, tripId, sourceId, importBatchId, chunk.ordinal, chunk.startLine, chunk.endLine, section.title, section.dateLabel, section.localDate, section.dateProvenance, context.version, createHash("sha256").update(chunk.content).digest("hex"), chunk.content, status, timestamp, timestamp);
     }
+  }
+
+  private persistDocumentContext(context: DocumentContext): void {
+    this.db.connection.prepare(`INSERT INTO import_document_contexts (source_id, trip_id, version, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source_id) DO UPDATE SET trip_id = excluded.trip_id, version = excluded.version, payload_json = excluded.payload_json, updated_at = excluded.updated_at`).run(context.sourceId, context.tripId, context.version, JSON.stringify(context), context.createdAt, context.updatedAt);
   }
 
   private providerAttempts(sourceId: string): number {
@@ -1690,7 +1710,7 @@ function splitMarkdownIntoChunks(markdown: string, maxLines = 80): MarkdownChunk
   const sections: Array<{ start: number; end: number }> = [];
   let sectionStart = 0;
   for (let index = 1; index < lines.length; index += 1) {
-    if (/^\s{0,3}#{1,6}\s+\S/.test(lines[index] ?? "")) {
+    if (parseMarkdownHeading(lines[index] ?? "")) {
       sections.push({ start: sectionStart, end: index });
       sectionStart = index;
     }
@@ -1708,6 +1728,62 @@ function splitMarkdownIntoChunks(markdown: string, maxLines = 80): MarkdownChunk
     }
   }
   return slices.length > 0 ? slices : [{ ordinal: 0, startLine: 1, endLine: 1, content: markdown.trim() }];
+}
+
+function buildDocumentContext(tripId: string, sourceId: string, markdown: string, timestamp: string): DocumentContext {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const headings = lines.flatMap((line, index) => {
+    const title = parseMarkdownHeading(line);
+    return title ? [{ title, line: index + 1 }] : [];
+  });
+  const explicitYears = [...markdown.matchAll(/(?:^|\D)(20\d{2})[/-]\d{1,2}[/-]\d{1,2}(?:\D|$)/g)].map((match) => Number(match[1]));
+  const inferredYear = [...new Set(explicitYears)].length === 1 ? explicitYears[0] : null;
+  const sections: DocumentDateSection[] = [];
+  if (headings.length === 0) {
+    sections.push(undatedDocumentSection(1, lines.length));
+  } else {
+    if (headings[0]!.line > 1) sections.push({ ...undatedDocumentSection(1, headings[0]!.line - 1), ordinal: 0 });
+    for (const [index, heading] of headings.entries()) {
+      const endLine = (headings[index + 1]?.line ?? lines.length + 1) - 1;
+      const parsed = parseDocumentHeadingDate(heading.title, inferredYear);
+      sections.push({ ordinal: sections.length, title: heading.title, startLine: heading.line, endLine, dateLabel: parsed.dateLabel, localDate: parsed.localDate, dateProvenance: parsed.dateLabel ? "section_heading" : "undated" });
+    }
+  }
+  const dated = sections.map((section) => section.localDate).filter((value): value is string => Boolean(value)).sort();
+  const globalTimezoneHints = lines
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && /(?:時區|timezone|America\/[A-Za-z_]+|UTC[+-]\d{1,2})/iu.test(line));
+  return {
+    sourceId,
+    tripId,
+    version: DOCUMENT_CONTEXT_VERSION,
+    dateRange: { from: dated[0] ?? null, to: dated.at(-1) ?? null },
+    globalTimezoneHints: [...new Set(globalTimezoneHints)],
+    sections,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function parseMarkdownHeading(line: string): string | null {
+  const match = line.match(/^\s{0,3}#{1,6}\s+(\S.*?)(?:\s+#+)?\s*$/);
+  return match?.[1]?.trim() ?? null;
+}
+
+function undatedDocumentSection(startLine: number, endLine: number): DocumentDateSection {
+  return { ordinal: 0, title: null, startLine, endLine, dateLabel: null, localDate: null, dateProvenance: "undated" };
+}
+
+function parseDocumentHeadingDate(title: string, inferredYear: number | null): { dateLabel: string | null; localDate: string | null } {
+  const iso = title.match(/\b(20\d{2})[/-](\d{1,2})[/-](\d{1,2})\b/);
+  const monthDay = title.match(/\b(\d{1,2})[/-](\d{1,2})\b|\b(\d{1,2})月(\d{1,2})日\b/);
+  if (!iso && !monthDay) return { dateLabel: null, localDate: null };
+  const month = Number(iso?.[2] ?? monthDay?.[1] ?? monthDay?.[3]);
+  const day = Number(iso?.[3] ?? monthDay?.[2] ?? monthDay?.[4]);
+  if (!Number.isInteger(month) || !Number.isInteger(day) || month < 1 || month > 12 || day < 1 || day > 31) return { dateLabel: null, localDate: null };
+  const dateLabel = iso ? `${iso[1]}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}` : `${month}/${day}`;
+  const year = iso ? Number(iso[1]) : inferredYear;
+  return { dateLabel, localDate: year ? `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}` : null };
 }
 
 function preferredChunkBoundary(lines: string[], start: number, target: number): number {

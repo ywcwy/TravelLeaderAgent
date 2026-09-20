@@ -15,6 +15,8 @@ export const proposalShapeSources = ["explicit", "inferred"] as const;
 export type ProposalShapeSource = (typeof proposalShapeSources)[number];
 export const timezoneSources = ["explicit", "inferred", "fallback"] as const;
 export type TimezoneSource = (typeof timezoneSources)[number];
+export const dateProvenances = ["explicit_item", "section_heading", "document_context", "user_override", "llm_inferred", "undated"] as const;
+export type DateProvenance = (typeof dateProvenances)[number];
 export type ProposalStatus = "pending" | "confirmed" | "rejected";
 export type MemberRole = "owner" | "member";
 export type TripStatus = "active" | "archived";
@@ -127,6 +129,27 @@ export interface Source {
   provenance: SourceProvenance | null;
 }
 
+export interface DocumentDateSection {
+  ordinal: number;
+  title: string | null;
+  startLine: number;
+  endLine: number;
+  dateLabel: string | null;
+  localDate: string | null;
+  dateProvenance: DateProvenance;
+}
+
+export interface DocumentContext {
+  sourceId: string;
+  tripId: string;
+  version: string;
+  dateRange: { from: string | null; to: string | null };
+  globalTimezoneHints: string[];
+  sections: DocumentDateSection[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ImportChunk {
   id: string;
   tripId: string;
@@ -135,6 +158,11 @@ export interface ImportChunk {
   ordinal: number;
   startLine: number;
   endLine: number;
+  sectionTitle: string | null;
+  sectionDateLabel: string | null;
+  sectionLocalDate: string | null;
+  sectionDateProvenance: DateProvenance;
+  documentContextVersion: string;
   contentHash: string;
   content: string;
   status: ImportChunkStatus;

@@ -98,6 +98,15 @@ export class TravelDatabase {
       );
       CREATE INDEX IF NOT EXISTS import_chunks_source_ordinal ON import_chunks(source_id, ordinal);
 
+      CREATE TABLE IF NOT EXISTS import_document_contexts (
+        source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+        trip_id TEXT NOT NULL REFERENCES trips(id),
+        version TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS extraction_cache (
         cache_key TEXT PRIMARY KEY,
         content_hash TEXT NOT NULL,
@@ -320,6 +329,11 @@ export class TravelDatabase {
     if (!importChunkColumns.some((column) => column.name === "error_message")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN error_message TEXT`);
     if (!importChunkColumns.some((column) => column.name === "result_json")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN result_json TEXT`);
     if (!importChunkColumns.some((column) => column.name === "provider_calls")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN provider_calls INTEGER NOT NULL DEFAULT 0`);
+    if (!importChunkColumns.some((column) => column.name === "section_title")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN section_title TEXT`);
+    if (!importChunkColumns.some((column) => column.name === "section_date_label")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN section_date_label TEXT`);
+    if (!importChunkColumns.some((column) => column.name === "section_local_date")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN section_local_date TEXT`);
+    if (!importChunkColumns.some((column) => column.name === "section_date_provenance")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN section_date_provenance TEXT NOT NULL DEFAULT 'undated'`);
+    if (!importChunkColumns.some((column) => column.name === "document_context_version")) this.connection.exec(`ALTER TABLE import_chunks ADD COLUMN document_context_version TEXT NOT NULL DEFAULT 'document-context-v1'`);
     const decisionColumns = this.connection.prepare(`PRAGMA table_info(decisions)`).all() as Array<{ name: string }>;
     const decisionTable = this.connection.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'decisions'`).get() as { sql: string } | undefined;
     if (decisionTable && !decisionTable.sql.includes("needs_options")) {
