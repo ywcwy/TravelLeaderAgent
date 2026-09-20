@@ -422,6 +422,39 @@ test("reuses extraction cache across equivalent chunks and misses on model chang
   db.close();
 });
 
+test("invalidates failed Chunk cache entries when Document Context version changes", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-context-cache", "Context Cache 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Context Cache 旅程", "Asia/Taipei");
+  const source = "# 10/1 Page\n住宿 Page\n# 10/2 Page\n住宿 Kanab";
+  let calls = 0;
+  const adapter: LlmAdapter = {
+    metadata: { provider: "fake", model: "context-cache", promptVersion: "test" },
+    extract: async (input) => {
+      calls += 1;
+      if (calls === 2) throw new LlmProviderError("temporary provider failure");
+      return {
+        items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "住宿", status: "provisional", localDate: "2026-10-01", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" }],
+        missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
+      } satisfies ExtractionDraftPayload;
+    },
+  };
+
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "context-cache:one", type: "markdown", provenance: { provider: "line", messageId: "context-cache", userId: "U-context-cache" } }, adapter);
+  const chunks = service.getImportChunks(trip.id, draft.sourceId);
+  assert.equal(calls, 2);
+  assert.equal(chunks[1]?.status, "failed");
+  const contextRow = db.connection.prepare(`SELECT payload_json FROM import_document_contexts WHERE source_id = ?`).get(draft.sourceId) as { payload_json: string };
+  const context = JSON.parse(contextRow.payload_json) as { version: string };
+  context.version = "document-context-v2";
+  db.connection.prepare(`UPDATE import_document_contexts SET version = ?, payload_json = ? WHERE source_id = ?`).run(context.version, JSON.stringify(context), draft.sourceId);
+  await service.retryImportChunk(trip.id, "U-context-cache", chunks[1]!.id, adapter);
+  assert.equal(calls, 3);
+  assert.equal(service.getImportChunks(trip.id, draft.sourceId)[1]?.status, "completed");
+  db.close();
+});
+
 test("does not inject the runtime date into Markdown extraction", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
@@ -484,6 +517,9 @@ test("builds date-first Document Context and carries it across split Chunks", as
   assert.equal(seenContexts.find((value) => value.currentSection?.title === "10/1 Las Vegas")?.currentSection?.dateLabel, "10/1");
   assert.equal(seenContexts.find((value) => value.currentSection?.title === "10/2 Page")?.currentSection?.dateLabel, "10/2");
   assert.deepEqual(seenContexts[0]?.dateRange, { from: null, to: null });
+  const cacheContextKeys = db.connection.prepare(`SELECT context_key FROM extraction_cache`).all() as Array<{ context_key: string }>;
+  assert.ok(cacheContextKeys.length > 0);
+  assert.ok(cacheContextKeys.every((row) => row.context_key.includes('"documentContextVersion":"document-context-v1"')));
   db.close();
 });
 

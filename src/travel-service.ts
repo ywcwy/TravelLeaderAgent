@@ -467,7 +467,8 @@ export class TravelService {
     const guardEvidence = relatedContext ? `${sourceEvidence}\n\n${relatedContext}` : sourceEvidence;
     const documentContext = this.getDocumentContext(chunk.tripId, chunk.sourceId);
     const llmDocumentContext = documentContext ? toLlmDocumentContext(documentContext, chunk) : undefined;
-    const contextKey = JSON.stringify({ tripTimezone, currentDate, inputType, relatedContext, documentContext: llmDocumentContext });
+    const documentContextVersion = documentContext?.version ?? chunk.documentContextVersion ?? "legacy-context";
+    const contextKey = JSON.stringify({ tripTimezone, currentDate, inputType, relatedContext, documentContextVersion, documentContext: llmDocumentContext });
     const cacheKey = createHash("sha256").update(JSON.stringify({ contentHash: chunk.contentHash, contextKey, provider: metadata.provider, model: metadata.model, promptVersion: metadata.promptVersion })).digest("hex");
     const cached = this.db.connection.prepare(`SELECT status, payload_json, error_message, expires_at FROM extraction_cache WHERE cache_key = ?`).get(cacheKey) as { status: "success" | "error"; payload_json: string | null; error_message: string | null; expires_at: string | null } | undefined;
     if (cached?.status === "success" && cached.payload_json) {
