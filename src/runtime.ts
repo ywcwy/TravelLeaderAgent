@@ -32,13 +32,7 @@ export class TravelLeaderRuntime {
     this.inbox = new WebhookInbox(this.database);
     const ingress = new LineWebhookIngress(handler, this.inbox);
     const replyClient = new LineReplyApiClient(config.channelAccessToken);
-    const primaryAdapter: LlmAdapter = config.extractionAdapter === "fake"
-      ? new FakeLlmAdapter()
-      : config.extractionAdapter === "grok"
-        ? new OpenAiCompatibleLlmAdapter({ apiKey: config.xAiApiKey!, model: config.xAiModel, timeoutMs: config.xAiTimeoutMs, endpoint: "https://api.x.ai/v1/responses" })
-        : new OpenAiCompatibleLlmAdapter({ apiKey: config.openAiApiKey!, model: config.openAiModel, timeoutMs: config.openAiTimeoutMs, endpoint: "https://api.openai.com/v1/responses" });
-    const fallbackAdapter = configuredTimeoutFallback(config, environment);
-    const extractionAdapter = fallbackAdapter ? new TimeoutFallbackLlmAdapter(primaryAdapter, fallbackAdapter) : primaryAdapter;
+    const extractionAdapter = createExtractionAdapter(config, environment);
     this.worker = new LineSourceWorker(this.inbox, this.service, (replyToken, text) => replyClient.reply(replyToken, text), extractionAdapter);
     this.poller = poller ?? { start: () => this.worker.start(config.workerPollMs), stop: () => this.worker.stop() };
     this.server = new LineWebhookHttpServer({ ingress, bodyLimitBytes: config.bodyLimitBytes, requestTimeoutMs: config.requestTimeoutMs, health: () => this.database.connection.prepare("SELECT 1").get() !== undefined });
@@ -53,6 +47,16 @@ export class TravelLeaderRuntime {
     await this.poller?.stop();
     this.database.close();
   }
+}
+
+export function createExtractionAdapter(config: RuntimeConfig, environment: Record<string, string | undefined> = process.env): LlmAdapter {
+  const primaryAdapter: LlmAdapter = config.extractionAdapter === "fake"
+    ? new FakeLlmAdapter()
+    : config.extractionAdapter === "grok"
+      ? new OpenAiCompatibleLlmAdapter({ apiKey: config.xAiApiKey!, model: config.xAiModel, timeoutMs: config.xAiTimeoutMs, endpoint: "https://api.x.ai/v1/responses" })
+      : new OpenAiCompatibleLlmAdapter({ apiKey: config.openAiApiKey!, model: config.openAiModel, timeoutMs: config.openAiTimeoutMs, endpoint: "https://api.openai.com/v1/responses" });
+  const fallbackAdapter = configuredTimeoutFallback(config, environment);
+  return fallbackAdapter ? new TimeoutFallbackLlmAdapter(primaryAdapter, fallbackAdapter) : primaryAdapter;
 }
 
 function configuredTimeoutFallback(config: RuntimeConfig, environment: Record<string, string | undefined>): LlmAdapter | null {

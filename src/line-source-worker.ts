@@ -128,6 +128,13 @@ export class LineSourceWorker {
         const draft = await this.travel.retryExtractionDraft(event.tripId, event.userId, command.draftId, this.extractionAdapter);
         return renderExtractionDraft(draft, { chunks: this.travel.getImportChunks(event.tripId, draft.sourceId) });
       }
+      if (command.type === "retry_chunk") {
+        const chunk = await this.travel.retryImportChunk(event.tripId, event.userId, command.chunkId, this.extractionAdapter);
+        const draft = this.travel.getLatestExtractionDrafts(event.tripId).find((entry) => entry.draft.sourceId === chunk.sourceId)?.draft;
+        return draft
+          ? renderExtractionDraft(draft, { chunks: this.travel.getImportChunks(event.tripId, chunk.sourceId) })
+          : `Chunk ${chunk.id} 已重試：${chunk.status}。`;
+      }
       const trip = this.travel.getTrip(event.tripId);
       if (!trip) throw new Error(`Trip ${event.tripId} was not found.`);
       const currentDraft = this.travel.getExtractionDraft(event.tripId, command.draftId);
