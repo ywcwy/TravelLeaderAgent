@@ -453,7 +453,10 @@ test("keeps successful chunks when a later chunk fails", async () => {
   const retried = await service.retryImportChunk(trip.id, "U-partial", chunks[1]!.id, {
     metadata: { provider: "fake", model: "retry", promptVersion: "test" },
     extract: async (input) => ({
-      items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Day 2 lodging", status: "provisional", localDate: "2026-10-02", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Kanab", sourceExcerpt: "10/2 住宿 Kanab", sourceLine: (input.documentContext?.sourceLineRange.start ?? 1) + 1 }],
+      items: [
+        { kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Day 2 lodging", status: "provisional", localDate: "2026-10-02", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Kanab", sourceExcerpt: "10/2 住宿 Kanab", sourceLine: (input.documentContext?.sourceLineRange.start ?? 1) + 1 },
+        { kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Day 1 leaked lodging", status: "provisional", localDate: "2026-10-01", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page", sourceExcerpt: "10/1 住宿 Page", sourceLine: 2 },
+      ],
       missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
     } satisfies ExtractionDraftPayload),
   });
@@ -461,6 +464,8 @@ test("keeps successful chunks when a later chunk fails", async () => {
   assert.equal(retried.attempts, 2);
   const rebuilt = service.getExtractionDraft(trip.id, draft.id);
   assert.equal(rebuilt?.items.length, 2);
+  assert.equal(rebuilt?.items.some((item) => item.title === "Day 1 leaked lodging"), false);
+  assert.ok(rebuilt?.issues.some((issue) => issue.code === "unsupported_item"));
   assert.equal(rebuilt?.issues.some((issue) => issue.code === "partial_batch"), false);
   db.close();
 });
@@ -491,6 +496,40 @@ test("reuses extraction cache across equivalent chunks and misses on model chang
   await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache:three", type: "markdown" }, adapter("model-b"));
   assert.equal(calls, 2);
   assert.equal((db.connection.prepare("SELECT COUNT(*) AS count FROM extraction_cache WHERE status = 'success'").get() as { count: number }).count, 2);
+  db.close();
+});
+
+test("reapplies primary evidence guards on extraction cache hits", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-cache-evidence", "Cache Evidence 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Cache Evidence 旅程", "Asia/Taipei");
+  const source = ["# 10/1 Page", "10/1 住宿 Page", "# 10/2 Kanab", "10/2 住宿 Kanab"].join("\n");
+  let calls = 0;
+  const adapter: LlmAdapter = {
+    metadata: { provider: "fake", model: "cache-evidence", promptVersion: "test" },
+    extract: async (input) => {
+      calls += 1;
+      const start = input.documentContext?.sourceLineRange.start ?? 1;
+      return {
+        items: [
+          { kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: start === 1 ? "Page lodging" : "Kanab lodging", status: "provisional", localDate: start === 1 ? "2026-10-01" : "2026-10-02", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: start === 1 ? "Page" : "Kanab", sourceExcerpt: start === 1 ? "10/1 住宿 Page" : "10/2 住宿 Kanab", sourceLine: start + 1 },
+          ...(start === 1 ? [{ kind: "lodging" as const, kinds: ["lodging" as const], shape: "point" as const, shapeSource: "inferred" as const, title: "Adjacent lodging leaked", status: "provisional" as const, localDate: "2026-10-02", startTimeFlexibility: "flexible" as const, endTimeFlexibility: "flexible" as const, location: "Kanab", sourceExcerpt: "10/2 住宿 Kanab", sourceLine: 4 }] : []),
+        ],
+        missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
+      } satisfies ExtractionDraftPayload;
+    },
+  };
+
+  const first = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache-evidence:one", type: "markdown" }, adapter);
+  assert.equal(calls, 2);
+  assert.equal(first.items.some((item) => item.title === "Adjacent lodging leaked"), false);
+  const second = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "cache-evidence:two", type: "markdown" }, adapter);
+  assert.equal(calls, 2);
+  assert.equal(second.items.some((item) => item.title === "Adjacent lodging leaked"), false);
+  const cachedSource = db.connection.prepare("SELECT id FROM sources WHERE idempotency_key = ?").get("cache-evidence:two") as { id: string };
+  assert.deepEqual(service.getImportChunks(trip.id, cachedSource.id).map((chunk) => chunk.providerCalls), [0, 0]);
+  assert.ok(second.issues.some((issue) => issue.code === "unsupported_item"));
   db.close();
 });
 
