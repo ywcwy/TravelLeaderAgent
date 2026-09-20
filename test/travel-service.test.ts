@@ -374,6 +374,52 @@ test("rejects an item whose source evidence exists only outside the primary Chun
   db.close();
 });
 
+test("keeps primary Chunk dates authoritative while allowing related Route context", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-related-boundary", "Related Boundary 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Related Boundary 旅程", "Asia/Taipei");
+  const markdown = [
+    "## 10/2 Page",
+    "10/2 住宿 Page；下一段前往 Grand Canyon",
+    "## 10/3 Grand Canyon",
+    "10/3 Page →",
+  ].join("\n");
+  let sawRelatedContext = false;
+  const adapter: LlmAdapter = {
+    metadata: { provider: "fake", model: "related-boundary", promptVersion: "test" },
+    extract: async (input) => {
+      const start = input.documentContext?.sourceLineRange.start ?? 1;
+      sawRelatedContext ||= input.sourceContent.includes("10/2 住宿 Page；下一段前往 Grand Canyon") && input.sourceContent.includes("10/3 Page →");
+      if (start === 1) {
+        return {
+          items: [
+            { kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Page lodging", status: "provisional", localDate: "2026-10-02", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page", sourceExcerpt: "10/2 住宿 Page", sourceLine: 2 },
+            { kind: "activity", kinds: ["activity"], shape: "point", shapeSource: "inferred", title: "Grand Canyon from Related", status: "provisional", localDate: "2026-10-03", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Grand Canyon", sourceExcerpt: "10/3 Page →", sourceLine: 4 },
+            { kind: "activity", kinds: ["activity"], shape: "point", shapeSource: "inferred", title: "Wrong date from Related", status: "provisional", localDate: "2026-10-03", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page", sourceExcerpt: "10/2 住宿 Page", sourceLine: 2 },
+          ],
+          missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
+        } satisfies ExtractionDraftPayload;
+      }
+      assert.ok(input.sourceContent.includes("10/2 住宿 Page；下一段前往 Grand Canyon"));
+      return {
+        items: [{ kind: "transport", kinds: ["transport"], shape: "route", shapeSource: "inferred", title: "Page → Grand Canyon", status: "provisional", localDate: "2026-10-03", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", origin: "Page", destination: "Grand Canyon", sourceExcerpt: "10/3 Page →", sourceLine: 4 }],
+        missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
+      } satisfies ExtractionDraftPayload;
+    },
+  };
+
+  const draft = await service.createExtractionDraft(trip.id, markdown, { idempotencyKey: "related-boundary:one", type: "markdown" }, adapter);
+  assert.equal(sawRelatedContext, true);
+  assert.ok(draft.items.some((item) => item.title === "Page lodging"));
+  assert.ok(draft.items.some((item) => item.title === "Page → Grand Canyon"));
+  assert.equal(draft.items.some((item) => item.title === "Grand Canyon from Related"), false);
+  assert.equal(draft.items.find((item) => item.title === "Wrong date from Related")?.localDate, undefined);
+  assert.ok(draft.issues.some((issue) => issue.code === "unsupported_item"));
+  assert.ok(draft.issues.some((issue) => issue.code === "date_outside_source"));
+  db.close();
+});
+
 test("keeps successful chunks when a later chunk fails", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
