@@ -10,6 +10,7 @@ import { loadRuntimeConfig, type RuntimeConfig } from "./runtime-config.ts";
 import { TravelService } from "./travel-service.ts";
 import { WebhookInbox } from "./webhook-inbox.ts";
 import { FakeLlmAdapter, OpenAiCompatibleLlmAdapter, TimeoutFallbackLlmAdapter, type LlmAdapter } from "./extraction-draft.ts";
+import { DeterministicQueryFilterAdapter } from "./query-filter.ts";
 
 export interface RuntimePoller { start(): void | Promise<void>; stop(): void | Promise<void>; }
 
@@ -33,7 +34,7 @@ export class TravelLeaderRuntime {
     const ingress = new LineWebhookIngress(handler, this.inbox);
     const replyClient = new LineReplyApiClient(config.channelAccessToken);
     const extractionAdapter = createExtractionAdapter(config, environment);
-    this.worker = new LineSourceWorker(this.inbox, this.service, (replyToken, text) => replyClient.reply(replyToken, text), extractionAdapter);
+    this.worker = new LineSourceWorker(this.inbox, this.service, (replyToken, text) => replyClient.reply(replyToken, text), extractionAdapter, new DeterministicQueryFilterAdapter());
     this.poller = poller ?? { start: () => this.worker.start(config.workerPollMs), stop: () => this.worker.stop() };
     this.server = new LineWebhookHttpServer({ ingress, bodyLimitBytes: config.bodyLimitBytes, requestTimeoutMs: config.requestTimeoutMs, health: () => this.database.connection.prepare("SELECT 1").get() !== undefined });
   }

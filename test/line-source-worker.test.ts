@@ -9,6 +9,7 @@ import { TravelService } from "../src/travel-service.ts";
 import { WebhookInbox } from "../src/webhook-inbox.ts";
 import { FakeLlmAdapter } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
+import type { QueryFilterAdapter } from "../src/query-filter.ts";
 
 test("ingests a mentioned LINE group message into one Source with provenance", async () => {
   const db = new TravelDatabase();
@@ -209,6 +210,45 @@ test("renders query results in separate readable sections with route details and
   assert.match(replies[0] ?? "", /Confirmed：.*Las Vegas → Page.*Route: Las Vegas → Page.*confirmed.*車程約 4 小時/);
   assert.match(replies[0] ?? "", new RegExp(`Pending：.*${imported.proposalIds[1]}.*Page 午餐.*Page.*pending.*訂位待確認`));
   assert.doesNotMatch(replies[0] ?? "", /S-[A-Z0-9]/);
+  db.close();
+});
+
+test("uses a validated Query Filter fallback for natural-language itinerary queries without writing evidence", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-line", "自然查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自然查詢旅程", "America/Los_Angeles");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [provisional] Page 下午活動 | 2026-10-02 | Page | | time_window=afternoon", { idempotencyKey: "query:natural:line" });
+  const adapter: QueryFilterAdapter = { interpret: () => ({ date: "2026-10-02", timeWindow: "afternoon", location: "Page" }) };
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALQUERY0000000", messageId: "message-natural-query", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "@TravelLeaderAgent 查詢 10/2 下午在 Page 有什麼安排？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-query" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, adapter);
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Page 下午活動/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  db.close();
+});
+
+test("rejects unsafe natural-language Query Filter output without writing itinerary evidence", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-unsafe-line", "安全查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "安全查詢旅程", "America/Los_Angeles");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const adapter: QueryFilterAdapter = { interpret: () => ({ sql: "DELETE FROM proposals" }) };
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEUNSAFEQUERY00000000", messageId: "message-unsafe-query", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/2 有什麼安排？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-unsafe-query" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, adapter);
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /無法解析查詢條件/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM proposals WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   db.close();
 });
 

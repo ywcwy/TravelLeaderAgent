@@ -2,18 +2,25 @@ import type { TravelService } from "./travel-service.ts";
 import type { WebhookInbox, WebhookInboxEvent } from "./webhook-inbox.ts";
 import { draftCommandHelp, itineraryQueryHelp, parseDraftCommand, parseItineraryMessage, parseProposalCommand, proposalCommandHelp, renderItineraryQuery } from "./itinerary-query.ts";
 import { guardExtractionDraftPayload, renderExtractionDraft, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
+import { QueryFilterValidationError, type QueryFilterAdapter, validateQueryFilter } from "./query-filter.ts";
 
 export type LineReplySender = (replyToken: string, text: string) => void | Promise<void>;
+
+function needsNaturalLanguageFallback(text: string): boolean {
+  const normalized = text.trim().replace(/^@[^\s]+\s*/, "");
+  return /^(?:查詢|查询|query)\s+/i.test(normalized) && (/[？?]/u.test(normalized) || /\b\d{1,2}\/\d{1,2}\b/u.test(normalized));
+}
 
 export class LineSourceWorker {
   private readonly inbox: WebhookInbox;
   private readonly travel: TravelService;
   private readonly reply: LineReplySender;
   private readonly extractionAdapter: LlmAdapter | null;
+  private readonly queryFilterAdapter: QueryFilterAdapter | null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private active: Promise<"processed" | "failed" | "idle"> | null = null;
   private processing = false;
-  constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender, extractionAdapter: LlmAdapter | null = null) { this.inbox = inbox; this.travel = travel; this.reply = reply; this.extractionAdapter = extractionAdapter; }
+  constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender, extractionAdapter: LlmAdapter | null = null, queryFilterAdapter: QueryFilterAdapter | null = null) { this.inbox = inbox; this.travel = travel; this.reply = reply; this.extractionAdapter = extractionAdapter; this.queryFilterAdapter = queryFilterAdapter; }
 
   start(intervalMs = 1_000): void {
     if (this.timer) return;
@@ -72,7 +79,7 @@ export class LineSourceWorker {
         if (parsed) {
           if (replyToken) {
             const targetTripId = parsed.type === "query" && parsed.query.tripId ? parsed.query.tripId : event.tripId;
-            const text = parsed.type === "help" ? itineraryQueryHelp : renderItineraryQuery(this.travel.queryTrip(targetTripId, event.userId, parsed.query));
+            const text = parsed.type === "help" ? itineraryQueryHelp : await this.queryReply(event, targetTripId, parsed.query);
             await this.reply(replyToken, text);
           }
           this.inbox.complete(event.eventId, leaseToken);
@@ -104,6 +111,22 @@ export class LineSourceWorker {
         return "failed" as const;
       }
     })();
+  }
+
+  private async queryReply(event: WebhookInboxEvent, tripId: string, query: import("./domain.ts").ItineraryQuery): Promise<string> {
+    if (this.queryFilterAdapter && needsNaturalLanguageFallback(event.text)) {
+      try {
+        const trip = this.travel.getTrip(tripId);
+        if (!trip) throw new Error("Trip not found.");
+        const text = event.text.trim().replace(/^@[^\s]+\s*/, "");
+        const filter = validateQueryFilter(await this.queryFilterAdapter.interpret({ text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
+        return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, filter));
+      } catch (error) {
+        if (error instanceof QueryFilterValidationError) return `無法解析查詢條件，請使用固定格式，例如：${itineraryQueryHelp}`;
+        return `目前無法解析自然語言查詢，請使用固定格式，例如：${itineraryQueryHelp}`;
+      }
+    }
+    return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, query));
   }
 
   private async draftReply(event: WebhookInboxEvent, command: Exclude<ReturnType<typeof parseDraftCommand>, null>): Promise<string> {
