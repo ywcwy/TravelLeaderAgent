@@ -440,7 +440,7 @@ export class TravelService {
     const cached = this.db.connection.prepare(`SELECT status, payload_json, error_message, expires_at FROM extraction_cache WHERE cache_key = ?`).get(cacheKey) as { status: "success" | "error"; payload_json: string | null; error_message: string | null; expires_at: string | null } | undefined;
     if (cached?.status === "success" && cached.payload_json) {
       const raw = validateExtractionDraftPayload(JSON.parse(cached.payload_json));
-      const guarded = guardExtractionDraftPayload(raw, chunk.content);
+      const guarded = guardExtractionDraftPayload(raw, relatedContext ? `${chunk.content}\n\n${relatedContext}` : chunk.content);
       this.recordGuardRevisions(chunk.tripId, chunk.sourceId, chunk.id, null, raw, guarded, now());
       return guarded;
     }
@@ -459,7 +459,7 @@ export class TravelService {
       const saveCache = (key: string, cacheMetadata: ExtractionDraftMetadata) => this.db.connection.prepare(`INSERT INTO extraction_cache (cache_key, content_hash, context_key, provider, model, prompt_version, status, payload_json, error_code, error_message, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'success', ?, NULL, NULL, NULL, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET status = 'success', payload_json = excluded.payload_json, error_code = NULL, error_message = NULL, expires_at = NULL, updated_at = excluded.updated_at`).run(key, chunk.contentHash, contextKey, cacheMetadata.provider, cacheMetadata.model, cacheMetadata.promptVersion, JSON.stringify(raw), timestamp, timestamp);
       saveCache(cacheKey, metadata);
       if (resolvedKey !== cacheKey) saveCache(resolvedKey, resolvedMetadata);
-      const guarded = guardExtractionDraftPayload(raw, chunk.content);
+      const guarded = guardExtractionDraftPayload(raw, relatedContext ? `${chunk.content}\n\n${relatedContext}` : chunk.content);
       this.recordGuardRevisions(chunk.tripId, chunk.sourceId, chunk.id, null, raw, guarded, timestamp);
       return guarded;
     } catch (error) {
