@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
 import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter, type LlmDocumentContext, type LlmDocumentSection } from "./extraction-draft.ts";
-import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftMissing, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 const DOCUMENT_CONTEXT_VERSION = "document-context-v1";
@@ -426,9 +426,15 @@ export class TravelService {
       payload.issues.push(...chunkPayload.issues);
       if (!payload.sourceExcerpt) payload.sourceExcerpt = chunkPayload.sourceExcerpt;
     }
-    if (failed > 0 && payload.items.length > 0) payload.issues.push({ code: "partial_batch", message: `Import Batch 部分完成：${failed}/${rows.length} 個 Chunk 失敗，可針對失敗 Chunk 重試。` });
-    const status: ExtractionDraft["status"] = payload.items.length > 0 && failed < rows.length ? "pending_confirmation" : "failed";
-    return { payload, status };
+    const source = this.db.connection.prepare(`SELECT content FROM sources WHERE id = ?`).get(sourceId) as { content: string } | undefined;
+    payload.items = mergeChunkItems(payload.items, payload.issues);
+    payload.missing = uniqueMissing(payload.missing);
+    payload.assumptions = uniqueStrings(payload.assumptions);
+    payload.issues = uniqueIssues(payload.issues);
+    const merged = guardExtractionDraftPayload(payload, source?.content ?? "");
+    if (failed > 0 && merged.items.length > 0) merged.issues.push({ code: "partial_batch", message: `Import Batch 部分完成：${failed}/${rows.length} 個 Chunk 失敗，可針對失敗 Chunk 重試。` });
+    const status: ExtractionDraft["status"] = merged.items.length > 0 && failed < rows.length ? "pending_confirmation" : "failed";
+    return { payload: merged, status };
   }
 
   private persistImportChunks(tripId: string, sourceId: string, importBatchId: string, markdown: string, status: ImportChunkStatus, timestamp: string): void {
@@ -581,11 +587,16 @@ export class TravelService {
         this.updateImportChunk(chunk.id, "failed", attempts, failure.code, failure.message, null, now());
       }
     }
-    if (failedChunkCount > 0 && aggregate.items.length > 0) {
-      aggregate.issues.push({ code: "partial_batch", message: `Import Batch 部分完成：${failedChunkCount}/${chunks.length} 個 Chunk 失敗，可針對失敗 Chunk 重試。` });
+    aggregate.items = mergeChunkItems(aggregate.items, aggregate.issues);
+    aggregate.missing = uniqueMissing(aggregate.missing);
+    aggregate.assumptions = uniqueStrings(aggregate.assumptions);
+    aggregate.issues = uniqueIssues(aggregate.issues);
+    const merged = guardExtractionDraftPayload(aggregate, source.content);
+    if (failedChunkCount > 0 && merged.items.length > 0) {
+      merged.issues.push({ code: "partial_batch", message: `Import Batch 部分完成：${failedChunkCount}/${chunks.length} 個 Chunk 失敗，可針對失敗 Chunk 重試。` });
     }
-    const status: ExtractionDraft["status"] = aggregate.items.length > 0 && failedChunkCount < chunks.length ? "pending_confirmation" : "failed";
-    const payload = aggregate;
+    const status: ExtractionDraft["status"] = merged.items.length > 0 && failedChunkCount < chunks.length ? "pending_confirmation" : "failed";
+    const payload = merged;
     const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
     const timestamp = now();
     const metadata = adapter.metadata ?? defaultExtractionMetadata();
@@ -1827,6 +1838,73 @@ function relatedChunkContext(chunks: ImportChunk[], index: number): string {
     .filter((content): content is string => Boolean(content))
     .map((content) => content.slice(0, 1_000))
     .join("\n---\n");
+}
+
+function mergeChunkItems(items: ExtractionDraftItem[], issues: ExtractionDraftPayload["issues"]): ExtractionDraftItem[] {
+  const merged: ExtractionDraftItem[] = [];
+  for (const item of items) {
+    const index = merged.findIndex((candidate) => sameChunkItemIdentity(candidate, item));
+    if (index < 0 || hasChunkItemConflict(merged[index]!, item)) {
+      merged.push(item);
+      continue;
+    }
+    if (JSON.stringify({ ...merged[index], sourceLine: undefined }) === JSON.stringify({ ...item, sourceLine: undefined })) {
+      issues.push({ code: "duplicate_item", message: `排除跨 Chunk 重複行程「${item.title}」。` });
+    }
+    merged[index] = mergeCompatibleChunkItems(merged[index]!, item);
+  }
+  return merged;
+}
+
+function sameChunkItemIdentity(left: ExtractionDraftItem, right: ExtractionDraftItem): boolean {
+  return left.kind === right.kind
+    && left.title.trim().toLocaleLowerCase() === right.title.trim().toLocaleLowerCase()
+    && (left.location ?? "").trim().toLocaleLowerCase() === (right.location ?? "").trim().toLocaleLowerCase()
+    && (left.origin ?? "").trim().toLocaleLowerCase() === (right.origin ?? "").trim().toLocaleLowerCase()
+    && (left.destination ?? "").trim().toLocaleLowerCase() === (right.destination ?? "").trim().toLocaleLowerCase();
+}
+
+function hasChunkItemConflict(left: ExtractionDraftItem, right: ExtractionDraftItem): boolean {
+  return (["localDate", "startsAt", "endsAt", "timezone", "timezoneSource", "originTimezone", "destinationTimezone", "location", "origin", "destination"] as const)
+    .some((field) => left[field] != null && right[field] != null && left[field] !== right[field]);
+}
+
+function mergeCompatibleChunkItems(left: ExtractionDraftItem, right: ExtractionDraftItem): ExtractionDraftItem {
+  const notes = [left.notes, right.notes].filter((value): value is string => Boolean(value?.trim()));
+  return {
+    ...left,
+    ...Object.fromEntries((Object.keys(right) as Array<keyof ExtractionDraftItem>).filter((key) => left[key] == null && right[key] != null).map((key) => [key, right[key]])),
+    kinds: [...new Set([...left.kinds, ...right.kinds])],
+    assumptions: uniqueStrings([...(left.assumptions ?? []), ...(right.assumptions ?? [])]),
+    ...(notes.length > 0 ? { notes: [...new Set(notes)].join("\n") } : {}),
+    sourceLine: Math.min(left.sourceLine ?? Number.MAX_SAFE_INTEGER, right.sourceLine ?? Number.MAX_SAFE_INTEGER) === Number.MAX_SAFE_INTEGER
+      ? undefined
+      : Math.min(left.sourceLine ?? Number.MAX_SAFE_INTEGER, right.sourceLine ?? Number.MAX_SAFE_INTEGER),
+  };
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function uniqueMissing(values: ExtractionDraftMissing[]): ExtractionDraftMissing[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = `${value.field}|${value.message}|${value.required}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function uniqueIssues(issues: ExtractionDraftPayload["issues"]): ExtractionDraftPayload["issues"] {
+  const seen = new Set<string>();
+  return issues.filter((issue) => {
+    const key = `${issue.code}|${issue.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function isItemFromIncompleteChunk(item: Pick<ExtractedTripItem, "sourceLine">, chunks: ImportChunk[]): boolean {

@@ -321,6 +321,33 @@ test("persists ordered Import Chunks for a multi-section Markdown batch", () => 
   db.close();
 });
 
+test("merges duplicate and conflicting candidates across Chunk boundaries", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-cross-chunk-merge", "跨 Chunk 合併群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "跨 Chunk 合併旅程", "Asia/Taipei");
+  const markdown = ["# 10/1 Las Vegas", "住宿 Page", "# 10/2 Page", "住宿 Page"].join("\n");
+  const adapter: LlmAdapter = {
+    metadata: { provider: "fake", model: "cross-chunk", promptVersion: "test" },
+    extract: async (input) => ({
+      items: [
+        { kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Page 住宿", status: "provisional", localDate: "2026-10-01", startsAt: "2026-10-01T18:00:00-07:00", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" },
+        { kind: "meal", kinds: ["meal"], shape: "point", shapeSource: "inferred", title: "Page 晚餐", status: "provisional", localDate: "2026-10-01", startsAt: input.documentContext?.currentSection?.dateLabel === "10/2" ? "2026-10-01T19:00:00-07:00" : "2026-10-01T18:00:00-07:00", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" },
+        { kind: "activity", kinds: ["activity"], shape: "point", shapeSource: "inferred", title: "Page 景點", status: "provisional", localDate: "2026-10-01", startsAt: input.documentContext?.currentSection?.dateLabel === "10/2" ? "2026-10-01T20:00:00-07:00" : undefined, startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" },
+      ],
+      missing: [], assumptions: [], issues: [], sourceExcerpt: input.sourceContent,
+    } satisfies ExtractionDraftPayload),
+  };
+
+  const draft = await service.createExtractionDraft(trip.id, markdown, { idempotencyKey: "cross-chunk:merge", type: "markdown" }, adapter);
+  assert.equal(draft.items.length, 3);
+  assert.ok(draft.issues.some((issue) => issue.code === "duplicate_item"));
+  assert.ok(draft.issues.some((issue) => issue.code === "contradictory_item"));
+  assert.equal(draft.items.find((item) => item.title === "Page 晚餐")?.startsAt, "2026-10-01T18:00:00-07:00");
+  assert.equal(draft.items.find((item) => item.title === "Page 景點")?.startsAt, "2026-10-01T20:00:00-07:00");
+  db.close();
+});
+
 test("keeps successful chunks when a later chunk fails", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
