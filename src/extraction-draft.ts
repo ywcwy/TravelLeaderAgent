@@ -7,9 +7,9 @@ import {
   tripItemStatuses,
   timezoneSources,
 } from "./domain.ts";
-import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk } from "./domain.ts";
+import type { ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftIssue, ExtractionDraftMetadata, ExtractionDraftPayload, ImportChunk } from "./domain.ts";
 
-export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v3";
+export const EXTRACTION_PROMPT_VERSION = "extraction-draft-v4";
 
 export interface LlmExtractionInput {
   sourceContent: string;
@@ -163,8 +163,10 @@ export function validateExtractionDraftPayload(payload: unknown): ExtractionDraf
 
 /** Apply deterministic guards after model extraction while retaining the immutable Source. */
 export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sourceContent: string): ExtractionDraftPayload {
-  const items = payload.items.map((item) => enrichExtractionItem(item));
+  const temporalIssues: ExtractionDraftIssue[] = [];
+  const items = payload.items.map((item) => guardTemporalConsistency(enrichExtractionItem(item), sourceContent, temporalIssues));
   const issues = [...payload.issues];
+  issues.push(...temporalIssues);
   const hasSeparateArrival = /(?:separate|separately|another|另外|獨立|單獨).{0,24}(?:arrival|arriv|抵達|到達)/iu.test(sourceContent)
     || /(?:arrival|arriv|抵達|到達).{0,24}(?:separate|separately|another|另外|獨立|單獨)/iu.test(sourceContent);
   const lodgingLocations = new Set(items.filter((item) => item.kind === "lodging" && item.location).map((item) => item.location!.trim().toLocaleLowerCase()));
@@ -209,6 +211,41 @@ export function guardExtractionDraftPayload(payload: ExtractionDraftPayload, sou
   return { ...payload, items: kept, issues: actionableIssues };
 }
 
+function guardTemporalConsistency(item: ExtractionDraftItem, sourceContent: string, issues: ExtractionDraftIssue[]): ExtractionDraftItem {
+  const guarded = { ...item };
+  const sourceDates = [...sourceContent.matchAll(/(?:^|\D)(\d{1,2})[/-](\d{1,2})(?:\D|$)/g)].map((match) => `${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`);
+  const itemDate = guarded.localDate ?? guarded.startsAt?.slice(0, 10);
+  if (sourceDates.length > 0 && itemDate && !sourceDates.some((date) => itemDate.endsWith(date))) {
+    issues.push({ code: "date_outside_source", message: `「${guarded.title}」的日期 ${itemDate} 不在 Source 明示日期範圍內。` });
+  }
+  for (const field of ["startsAt", "endsAt"] as const) {
+    const value = guarded[field];
+    if (!value || /^\d{4}-\d{2}-\d{2}$/.test(value)) continue;
+    if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(value) && guarded.localDate) {
+      guarded[field] = `${guarded.localDate}T${value.length === 5 ? `${value}:00` : value}`;
+      issues.push({ code: "normalized_timestamp", message: `「${guarded.title}」的 ${field} 已補上 localDate；請確認時區。` });
+    } else if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(value)) {
+      guarded[field] = undefined;
+      issues.push({ code: "invalid_timestamp", message: `「${guarded.title}」的 ${field} 不是有效 ISO 8601 時間。` });
+    }
+  }
+  const knownTimezone = inferKnownLocationTimezone(guarded.location ?? guarded.destination ?? guarded.origin ?? guarded.title);
+  if (knownTimezone && guarded.timezone && guarded.timezone !== knownTimezone) {
+    issues.push({ code: "timezone_corrected", message: `「${guarded.title}」的 timezone 已由 ${guarded.timezone} 修正為 ${knownTimezone}。` });
+    guarded.timezone = knownTimezone;
+    guarded.timezoneSource = "inferred";
+  }
+  if (knownTimezone && guarded.shape === "route") {
+    if (guarded.originTimezone && inferKnownLocationTimezone(guarded.origin) === guarded.originTimezone) {
+      // Preserve an explicitly matching endpoint timezone.
+    } else if (inferKnownLocationTimezone(guarded.origin)) guarded.originTimezone = inferKnownLocationTimezone(guarded.origin);
+    if (guarded.destinationTimezone && inferKnownLocationTimezone(guarded.destination) === guarded.destinationTimezone) {
+      // Preserve an explicitly matching endpoint timezone.
+    } else if (inferKnownLocationTimezone(guarded.destination)) guarded.destinationTimezone = inferKnownLocationTimezone(guarded.destination);
+  }
+  return guarded;
+}
+
 /** Fill high-signal structural fields the model can omit when a venue appears
  * in prose. These are conservative enrichments, not free-form guessing. */
 function enrichExtractionItem(item: ExtractionDraftItem): ExtractionDraftItem {
@@ -235,7 +272,7 @@ function inferKnownLocationTimezone(value: string | undefined): string | undefin
   if (!value) return undefined;
   if (/(?:las vegas|mccarran|los angeles)/iu.test(value)) return "America/Los_Angeles";
   if (/(?:st\.? george|kanab)/iu.test(value)) return "America/Denver";
-  if (/(?:page|lake powell|antelope|tusayan|grand canyon)/iu.test(value)) return "America/Phoenix";
+  if (/(?:page|lake powell|antelope|tusayan|grand canyon|mather point|yavapai point|cameron)/iu.test(value)) return "America/Phoenix";
   return undefined;
 }
 
@@ -399,6 +436,9 @@ function isIsoCalendarDate(value: string): boolean {
 const extractionInstructions = [
   "Extract itinerary candidates from the user's source content. Return only JSON matching the extraction_draft schema.",
   "Preserve uncertainty as assumptions or missing fields; do not invent exact dates, times, or locations.",
+  "Treat dates and years as evidence-bound: copy dates from the Source or its explicit itinerary context only. Never replace an itinerary date with today's date, the runtime date, or a guessed year.",
+  "Every non-null startsAt or endsAt must be an ISO 8601 local date-time or offset date-time. A clock-only value such as 12:00 is invalid output; combine it with the evidenced localDate only when that date is explicit, otherwise leave the timestamp null and report a missing field.",
+  "Do not reinterpret a stop, arrival, or intermediate location as the final destination of a Route. Route origin and destination must be the endpoints explicitly stated by the Source; preserve intermediate stops in notes or separate items.",
   "A vague part-of-day phrase such as 晚上, tonight, or in the evening is a timeWindow, not an exact timestamp: set startTimeFlexibility and endTimeFlexibility to flexible unless the source explicitly says the time is fixed or tied to a ticket/tour/reservation.",
   "When a calendar date is known but no exact clock time is stated, set localDate to the ISO date, keep startsAt null, and preserve any part-of-day phrase in timeWindow.",
   "When the source says arriving at, going to, staying in, or lodging in a named place (for example, 到 Page，想住 Holiday Inn), set location to that named place and keep the lodging property in title or notes.",

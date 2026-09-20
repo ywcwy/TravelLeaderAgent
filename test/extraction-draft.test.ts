@@ -48,7 +48,7 @@ test("persists one pending Extraction Draft without creating a Proposal", async 
   assert.equal(draft.missing[0]?.required, false);
   assert.equal(draft.sourceExcerpt, source);
   assert.equal(service.getImportChunks(trip.id, draft.sourceId).length, 1);
-  assert.deepEqual(draft.metadata, { provider: "fake", model: "fake", promptVersion: "extraction-draft-v3" });
+  assert.deepEqual(draft.metadata, { provider: "fake", model: "fake", promptVersion: "extraction-draft-v4" });
   assert.equal(service.reviewTrip(trip.id).pending.length, 0);
   assert.match(renderExtractionDraft(draft), new RegExp(`Extraction Draft ${draft.id}`));
   assert.match(renderExtractionDraft(draft), /請確認：確認 X-/);
@@ -71,6 +71,19 @@ test("quality guard fills rental venue location and independent route timezones"
   payload.items.push({ ...payload.items[0]!, kind: "activity", kinds: ["activity"], shape: "point", title: "下羚羊谷報到", location: undefined });
   const activityGuarded = guardExtractionDraftPayload(payload, "quality");
   assert.equal(activityGuarded.items.at(-1)?.location, "下羚羊谷");
+});
+
+test("quality guard normalizes clock-only timestamps and rejects dates outside Source evidence", () => {
+  const payload = fixture("10/1 行程：Page");
+  payload.items[0]!.startsAt = "12:00";
+  payload.items[0]!.localDate = "2026-09-20";
+  payload.items[0]!.timezone = "Asia/Taipei";
+  const guarded = guardExtractionDraftPayload(payload, "10/1 行程：Page");
+  assert.equal(guarded.items[0]?.startsAt, "2026-09-20T12:00:00");
+  assert.equal(guarded.items[0]?.timezone, "America/Phoenix");
+  assert.ok(guarded.issues.some((issue) => issue.code === "date_outside_source"));
+  assert.ok(guarded.issues.some((issue) => issue.code === "normalized_timestamp"));
+  assert.ok(guarded.issues.some((issue) => issue.code === "timezone_corrected"));
 });
 
 test("persists Guard Revisions without changing immutable Source content", async () => {
