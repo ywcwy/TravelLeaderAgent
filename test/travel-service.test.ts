@@ -856,6 +856,24 @@ test("an owner confirms a Replacement Proposal without losing itinerary history"
   db.close();
 });
 
+test("an owner confirms a Removal Proposal and preserves the cancelled predecessor", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-removal-1");
+  service.addMember("system-admin", tripId, "owner", "Owner", "owner");
+  const source = service.importMarkdown(tripId, "- [confirmed] 展覽 | 2026-10-16T15:00:00-07:00 | Page", { idempotencyKey: "test:removal:source" });
+  const predecessor = service.confirmProposal(tripId, "owner", source.proposalIds[0]);
+  const removal = service.createRemovalProposal(tripId, source.sourceId, predecessor.id);
+  const cancelled = service.confirmProposal(tripId, "owner", removal);
+  assert.equal(cancelled.id, predecessor.id);
+  assert.equal(cancelled.status, "cancelled");
+  const proposal = service.getProposal(tripId, removal);
+  assert.equal(proposal?.removalForItemId, predecessor.id);
+  assert.equal(proposal?.status, "confirmed");
+  assert.deepEqual(service.reviewTrip(tripId).cancelled.map((item) => item.title), ["展覽"]);
+  db.close();
+});
+
 test("an existing SQLite database gains the replacement relationship column", () => {
   const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-migration-"));
   const databasePath = join(directory, "travel.sqlite");

@@ -171,6 +171,7 @@ export interface Proposal extends Omit<ExtractedTripItem, "status" | "deadlineAt
   id: string;
   sourceId: string;
   replacementForItemId: string | null;
+  removalForItemId: string | null;
   itemStatus: TripItemStatus;
   status: ProposalStatus;
   deadlineAt: string | null;

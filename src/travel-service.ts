@@ -682,6 +682,16 @@ export class TravelService {
       const allConfirmableSelected = lockedDraft.items.length > 0
         && lockedDraft.items.every((item, index) => isConfirmableDraftItem(item) && lockedRequestedIndexes.has(index) && !isItemFromIncompleteChunk(item, lockedChunks))
         && !lockedChunks.some((chunk) => chunk.status !== "completed");
+      if (allConfirmableSelected) {
+        const confirmedItems = this.db.connection.prepare(`SELECT id, title, local_date, starts_at, ends_at, location FROM trip_items WHERE trip_id = ? AND source_id = ? AND status = 'confirmed'`).all(tripId, lockedRow.source_id) as Array<{ id: string; title: string; local_date: string | null; starts_at: string | null; ends_at: string | null; location: string | null }>;
+        const retainedKeys = new Set(lockedDraft.items.map((item) => `${item.title}|${item.localDate ?? ""}|${item.startsAt ?? ""}|${item.endsAt ?? ""}|${item.location ?? ""}`));
+        for (const predecessor of confirmedItems) {
+          const key = `${predecessor.title}|${predecessor.local_date ?? ""}|${predecessor.starts_at ?? ""}|${predecessor.ends_at ?? ""}|${predecessor.location ?? ""}`;
+          if (retainedKeys.has(key)) continue;
+          const existingRemoval = this.db.connection.prepare(`SELECT id FROM proposals WHERE removal_for_item_id = ? AND proposal_status IN ('pending', 'confirmed')`).get(predecessor.id) as { id: string } | undefined;
+          if (!existingRemoval) proposalIds.push(this.createRemovalProposal(tripId, lockedRow.source_id, predecessor.id));
+        }
+      }
       const confirmedAt = now();
       const unresolvedIssues = unresolvedDraftIssues(lockedDraft);
       const payload = unresolvedIssues.length > 0 || !allConfirmableSelected ? {
@@ -763,6 +773,23 @@ export class TravelService {
     return id;
   }
 
+  createRemovalProposal(tripId: string, sourceId: string, predecessorItemId: string): string {
+    this.requireActiveTrip(tripId);
+    const source = this.db.connection.prepare(`SELECT id FROM sources WHERE id = ? AND trip_id = ?`).get(sourceId, tripId);
+    const predecessor = this.db.connection.prepare(`SELECT * FROM trip_items WHERE id = ? AND trip_id = ? AND status = 'confirmed'`).get(predecessorItemId, tripId) as (Record<string, unknown> & { id: string; kind: string; title: string }) | undefined;
+    if (!source || !predecessor) throw new ConflictError("A Removal Proposal must reference a confirmed Trip Item and Source from the same Active Trip.");
+    const fields = predecessor as Record<string, string | number | null>;
+    const id = `P-${randomUUID().slice(0, 8).toUpperCase()}`;
+    this.db.connection.prepare(`
+      INSERT INTO proposals (id, trip_id, source_id, removal_for_item_id, kind, shape, shape_source, origin, destination, origin_timezone, destination_timezone, title, item_status, proposal_status, local_date, starts_at, ends_at, start_time_flexibility, end_time_flexibility, time_window, assumptions_json, timezone, timezone_source, location, notes, deadline_at, source_line, source_excerpt, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'cancelled', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, tripId, sourceId, predecessorItemId, fields.kind ?? null, fields.shape ?? null, fields.shape_source ?? null, fields.origin ?? null, fields.destination ?? null, fields.origin_timezone ?? null, fields.destination_timezone ?? null, fields.title ?? null, fields.local_date ?? null, fields.starts_at ?? null, fields.ends_at ?? null, fields.start_time_flexibility ?? null, fields.end_time_flexibility ?? null, fields.time_window ?? null, fields.assumptions_json ?? "[]", fields.timezone ?? null, fields.timezone_source ?? null, fields.location ?? null, fields.notes ?? null, fields.deadline_at ?? null, fields.source_line ?? null, fields.source_excerpt ?? null, now());
+    const kinds = this.getTripItemKinds(predecessorItemId);
+    const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) VALUES (?, ?)`);
+    for (const kind of kinds) insertKind.run(id, kind);
+    return id;
+  }
+
   createDecision(tripId: string, ownerId: string, title: string, proposalIds: string[]): Decision {
     this.requireActiveTrip(tripId);
     this.requireDecisionOwner(tripId, ownerId);
@@ -773,8 +800,8 @@ export class TravelService {
     const decision: Decision = { id: `D-${randomUUID().slice(0, 8).toUpperCase()}`, tripId, title, status: "open", selectedProposalId: null, resolvedBy: null, resolvedAt: null, cancelledBy: null, cancelledAt: null };
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
-      const proposals = this.db.connection.prepare(`SELECT id, trip_id, proposal_status, decision_id, replacement_for_item_id FROM proposals WHERE id IN (${placeholders})`).all(...uniqueProposalIds) as unknown as ProposalMembershipRow[];
-      if (proposals.length !== uniqueProposalIds.length || proposals.some((proposal) => proposal.trip_id !== tripId || proposal.proposal_status !== "pending" || proposal.decision_id !== null || proposal.replacement_for_item_id !== null)) {
+      const proposals = this.db.connection.prepare(`SELECT id, trip_id, proposal_status, decision_id, replacement_for_item_id, removal_for_item_id FROM proposals WHERE id IN (${placeholders})`).all(...uniqueProposalIds) as unknown as ProposalMembershipRow[];
+      if (proposals.length !== uniqueProposalIds.length || proposals.some((proposal) => proposal.trip_id !== tripId || proposal.proposal_status !== "pending" || proposal.decision_id !== null || proposal.replacement_for_item_id !== null || proposal.removal_for_item_id !== null)) {
         throw new ConflictError("A Decision can group only unassigned pending Proposals from the same Active Trip.");
       }
       this.db.connection.prepare(`INSERT INTO decisions (id, trip_id, title, status, selected_proposal_id, created_at) VALUES (?, ?, ?, 'open', NULL, ?)`)
@@ -874,6 +901,15 @@ export class TravelService {
       if (proposal.item_status === "conflicted") {
         throw new ConflictError("A conflicted proposal must be resolved before it can be confirmed.");
       }
+      if (proposal.removal_for_item_id) {
+        const predecessor = this.db.connection.prepare(`SELECT * FROM trip_items WHERE id = ? AND trip_id = ? AND status = 'confirmed'`).get(proposal.removal_for_item_id, tripId) as Record<string, unknown> | undefined;
+        if (!predecessor) throw new ConflictError("The Removal Proposal predecessor is no longer confirmed.");
+        const resolvedAt = now();
+        this.db.connection.prepare(`UPDATE trip_items SET status = 'cancelled' WHERE id = ? AND trip_id = ? AND status = 'confirmed'`).run(proposal.removal_for_item_id, tripId);
+        this.db.connection.prepare(`UPDATE proposals SET proposal_status = 'confirmed', confirmed_trip_item_id = ? WHERE id = ?`).run(proposal.removal_for_item_id, proposalId);
+        this.db.connection.exec("COMMIT");
+        return this.hydrateTripItem({ ...predecessor, status: "cancelled" });
+      }
       const kinds = this.getProposalKinds(proposal.id);
       const item: TripItem = {
         id: `T-${randomUUID().slice(0, 8).toUpperCase()}`,
@@ -939,8 +975,8 @@ export class TravelService {
       const decision = this.db.connection.prepare(`SELECT * FROM decisions WHERE id = ? AND trip_id = ?`).get(decisionId, tripId) as DecisionRow | undefined;
       if (!decision) throw new NotFoundError(`Decision ${decisionId} was not found.`);
       if (decision.status !== "needs_options") throw new ConflictError(`Decision ${decisionId} does not need new options.`);
-      const proposals = this.db.connection.prepare(`SELECT id, trip_id, proposal_status, decision_id, replacement_for_item_id FROM proposals WHERE id IN (${placeholders})`).all(...uniqueProposalIds) as unknown as ProposalMembershipRow[];
-      if (proposals.length !== uniqueProposalIds.length || proposals.some((proposal) => proposal.trip_id !== tripId || proposal.proposal_status !== "pending" || proposal.decision_id !== null || proposal.replacement_for_item_id !== null)) throw new ConflictError("Only unassigned pending Proposals from this Trip can be added.");
+      const proposals = this.db.connection.prepare(`SELECT id, trip_id, proposal_status, decision_id, replacement_for_item_id, removal_for_item_id FROM proposals WHERE id IN (${placeholders})`).all(...uniqueProposalIds) as unknown as ProposalMembershipRow[];
+      if (proposals.length !== uniqueProposalIds.length || proposals.some((proposal) => proposal.trip_id !== tripId || proposal.proposal_status !== "pending" || proposal.decision_id !== null || proposal.replacement_for_item_id !== null || proposal.removal_for_item_id !== null)) throw new ConflictError("Only unassigned pending Proposals from this Trip can be added.");
       this.db.connection.prepare(`UPDATE proposals SET decision_id = ? WHERE id IN (${placeholders})`).run(decisionId, ...uniqueProposalIds);
       this.db.connection.prepare(`UPDATE decisions SET status = 'open' WHERE id = ?`).run(decisionId);
       const reopened = this.db.connection.prepare(`SELECT * FROM decisions WHERE id = ? AND trip_id = ?`).get(decisionId, tripId) as unknown as DecisionRow;
@@ -1202,12 +1238,12 @@ function toTripAccessPolicy(row: TripAccessPolicyRow): TripAccessPolicy {
 }
 
 interface ProposalRow {
-  id: string; source_id: string; replacement_for_item_id: string | null; confirmed_trip_item_id: string | null; rejection_reason: string | null; rejected_by: string | null; rejected_at: string | null; kind: string; shape: ProposalShape | null; shape_source: ProposalShapeSource | null; origin: string | null; destination: string | null; origin_timezone: string | null; destination_timezone: string | null; title: string; item_status: TripItemStatus; proposal_status: "pending" | "confirmed" | "rejected"; decision_id: string | null;
+  id: string; source_id: string; replacement_for_item_id: string | null; removal_for_item_id: string | null; confirmed_trip_item_id: string | null; rejection_reason: string | null; rejected_by: string | null; rejected_at: string | null; kind: string; shape: ProposalShape | null; shape_source: ProposalShapeSource | null; origin: string | null; destination: string | null; origin_timezone: string | null; destination_timezone: string | null; title: string; item_status: TripItemStatus; proposal_status: "pending" | "confirmed" | "rejected"; decision_id: string | null;
   local_date: string | null; starts_at: string | null; ends_at: string | null; start_time_flexibility: ExtractedTripItem["startTimeFlexibility"] | null; end_time_flexibility: ExtractedTripItem["endTimeFlexibility"] | null; time_window: ExtractedTripItem["timeWindow"] | null; assumptions_json: string; timezone: string | null; timezone_source: TimezoneSource | null; location: string | null; notes: string | null; deadline_at: string | null; source_line: number | null; source_excerpt: string | null;
 }
 
 interface ProposalMembershipRow {
-  id: string; trip_id: string; proposal_status: "pending" | "confirmed" | "rejected"; decision_id: string | null; replacement_for_item_id: string | null;
+  id: string; trip_id: string; proposal_status: "pending" | "confirmed" | "rejected"; decision_id: string | null; replacement_for_item_id: string | null; removal_for_item_id: string | null;
 }
 
 interface DecisionRow {
@@ -1246,7 +1282,7 @@ function overlapsLocalDate(item: { localDate?: string; startsAt?: string; endsAt
 
 function toProposal(row: ProposalRow, kinds = [row.kind as Proposal["kind"]]): Proposal {
   const shape = row.shape ?? (row.location ? "point" : "point");
-  return { id: row.id, sourceId: row.source_id, replacementForItemId: row.replacement_for_item_id, kind: row.kind as Proposal["kind"], kinds, shape, shapeSource: row.shape_source ?? "inferred", origin: row.origin ?? undefined, destination: row.destination ?? undefined, originTimezone: row.origin_timezone ?? undefined, destinationTimezone: row.destination_timezone ?? undefined, title: row.title, itemStatus: row.item_status, status: row.proposal_status, localDate: row.local_date ?? undefined, startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, startTimeFlexibility: row.start_time_flexibility ?? undefined, endTimeFlexibility: row.end_time_flexibility ?? undefined, timeWindow: row.time_window ?? undefined, assumptions: parseAssumptions(row.assumptions_json), timezone: row.timezone ?? undefined, timezoneSource: row.timezone_source ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, rejectionReason: row.rejection_reason, rejectedBy: row.rejected_by, rejectedAt: row.rejected_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
+  return { id: row.id, sourceId: row.source_id, replacementForItemId: row.replacement_for_item_id, removalForItemId: row.removal_for_item_id, kind: row.kind as Proposal["kind"], kinds, shape, shapeSource: row.shape_source ?? "inferred", origin: row.origin ?? undefined, destination: row.destination ?? undefined, originTimezone: row.origin_timezone ?? undefined, destinationTimezone: row.destination_timezone ?? undefined, title: row.title, itemStatus: row.item_status, status: row.proposal_status, localDate: row.local_date ?? undefined, startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, startTimeFlexibility: row.start_time_flexibility ?? undefined, endTimeFlexibility: row.end_time_flexibility ?? undefined, timeWindow: row.time_window ?? undefined, assumptions: parseAssumptions(row.assumptions_json), timezone: row.timezone ?? undefined, timezoneSource: row.timezone_source ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, rejectionReason: row.rejection_reason, rejectedBy: row.rejected_by, rejectedAt: row.rejected_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
 }
 
 function parseAssumptions(value: string | null | undefined): string[] {

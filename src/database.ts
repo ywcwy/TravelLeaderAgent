@@ -187,6 +187,7 @@ export class TravelDatabase {
         source_id TEXT NOT NULL REFERENCES sources(id),
         decision_id TEXT REFERENCES decisions(id),
         replacement_for_item_id TEXT REFERENCES trip_items(id),
+        removal_for_item_id TEXT REFERENCES trip_items(id),
         kind TEXT NOT NULL,
         shape TEXT,
         shape_source TEXT,
@@ -264,6 +265,10 @@ export class TravelDatabase {
     const tripItemColumns = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
     if (!tripItemColumns.some((column) => column.name === "replacement_for_item_id")) {
       this.connection.exec(`ALTER TABLE trip_items ADD COLUMN replacement_for_item_id TEXT REFERENCES trip_items(id)`);
+    }
+    const proposalSchemaColumns = this.connection.prepare(`PRAGMA table_info(proposals)`).all() as Array<{ name: string }>;
+    if (!proposalSchemaColumns.some((column) => column.name === "removal_for_item_id")) {
+      this.connection.exec(`ALTER TABLE proposals ADD COLUMN removal_for_item_id TEXT REFERENCES trip_items(id)`);
     }
     const memberColumns = this.connection.prepare(`PRAGMA table_info(members)`).all() as Array<{ name: string }>;
     if (!memberColumns.some((column) => column.name === "revoked_at")) {
