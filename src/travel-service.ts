@@ -5,7 +5,7 @@ import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderE
 import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftMissing, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
-const DOCUMENT_CONTEXT_VERSION = "document-context-v1";
+const DOCUMENT_CONTEXT_VERSION = "document-context-v2";
 
 export class PermissionError extends Error {}
 export class NotFoundError extends Error {}

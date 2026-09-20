@@ -447,7 +447,7 @@ test("invalidates failed Chunk cache entries when Document Context version chang
   assert.equal(chunks[1]?.status, "failed");
   const contextRow = db.connection.prepare(`SELECT payload_json FROM import_document_contexts WHERE source_id = ?`).get(draft.sourceId) as { payload_json: string };
   const context = JSON.parse(contextRow.payload_json) as { version: string };
-  context.version = "document-context-v2";
+  context.version = "document-context-v3";
   db.connection.prepare(`UPDATE import_document_contexts SET version = ?, payload_json = ? WHERE source_id = ?`).run(context.version, JSON.stringify(context), draft.sourceId);
   await service.retryImportChunk(trip.id, "U-context-cache", chunks[1]!.id, adapter);
   assert.equal(calls, 3);
@@ -519,7 +519,7 @@ test("builds date-first Document Context and carries it across split Chunks", as
   assert.deepEqual(seenContexts[0]?.dateRange, { from: null, to: null });
   const cacheContextKeys = db.connection.prepare(`SELECT context_key FROM extraction_cache`).all() as Array<{ context_key: string }>;
   assert.ok(cacheContextKeys.length > 0);
-  assert.ok(cacheContextKeys.every((row) => row.context_key.includes('"documentContextVersion":"document-context-v1"')));
+  assert.ok(cacheContextKeys.every((row) => row.context_key.includes('"documentContextVersion":"document-context-v2"')));
   db.close();
 });
 
