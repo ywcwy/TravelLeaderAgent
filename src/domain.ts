@@ -230,7 +230,7 @@ export interface ProposalContext {
 }
 
 export interface ReviewIssue {
-  code: "missing_start_time" | "missing_timezone" | "invalid_timezone" | "missing_endpoint_timezone" | "invalid_endpoint_timezone" | "ambiguous_local_time" | "missing_location" | "missing_route_endpoint" | "shape_conflict" | "unknown_kind" | "kind_clarification" | "schedule_collision" | "source_unparsed" | "unparseable_line" | "low_information_item" | "duplicate_item" | "contradictory_item";
+  code: "missing_start_time" | "missing_timezone" | "invalid_timezone" | "missing_endpoint_timezone" | "invalid_endpoint_timezone" | "ambiguous_local_time" | "missing_location" | "unresolved_location" | "missing_route_endpoint" | "shape_conflict" | "unknown_kind" | "kind_clarification" | "schedule_collision" | "source_unparsed" | "unparseable_line" | "low_information_item" | "duplicate_item" | "contradictory_item";
   message: string;
   sourceId?: string;
   sourceLine?: number;
