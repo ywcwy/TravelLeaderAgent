@@ -91,3 +91,47 @@ export function normalizeItemLocations(item: { location?: string | null; origin?
   const location = normalizeLocation(item.location); const origin = normalizeLocation(item.origin); const destination = normalizeLocation(item.destination); return { ...(location ? { location } : {}), ...(origin ? { origin } : {}), ...(destination ? { destination } : {}) };
 }
 export function formatLocationCandidates(candidates: readonly NormalizedLocation[]): string { return candidates.map((candidate) => `- ${candidate.canonicalName}｜${candidate.city ?? ""}｜${candidate.region ?? ""}｜${candidate.country ?? ""}`).join("\n"); }
+
+const CONTEXT_LOCATION_RESOLVER_VERSION = "context-location-v1";
+const CONTEXTUAL_PLACEHOLDER = /^(?:住宿|飯店|酒店|旅館|hotel|lodging|stay)$/iu;
+
+/** Applies only unambiguous, coarse geography from nearby explicit itinerary anchors. */
+export function inferContextualLocations<T extends ExtractedTripItem>(items: readonly T[]): T[] {
+  const anchors = items.map((item, index) => ({ item, index, location: normalizeLocation(item.location) }))
+    .filter((entry): entry is { item: T; index: number; location: NormalizedLocation } => entry.location?.source === "registry" && Boolean(entry.location.city));
+  return items.map((item, index) => {
+    const canInfer = !item.location || CONTEXTUAL_PLACEHOLDER.test(item.location.trim());
+    if (item.shape === "route" || !canInfer) return { ...item };
+    const nearby = anchors.filter((anchor) => {
+      if (item.localDate && anchor.item.localDate) {
+        if (Math.abs(anchor.index - index) > 2) return false;
+      } else if (Math.abs(anchor.index - index) <= 2) {
+        return true;
+      } else {
+        return false;
+      }
+      const target = Date.parse(`${item.localDate}T00:00:00Z`);
+      const candidate = Date.parse(`${anchor.item.localDate}T00:00:00Z`);
+      return Math.abs(target - candidate) <= 24 * 60 * 60 * 1000;
+    });
+    const cities = [...new Set(nearby.map((anchor) => anchor.location.city).filter((city): city is string => Boolean(city)))];
+    if (cities.length !== 1) return { ...item };
+    const cityEntry = LOCATION_REGISTRY.find((entry) => entry.kind === "city" && entry.city === cities[0]);
+    if (!cityEntry) return { ...item };
+    const evidence = nearby.map((anchor) => `sourceLine:${anchor.item.sourceLine ?? anchor.index + 1}`);
+    return {
+      ...item,
+      canonicalId: cityEntry.canonicalId,
+      city: cityEntry.city,
+      region: cityEntry.region,
+      country: cityEntry.country,
+      macroRegion: cityEntry.macroRegion,
+      locationSource: "registry",
+      locationConfidence: "high",
+      locationProvenance: "context_inferred",
+      locationInferenceEvidence: evidence,
+      locationResolverVersion: CONTEXT_LOCATION_RESOLVER_VERSION,
+    };
+  });
+}
+import type { ExtractedTripItem } from "./domain.ts";

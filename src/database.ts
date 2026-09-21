@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { normalizeItemLocations } from "./location-normalization.ts";
+import { LOCATION_REGISTRY_VERSION, normalizeItemLocations } from "./location-normalization.ts";
 
 export type SqlValue = string | number | null;
 
@@ -456,15 +456,15 @@ export class TravelDatabase {
   }
 
   private backfillLocationNormalization(table: "proposals" | "trip_items"): void {
-    const columns = ["city", "region", "country", "macro_region", "location_source", "location_confidence", "location_canonical_id", "origin_city", "origin_region", "origin_country", "origin_macro_region", "origin_canonical_id", "destination_city", "destination_region", "destination_country", "destination_macro_region", "destination_canonical_id"];
+    const columns = ["city", "region", "country", "macro_region", "location_source", "location_confidence", "location_canonical_id", "location_provenance", "location_inference_evidence", "location_resolver_version", "origin_city", "origin_region", "origin_country", "origin_macro_region", "origin_canonical_id", "destination_city", "destination_region", "destination_country", "destination_macro_region", "destination_canonical_id"];
     const existing = this.connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     for (const column of columns) if (!existing.some((entry) => entry.name === column)) this.connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
     const rows = this.connection.prepare(`SELECT id, location, origin, destination FROM ${table}`).all() as Array<{ id: string; location: string | null; origin: string | null; destination: string | null }>;
-    const update = this.connection.prepare(`UPDATE ${table} SET city = ?, region = ?, country = ?, macro_region = ?, location_source = ?, location_confidence = ?, location_canonical_id = ?, origin_city = ?, origin_region = ?, origin_country = ?, origin_macro_region = ?, origin_canonical_id = ?, destination_city = ?, destination_region = ?, destination_country = ?, destination_macro_region = ?, destination_canonical_id = ? WHERE id = ?`);
+    const update = this.connection.prepare(`UPDATE ${table} SET city = ?, region = ?, country = ?, macro_region = ?, location_source = ?, location_confidence = ?, location_canonical_id = ?, location_provenance = COALESCE(location_provenance, ?), location_inference_evidence = COALESCE(location_inference_evidence, ?), location_resolver_version = COALESCE(location_resolver_version, ?), origin_city = ?, origin_region = ?, origin_country = ?, origin_macro_region = ?, origin_canonical_id = ?, destination_city = ?, destination_region = ?, destination_country = ?, destination_macro_region = ?, destination_canonical_id = ? WHERE id = ?`);
     for (const row of rows) {
       const normalized = normalizeItemLocations(row);
       const location = normalized.location; const origin = normalized.origin; const destination = normalized.destination;
-      update.run(location?.city ?? null, location?.region ?? null, location?.country ?? null, location?.macroRegion ?? null, location?.source ?? null, location?.confidence ?? null, location?.canonicalId ?? null, origin?.city ?? null, origin?.region ?? null, origin?.country ?? null, origin?.macroRegion ?? null, origin?.canonicalId ?? null, destination?.city ?? null, destination?.region ?? null, destination?.country ?? null, destination?.macroRegion ?? null, destination?.canonicalId ?? null, row.id);
+      update.run(location?.city ?? null, location?.region ?? null, location?.country ?? null, location?.macroRegion ?? null, location?.source ?? null, location?.confidence ?? null, location?.canonicalId ?? null, location?.source === "registry" ? "registry" : null, null, location?.source === "registry" ? LOCATION_REGISTRY_VERSION : null, origin?.city ?? null, origin?.region ?? null, origin?.country ?? null, origin?.macroRegion ?? null, origin?.canonicalId ?? null, destination?.city ?? null, destination?.region ?? null, destination?.country ?? null, destination?.macroRegion ?? null, destination?.canonicalId ?? null, row.id);
     }
   }
 }

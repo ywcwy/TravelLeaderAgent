@@ -45,6 +45,9 @@ export interface ExtractedTripItem {
   originTimezone?: string;
   destinationTimezone?: string;
   location?: string;
+  locationProvenance?: "explicit" | "registry" | "context_inferred" | "unresolved";
+  locationInferenceEvidence?: string[];
+  locationResolverVersion?: string;
   canonicalId?: string;
   originCanonicalId?: string;
   destinationCanonicalId?: string;

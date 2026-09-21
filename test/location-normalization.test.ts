@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeLocation, normalizeItemLocations, resolveLocationCandidates } from "../src/location-normalization.ts";
+import { inferContextualLocations, normalizeLocation, normalizeItemLocations, resolveLocationCandidates } from "../src/location-normalization.ts";
 import { TravelDatabase } from "../src/database.ts";
 import { TravelService } from "../src/travel-service.ts";
+import type { ExtractedTripItem } from "../src/domain.ts";
 
 test("normalizes known aliases to city, region, country, and macro region", () => {
   assert.deepEqual(normalizeLocation("Lower Antelope Canyon"), { canonicalId: "landmark:lower-antelope-canyon-page-us", canonicalName: "Lower Antelope Canyon", kind: "landmark", city: "Page", region: "Arizona", country: "United States", macroRegion: "US-West", source: "registry", confidence: "high" });
@@ -16,6 +17,14 @@ test("uses complete aliases and exposes ambiguity candidates", () => {
   assert.equal(normalizeLocation("Pageant venue")?.source, "unresolved");
   assert.equal(resolveLocationCandidates("Springfield").status, "ambiguous");
   assert.deepEqual(resolveLocationCandidates("Springfield").candidates?.map((candidate) => candidate.canonicalId), ["city:springfield-il-us", "city:springfield-mo-us"]);
+});
+
+test("does not leak a city anchor to unrelated distant items", () => {
+  const items: ExtractedTripItem[] = [
+    { kind: "activity", kinds: ["activity"], shape: "point", shapeSource: "explicit", title: "Page stop", status: "provisional", localDate: "2026-10-01", location: "Page" },
+    { kind: "activity", kinds: ["activity"], shape: "point", shapeSource: "explicit", title: "Unrelated", status: "provisional", localDate: "2026-10-10", location: undefined },
+  ];
+  assert.equal(inferContextualLocations(items)[1]?.city, undefined);
 });
 
 test("normalizes route endpoints independently and preserves unknowns", () => {
@@ -57,5 +66,22 @@ test("re-normalizes existing rows idempotently without creating records", () => 
   assert.equal(second.changed, 0);
   assert.equal(proposal?.canonicalId, "city:las-vegas-us");
   assert.equal((db.connection.prepare("SELECT COUNT(*) AS count FROM proposals WHERE trip_id = ?").get(trip.id) as { count: number }).count, before);
+  db.close();
+});
+
+test("context-aware re-normalization fills a placeholder from an explicit nearby city", () => {
+  const db = new TravelDatabase(":memory:");
+  const service = new TravelService(db, "admin");
+  const group = service.createTravelGroup("admin", "context-group", "Context Group");
+  const trip = service.createActiveTrip("admin", group.id, "Context Trip", "UTC");
+  service.addMember("admin", trip.id, "owner", "Owner", "owner");
+  const imported = service.importMarkdown(trip.id, "- [provisional] Stay | 2026-10-01 | Page\n- [provisional] Breakfast | 2026-10-02 | 住宿", { idempotencyKey: "context-renormalize-test" });
+  const before = service.getProposal(trip.id, imported.proposalIds[1]!);
+  assert.equal(before?.canonicalId, undefined);
+  const result = service.renormalizeTripLocations(trip.id, { contextual: true });
+  const after = service.getProposal(trip.id, imported.proposalIds[1]!);
+  assert.equal(result.changed, 1);
+  assert.equal(after?.canonicalId, "city:page-us");
+  assert.equal(after?.locationProvenance, "context_inferred");
   db.close();
 });
