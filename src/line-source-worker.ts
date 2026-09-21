@@ -151,7 +151,8 @@ export class LineSourceWorker {
       const routed = validateQueryRouterResult(await this.queryRouter!.route({ text: event.text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
       if (routed.intent === "itinerary_query") {
         telemetry({ intent: routed.intent, selectedTool: "search_itinerary", outcome: "completed" });
-        return renderItineraryQuery(this.travel.queryTrip(event.tripId, event.userId, routed.overview ? {} : routed.filter!), { notesRequested: routed.notesRequested });
+        const query = routed.overview ? {} : routed.filter!;
+        return renderItineraryQuery(this.travel.queryTrip(event.tripId, event.userId, query), { notesRequested: routed.notesRequested, displayAlias: routed.overview ? undefined : routed.filter?.location });
       }
       if (routed.intent === "itinerary_input") { telemetry({ intent: routed.intent, outcome: "completed" }); return null; }
       if (routed.intent === "clarification") { telemetry({ intent: routed.intent, selectedTool: "clarify_query", outcome: "completed" }); return routed.question; }

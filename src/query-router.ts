@@ -135,7 +135,7 @@ const routerInstructions = [
 const routerJsonSchema = {
   type: "object",
   additionalProperties: false,
-    required: ["intent", "filter", "overview", "question", "message", "notesRequested"],
+  required: ["intent", "filter", "overview", "question", "message", "notesRequested"],
   properties: {
     intent: { type: "string", enum: ["itinerary_query", "itinerary_input", "clarification", "unsupported_action"] },
     filter: { type: ["object", "null"], additionalProperties: false, required: ["date", "timeWindow", "location", "origin", "destination", "status", "kind"], properties: { date: { type: ["string", "null"] }, timeWindow: { type: ["string", "null"], enum: ["morning", "afternoon", "evening", "night", null] }, location: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, status: { type: ["string", "null"], enum: ["confirmed", "pending", null] }, kind: { type: ["string", "null"], enum: ["flight", "lodging", "rental_car", "transport", "meal", "activity", "shopping", "meeting", "other", null] } } },

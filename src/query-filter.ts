@@ -1,4 +1,5 @@
 import { timeWindows, tripItemKinds, type ItineraryQuery } from "./domain.ts";
+import { parseItineraryKindMention } from "./itinerary-kinds.ts";
 
 export interface QueryFilterAdapter {
   interpret(input: { text: string; tripTimezone: string; currentDate: string }): unknown | Promise<unknown>;
@@ -52,8 +53,7 @@ export function validateQueryFilter(value: unknown): Pick<ItineraryQuery, "date"
 }
 
 function parseKind(text: string): ItineraryQuery["kind"] | undefined {
-  if (/逛街|購物|购物|買東西|买东西|shopping|shop(?:ping)?/iu.test(text)) return "shopping";
-  return undefined;
+  return parseItineraryKindMention(text);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }

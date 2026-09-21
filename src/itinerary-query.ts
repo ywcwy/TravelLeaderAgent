@@ -1,5 +1,7 @@
 import type { ItineraryQuery, ItineraryQueryResult, TimeWindow, TripItemKind } from "./domain.ts";
 import { formatLocalDateTime } from "./timezone.ts";
+import { parseItineraryKind } from "./itinerary-kinds.ts";
+import { displayLocationAlias } from "./location-alias.ts";
 
 export type ParsedItineraryMessage = { type: "query"; query: ItineraryQuery } | { type: "help" } | null;
 
@@ -69,13 +71,14 @@ export function parseItineraryMessage(text: string): ParsedItineraryMessage {
   return { type: "query", query: { location: rest } };
 }
 
-export function renderItineraryQuery(result: ItineraryQueryResult, options: { notesRequested?: boolean } = {}): string {
+export function renderItineraryQuery(result: ItineraryQueryResult, options: { notesRequested?: boolean; displayAlias?: string } = {}): string {
   const lines = [`${result.trip.title}｜${result.trip.status === "active" ? "Active" : "Archived"} Trip`];
-  if (result.confirmed.length) lines.push(`Confirmed：${result.confirmed.map((item) => formatItem(item, "confirmed")).join("、")}`);
-  if (result.pending.length) lines.push(`Pending：${result.pending.map((item) => `${item.id} ${formatItem(item, "pending")}`).join("、")}`);
+  if (result.confirmed.length) lines.push(`Confirmed：${result.confirmed.map((item) => formatItem(item, "confirmed", options.displayAlias)).join("、")}`);
+  if (result.pending.length) lines.push(`Pending：${result.pending.map((item) => `${item.id} ${formatItem(item, "pending", options.displayAlias)}`).join("、")}`);
   if (result.openDecisions.length) lines.push(`Open Decision：${result.openDecisions.map((decision) => `${decision.id} ${decision.title}`).join("、")}`);
   if (result.issues.length) lines.push(`Review Issues：${result.issues.length} 筆`);
-  if (options.notesRequested && [...result.confirmed, ...result.pending].every((item) => !item.notes)) lines.push("注意事項：行程未記錄注意事項");
+  const matchedItems = [...result.confirmed, ...result.pending];
+  if (options.notesRequested && matchedItems.length > 0 && matchedItems.every((item) => !item.notes)) lines.push("注意事項：行程未記錄注意事項");
   if (result.sources.length) lines.push(`Source 原文：${result.sources.map((source) => `${source.id}｜${source.content}`).join("\n")}`);
   if (result.nextPageToken) lines.push(`下一頁：查詢繼續 ${result.nextPageToken}`);
   if (lines.length === 1) return `${lines[0]}\n查無符合條件的行程資料。`;
@@ -84,22 +87,16 @@ export function renderItineraryQuery(result: ItineraryQueryResult, options: { no
 
 export const itineraryQueryHelp = "可用查詢：查詢行程、查詢 2026-10-01 下午 Page、查詢 confirmed、查詢 pending、查詢歷史 <Trip ID>、查詢繼續 Q-XXXXXXXX。";
 
-function formatItem(item: { title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string; origin?: string; destination?: string; notes?: string }, status: "confirmed" | "pending"): string {
+function formatItem(item: { title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string; origin?: string; destination?: string; notes?: string }, status: "confirmed" | "pending", displayAlias?: string): string {
   const time = item.startsAt ? `｜${item.timezone ? formatLocalDateTime(item.startsAt, item.timezone) : item.startsAt}` : item.localDate ? `｜${item.localDate}${item.timeWindow ? ` ${item.timeWindow}` : ""}` : item.timeWindow ? `｜${item.timeWindow}` : "";
   const endpointZones = item.originTimezone || item.destinationTimezone ? `｜${item.originTimezone ?? item.timezone ?? "?"} → ${item.destinationTimezone ?? item.timezone ?? "?"}` : "";
-  const place = item.origin && item.destination ? `｜Route: ${item.origin} → ${item.destination}` : item.location ? `｜${item.location}` : "";
+  const place = item.origin && item.destination ? `｜Route: ${displayLocationAlias(item.origin, displayAlias)} → ${displayLocationAlias(item.destination, displayAlias)}` : item.location ? `｜${displayLocationAlias(item.location, displayAlias)}` : "";
   const notes = item.notes ? `｜備註: ${item.notes}` : "";
   return `${item.title}${time}${place}｜${status}${notes}${item.timezone ? `｜${item.timezone}` : ""}${endpointZones}${item.timezoneSource === "fallback" ? "｜timezone fallback" : ""}`;
 }
 
 function parseKind(value: string): TripItemKind | undefined {
-  const aliases: Record<string, TripItemKind> = {
-    flight: "flight", 航班: "flight", lodging: "lodging", 住宿: "lodging", 飯店: "lodging", hotel: "lodging",
-    rental_car: "rental_car", 租車: "rental_car", transport: "transport", 交通: "transport", meal: "meal", 餐: "meal",
-    activity: "activity", 活動: "activity", shopping: "shopping", 購物: "shopping", 购物: "shopping", 逛街: "shopping", 買東西: "shopping", 买东西: "shopping", meeting: "meeting", 會議: "meeting",
-    other: "other",
-  };
-  return aliases[value.toLocaleLowerCase()];
+  return parseItineraryKind(value);
 }
 
 function parseFixedQueryFilter(value: string): ItineraryQuery | null {

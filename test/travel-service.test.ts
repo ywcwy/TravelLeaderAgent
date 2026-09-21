@@ -219,6 +219,9 @@ test("renders a clear no-recorded-notes result for a notes query", () => {
   service.importMarkdown(tripId, "- [provisional] 馬蹄灣 | 2026-10-02T12:30:00-07:00 | Horseshoe Bend | | timezone=America/Phoenix", { idempotencyKey: "query:no-notes" });
   const result = service.queryTrip(tripId, "system-admin", { location: "馬蹄灣" });
   assert.match(renderItineraryQuery(result, { notesRequested: true }), /行程未記錄注意事項/);
+  assert.match(renderItineraryQuery(result, { displayAlias: "馬蹄灣" }), /馬蹄灣/);
+  const empty = service.queryTrip(tripId, "system-admin", { location: "不存在的地點" });
+  assert.doesNotMatch(renderItineraryQuery(empty, { notesRequested: true }), /行程未記錄注意事項/);
   db.close();
 });
 

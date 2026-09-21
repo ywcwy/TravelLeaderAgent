@@ -17,5 +17,20 @@ export function normalizeLocationQuery(value: string): string {
 }
 
 export function normalizeItineraryQuery(query: ItineraryQuery): ItineraryQuery {
-  return query.location ? { ...query, location: normalizeLocationQuery(query.location) } : query;
+  return {
+    ...query,
+    ...(query.location ? { location: normalizeLocationQuery(query.location) } : {}),
+    ...(query.origin ? { origin: normalizeLocationQuery(query.origin) } : {}),
+    ...(query.destination ? { destination: normalizeLocationQuery(query.destination) } : {}),
+  };
+}
+
+export function displayLocationAlias(value: string, preferredAlias?: string): string {
+  if (!preferredAlias) return value;
+  const canonical = normalizeLocationQuery(preferredAlias).toLocaleLowerCase();
+  return normalizeLocationQuery(value).toLocaleLowerCase() === canonical ? preferredAlias : value;
+}
+
+export function locationValueMatchesQuery(value: string, queryLocation: string): boolean {
+  return normalizeLocationQuery(value).toLocaleLowerCase().includes(queryLocation.toLocaleLowerCase());
 }
