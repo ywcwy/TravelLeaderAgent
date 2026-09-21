@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0017
+---
+
 # LINE inbound events require explicit intent and signed delivery
 
 Phase 2 accepts only signed LINE Webhook Events from a LINE group. Text message

@@ -68,20 +68,34 @@ test("routes a mentioned group text event to its Active Trip", () => {
   db.close();
 });
 
-test("ignores plain-text mentions without native LINE metadata", () => {
+test("routes unmentioned group text to its Active Trip", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
   const group = service.createTravelGroup("system-admin", "C-line-group-plain", "測試群組");
-  service.createActiveTrip("system-admin", group.id, "測試旅程", "Asia/Taipei");
+  const trip = service.createActiveTrip("system-admin", group.id, "測試旅程", "Asia/Taipei");
   const handler = new LineWebhookHandler(service, { channelSecret: "test-secret", officialAccountUserId: "U-bot" });
-  const rawBody = JSON.stringify({ events: [{ type: "message", source: { type: "group", groupId: "C-line-group-plain", userId: "U-member" }, message: { type: "text", id: "message-plain", text: "@leaderAgent hello" }, replyToken: "reply-token" }] });
+  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JUNMENTIONED000000000000000", source: { type: "group", groupId: "C-line-group-plain", userId: "U-member" }, message: { type: "text", id: "message-plain", text: "10/16 住宿 Monterey" }, replyToken: "reply-token" }] });
   const signature = createHmac("sha256", "test-secret").update(rawBody).digest("base64");
 
   const response = handler.handle({ rawBody, signature });
 
   assert.equal(response.status, 200);
-  assert.equal(response.acceptedEvents.length, 0);
-  assert.equal(response.replies.length, 0);
+  assert.deepEqual(response.acceptedEvents.map((event) => ({ eventId: event.eventId, tripId: event.tripId, text: event.text })), [{ eventId: "01JUNMENTIONED000000000000000", tripId: trip.id, text: "10/16 住宿 Monterey" }]);
+  assert.deepEqual(response.replies, [{ replyToken: "reply-token", text: "已收到，等待 Decision Owner 確認。" }]);
+  db.close();
+});
+
+test("keeps the no Active Trip policy for unmentioned group text", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const handler = new LineWebhookHandler(service, { channelSecret: "test-secret", officialAccountUserId: "U-bot" });
+  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JNOACTIVE000000000000000000", replyToken: "reply-token", source: { type: "group", groupId: "C-no-active", userId: "U-member" }, message: { type: "text", id: "message-no-active", text: "10/16 住宿 Monterey" } }] });
+  const signature = createHmac("sha256", "test-secret").update(rawBody).digest("base64");
+
+  const response = handler.handle({ rawBody, signature });
+
+  assert.deepEqual(response.acceptedEvents, []);
+  assert.deepEqual(response.replies, [{ replyToken: "reply-token", text: "此群組目前尚未設定 Active Trip。" }]);
   db.close();
 });
 

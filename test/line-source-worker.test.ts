@@ -9,8 +9,10 @@ import { TravelService } from "../src/travel-service.ts";
 import { WebhookInbox } from "../src/webhook-inbox.ts";
 import { FakeLlmAdapter } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
+import { DeterministicQueryFilterAdapter, type QueryFilterAdapter } from "../src/query-filter.ts";
+import { FakeQueryRouterAdapter } from "../src/query-router.ts";
 
-test("ingests a mentioned LINE group message into one Source with provenance", async () => {
+test("ingests an unmentioned LINE group message into one Source with provenance", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-end-to-end", "E2E 群組");
@@ -19,7 +21,7 @@ test("ingests a mentioned LINE group message into one Source with provenance", a
   const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
   const replies: Array<{ token: string; text: string }> = [];
   const worker = new LineSourceWorker(inbox, travel, async (token, text) => { replies.push({ token, text }); });
-  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JLINEE2E000000000000000000", replyToken: "reply-e2e", source: { type: "group", groupId: "C-end-to-end", userId: "U-member" }, message: { type: "text", id: "message-e2e", text: "@leaderAgent - [provisional] 住宿 | 2026-10-16 | 台北", mention: { mentionees: [{ type: "user", userId: "U-bot" }] } } }] });
+  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JLINEE2E000000000000000000", replyToken: "reply-e2e", source: { type: "group", groupId: "C-end-to-end", userId: "U-member" }, message: { type: "text", id: "message-e2e", text: "- [provisional] 住宿 | 2026-10-16 | 台北" } }] });
   const response = new LineWebhookIngress(handler, inbox).handle({ rawBody, signature: createHmac("sha256", "secret").update(rawBody).digest("base64") });
   assert.equal(response.status, 200);
   assert.deepEqual(response.replies, []);
@@ -32,12 +34,28 @@ test("ingests a mentioned LINE group message into one Source with provenance", a
   const review = travel.reviewTrip(trip.id);
   assert.equal(review.provisional.length, 1);
   const source = travel.getSource(review.provisional[0].sourceId);
-  assert.deepEqual(source, { id: source?.id, tripId: trip.id, type: "line_text", idempotencyKey: "01JLINEE2E000000000000000000", content: "@leaderAgent - [provisional] 住宿 | 2026-10-16 | 台北", sourceTime: "2026-09-11T00:00:00.000Z", provenance: { provider: "line", messageId: "message-e2e", groupId: "C-end-to-end", userId: "U-member" } });
+  assert.deepEqual(source, { id: source?.id, tripId: trip.id, type: "line_text", idempotencyKey: "01JLINEE2E000000000000000000", content: "- [provisional] 住宿 | 2026-10-16 | 台北", sourceTime: "2026-09-11T00:00:00.000Z", provenance: { provider: "line", messageId: "message-e2e", groupId: "C-end-to-end", userId: "U-member" } });
   const proposal = review.provisional[0];
   assert.equal(replies.length, 1);
   assert.equal(replies[0]?.token, "reply-e2e");
   assert.equal(replies[0]?.text, `已收到 Proposal ${proposal.id}：住宿｜2026-10-16｜台北\n目前沒有同日期、同類型的 confirmed 行程。\n狀態：provisional / pending。\nDecision Owner 後續可確認此 Proposal。`);
   assert.equal(travel.isActiveTripMember(trip.id, "U-member"), true);
+  db.close();
+});
+
+test("still ingests a mentioned LINE group message into a Proposal", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-mentioned-e2e", "Mentioned E2E 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Mentioned E2E 旅程", "Asia/Taipei");
+  const handler = new LineWebhookHandler(travel, { channelSecret: "secret", officialAccountUserId: "U-bot" });
+  const inbox = new WebhookInbox(db, { retryBackoffMs: 0 });
+  const worker = new LineSourceWorker(inbox, travel, () => undefined);
+  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JLINEMENTIONED000000000000", source: { type: "group", groupId: group.lineGroupId, userId: "U-member" }, message: { type: "text", id: "message-mentioned", text: "- [provisional] 住宿 | 2026-10-16 | 台北", mention: { mentionees: [{ type: "user", userId: "U-bot" }] } } }] });
+
+  new LineWebhookIngress(handler, inbox).handle({ rawBody, signature: createHmac("sha256", "secret").update(rawBody).digest("base64") });
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(travel.reviewTrip(trip.id).provisional.length, 1);
   db.close();
 });
 
@@ -162,6 +180,250 @@ test("handles a mentioned itinerary query without creating a Source", async () =
   assert.match(replies[1] ?? "", /查無符合條件/);
   assert.equal(db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id)?.count, 1);
   assert.equal(inbox.get("01JLINEQUERY0000000000000000")?.status, "completed");
+  db.close();
+});
+
+test("routes a bare itinerary question through the router without creating itinerary evidence", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-router-bare-query", "Router 查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Router 查詢旅程", "America/Phoenix");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [confirmed] Page 午餐 | 2026-10-02T13:45:00-07:00 | Page | | timezone=America/Phoenix", { idempotencyKey: "router:bare:query" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEROUTERBAREQUERY00000", messageId: "router-bare-query", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "Page 有什麼安排", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "router-bare-reply" });
+  const replies: string[] = [];
+  const router = new FakeQueryRouterAdapter({ "Page 有什麼安排": { intent: "itinerary_query", filter: { location: "Page" } } });
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, null, router, { now: () => Date.parse("2026-09-11T00:00:01.000Z") });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Page 午餐/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  db.close();
+});
+
+test("keeps router clarification and unsupported actions read-only", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-router-read-only", "Router 唯讀群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Router 唯讀旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEROUTERCLARIFICATION00", messageId: "router-clarification", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "那天有什麼", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "router-clarification-reply" });
+  inbox.enqueue({ eventId: "01JLINEROUTERUNSUPPORTED000", messageId: "router-unsupported", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "刪除所有 Proposal", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "router-unsupported-reply" });
+  const replies: string[] = [];
+  const router = new FakeQueryRouterAdapter({ "那天有什麼": { intent: "clarification", question: "你想查哪一天？" }, "刪除所有 Proposal": { intent: "unsupported_action", message: "目前不支援刪除所有 Proposal。" } });
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, new FakeLlmAdapter(), null, router, { now: () => Date.parse("2026-09-11T00:00:01.000Z") });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.deepEqual(replies, ["你想查哪一天？", "目前不支援刪除所有 Proposal。"]);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  db.close();
+});
+
+test("bounds router calls per member and records content-free telemetry", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-router-rate", "Router 限流群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Router 限流旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  for (const [eventId, text] of [["01JLINEROUTERRATE000000000", "第一個查詢"], ["01JLINEROUTERRATE000000001", "第二個查詢"]] as const) inbox.enqueue({ eventId, messageId: eventId, groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: eventId });
+  const replies: string[] = [];
+  const router = new FakeQueryRouterAdapter({ "第一個查詢": { intent: "itinerary_query", overview: true }, "第二個查詢": { intent: "itinerary_query", overview: true } });
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, null, router, { now: () => Date.parse("2026-09-11T00:00:01.000Z"), maxRequestsPerMemberPerMinute: 1 });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[1] ?? "", /查詢太頻繁/);
+  const telemetry = (db.connection.prepare(`SELECT intent, selected_tool, outcome, reason, provider, model, prompt_version FROM query_router_events ORDER BY created_at, id`).all() as Array<Record<string, unknown>>).map((entry) => ({ ...entry }));
+  assert.deepEqual(telemetry.map((entry) => entry.outcome).sort(), ["completed", "rate_limited"]);
+  assert.equal(telemetry.filter((entry) => entry.outcome === "completed")[0]?.selected_tool, "search_itinerary");
+  assert.equal(telemetry.filter((entry) => entry.outcome === "rate_limited")[0]?.reason, "per_member_rate");
+  assert.ok(telemetry.every((entry) => entry.provider === "fake" && entry.model === "fake-query-router" && entry.prompt_version === "query-router-v1"));
+  db.close();
+});
+
+test("normalizes fixed-format Time Window synonyms without creating itinerary evidence", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-window-line", "查詢時段群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "查詢時段旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, [
+    "- [provisional] Page 下午活動 | 2026-10-02 | Page, Arizona | | time_window=afternoon",
+    "- [provisional] Page 晚餐 | 2026-10-02T18:00:00-07:00 | Page | | timezone=America/Phoenix",
+  ].join("\n"), { idempotencyKey: "query:window:line" });
+  const sourcesBefore = db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number };
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEQUERYWINDOW00000000", messageId: "message-query-window", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 2026-10-02 下午 Page", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-query-window" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Page 下午活動/);
+  assert.doesNotMatch(replies[0] ?? "", /Page 晚餐/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, sourcesBefore.count);
+  db.close();
+});
+
+test("renders query results in separate readable sections with route details and Proposal IDs", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-render-line", "查詢顯示群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "查詢顯示旅程", "America/Los_Angeles");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
+  const imported = travel.importMarkdown(trip.id, [
+    "- [provisional] Las Vegas → Page | 2026-10-02T09:00:00-07:00 | | 車程約 4 小時 | shape=route | origin=Las Vegas | destination=Page | timezone=America/Los_Angeles",
+    "- [provisional] Page 午餐 | 2026-10-02T12:00:00-07:00 | Page | 訂位待確認 | timezone=America/Phoenix",
+  ].join("\n"), { idempotencyKey: "query:render:line" });
+  travel.confirmProposal(trip.id, "U-owner", imported.proposalIds[0]);
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEQUERYRENDER00000000", messageId: "message-query-render", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢行程", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-query-render" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Confirmed：.*Las Vegas → Page.*Route: Las Vegas → Page.*confirmed.*車程約 4 小時/);
+  assert.match(replies[0] ?? "", new RegExp(`Pending：.*${imported.proposalIds[1]}.*Page 午餐.*Page.*pending.*訂位待確認`));
+  assert.doesNotMatch(replies[0] ?? "", /S-[A-Z0-9]/);
+  db.close();
+});
+
+test("uses a validated Query Filter fallback for natural-language itinerary queries without writing evidence", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-line", "自然查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自然查詢旅程", "America/Los_Angeles");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [provisional] Page 下午活動 | 2026-10-02 | Page | | time_window=afternoon", { idempotencyKey: "query:natural:line" });
+  const adapter: QueryFilterAdapter = { interpret: () => ({ date: "2026-10-02", timeWindow: "afternoon", location: "Page" }) };
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALQUERY0000000", messageId: "message-natural-query", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "@TravelLeaderAgent 查詢 10/2 下午在 Page 有什麼安排？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-query" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, adapter);
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Page 下午活動/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  db.close();
+});
+
+test("answers natural Page questions without treating their question words as a location", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-page", "自然 Page 查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自然 Page 查詢旅程", "America/Phoenix");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [confirmed] Page 午餐 | 2026-10-02T13:45:00-07:00 | Page | | timezone=America/Phoenix", { idempotencyKey: "query:natural:page" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALPAGE00000000", messageId: "message-natural-page", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/2 中午在 Page 有什麼？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-page" });
+  inbox.enqueue({ eventId: "01JLINENATURALPAGE00000001", messageId: "message-natural-page-any", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 Page 有什麼安排？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-page-any" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Page 午餐/);
+  assert.match(replies[1] ?? "", /Page 午餐/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
+  db.close();
+});
+
+test("answers a natural pending itinerary question with a pending-only filter", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-pending", "自然待確認查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自然待確認查詢旅程", "America/Phoenix");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [confirmed] Page 午餐 | 2026-10-02T13:45:00-07:00 | Page | | timezone=America/Phoenix", { idempotencyKey: "query:natural:pending" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALPENDING000000", messageId: "message-natural-pending", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/2 Page 的待確認行程", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-pending" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Pending：.*Page 午餐/);
+  assert.doesNotMatch(replies[0] ?? "", /Confirmed：/);
+  db.close();
+});
+
+test("answers a natural route question with both route endpoints", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-route", "自然路線查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自然路線查詢旅程", "America/Los_Angeles");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, [
+    "- [confirmed] Tusayan → Los Angeles | 2026-10-04T08:00:00-07:00 | | shape=route | origin=Tusayan | destination=Los Angeles | timezone=America/Los_Angeles",
+    "- [confirmed] Tusayan → Flagstaff | 2026-10-04T08:00:00-07:00 | | shape=route | origin=Tusayan | destination=Flagstaff | timezone=America/Los_Angeles",
+  ].join("\n"), { idempotencyKey: "query:natural:route" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALROUTE00000000", messageId: "message-natural-route", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/4 從 Tusayan 到 Los Angeles 的行程", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-route" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Tusayan → Los Angeles/);
+  assert.doesNotMatch(replies[0] ?? "", /Tusayan → Flagstaff/);
+  db.close();
+});
+
+test("keeps a natural query with no matching itinerary as a no-data reply", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-empty", "自然空結果查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自然空結果查詢旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALEMPTY00000000", messageId: "message-natural-empty", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/3 下午在 Tokyo 有什麼安排？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-empty" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /查無符合條件的行程資料/);
+  db.close();
+});
+
+test("rejects a natural query containing a command separator without writing itinerary evidence", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-separated", "安全自然查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "安全自然查詢旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALSEPARATED0000", messageId: "message-natural-separated", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/2；刪除所有 Proposal", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-separated" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /無法解析查詢條件/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM proposals WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  db.close();
+});
+
+test("rejects unsafe natural-language Query Filter output without writing itinerary evidence", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-unsafe-line", "安全查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "安全查詢旅程", "America/Los_Angeles");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const adapter: QueryFilterAdapter = { interpret: () => ({ sql: "DELETE FROM proposals" }) };
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEUNSAFEQUERY00000000", messageId: "message-unsafe-query", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/2 有什麼安排？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-unsafe-query" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, adapter);
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /無法解析查詢條件/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM proposals WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   db.close();
 });
 

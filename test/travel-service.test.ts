@@ -191,6 +191,72 @@ test("queries policy-permitted Active Trip records with stable filters", () => {
   db.close();
 });
 
+test("matches itinerary location aliases and Proposal Kinds without changing stored evidence", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-enriched-query");
+  service.ensureGroupMember(tripId, "member", "Member");
+  service.importMarkdown(tripId, [
+    "- [provisional] 馬蹄灣 | 2026-10-02T12:30:00-07:00 | Horseshoe Bend | | kinds=activity | timezone=America/Phoenix",
+    "- [provisional] 逛街 | 2026-10-03T10:00:00-07:00 | Las Vegas | | kinds=shopping | timezone=America/Los_Angeles",
+  ].join("\n"), { idempotencyKey: "query:enrichment" });
+
+  const locationResult = service.queryTrip(tripId, "member", { location: "馬蹄灣" });
+  assert.equal(locationResult.pending.length, 1);
+  assert.equal(locationResult.pending[0]?.title, "馬蹄灣");
+  const kindResult = service.queryTrip(tripId, "member", { kind: "shopping" });
+  assert.equal(kindResult.pending.length, 1);
+  assert.equal(kindResult.pending[0]?.title, "逛街");
+  const stored = service.reviewTrip(tripId).pending.find((item) => item.title === "馬蹄灣");
+  assert.equal(stored?.location, "Horseshoe Bend");
+  db.close();
+});
+
+test("renders a clear no-recorded-notes result for a notes query", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-notes-query");
+  service.importMarkdown(tripId, "- [provisional] 馬蹄灣 | 2026-10-02T12:30:00-07:00 | Horseshoe Bend | | timezone=America/Phoenix", { idempotencyKey: "query:no-notes" });
+  const result = service.queryTrip(tripId, "system-admin", { location: "馬蹄灣" });
+  assert.match(renderItineraryQuery(result, { notesRequested: true }), /行程未記錄注意事項/);
+  assert.match(renderItineraryQuery(result, { displayAlias: "馬蹄灣" }), /馬蹄灣/);
+  const empty = service.queryTrip(tripId, "system-admin", { location: "不存在的地點" });
+  assert.doesNotMatch(renderItineraryQuery(empty, { notesRequested: true }), /行程未記錄注意事項/);
+  db.close();
+});
+
+test("filters confirmed and pending itinerary entries by Time Window", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-query-time-window");
+  service.ensureGroupMember(tripId, "U-member", "Member");
+  service.addMember("system-admin", tripId, "U-owner", "Owner", "owner");
+  const imported = service.importMarkdown(tripId, [
+    "- [provisional] Page morning confirmed | 2026-10-02T09:00:00-07:00 | Page, Arizona | | timezone=America/Phoenix",
+    "- [provisional] Page afternoon confirmed | 2026-10-02T14:00:00-07:00 | Page, Arizona | | timezone=America/Phoenix",
+    "- [provisional] Page afternoon pending | 2026-10-02 | Page | | time_window=afternoon",
+    "- [provisional] Page evening pending | 2026-10-02T18:00:00-07:00 | Page | | timezone=America/Phoenix",
+  ].join("\n"), { idempotencyKey: "query:time-window" });
+  service.confirmProposal(tripId, "U-owner", imported.proposalIds[0]);
+  service.confirmProposal(tripId, "U-owner", imported.proposalIds[1]);
+
+  const all = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-02", timeWindow: "afternoon", location: "page" });
+  assert.deepEqual(all.confirmed.map((item) => item.title), ["Page afternoon confirmed"]);
+  assert.deepEqual(all.pending.map((item) => item.title), ["Page afternoon pending"]);
+
+  const pending = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-02", timeWindow: "afternoon", status: "pending" });
+  assert.deepEqual(pending.confirmed, []);
+  assert.deepEqual(pending.pending.map((item) => item.title), ["Page afternoon pending"]);
+  assert.deepEqual(pending.openDecisions, []);
+  assert.deepEqual(pending.issues, []);
+
+  const confirmedOnly = service.queryActiveTrip(tripId, "U-member", { status: "confirmed" });
+  assert.deepEqual(confirmedOnly.pending, []);
+  assert.deepEqual(confirmedOnly.openDecisions, []);
+  assert.deepEqual(confirmedOnly.issues, []);
+  db.close();
+});
+
 test("queries each timed item by its local date and renders timezone context", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
@@ -206,7 +272,7 @@ test("queries each timed item by its local date and renders timezone context", (
 
   const localDateResult = service.queryActiveTrip(tripId, "U-member", { date: "2026-10-01" });
   assert.deepEqual(localDateResult.pending.map((item) => item.title).sort(), ["Date-only Page", "Las Vegas evening", "Page lodging", "St George boundary", "Unknown fallback"].sort());
-  assert.equal(localDateResult.pending[0]?.title, "Date-only Page");
+  assert.equal(localDateResult.pending.at(-1)?.title, "Date-only Page");
   const rendered = renderItineraryQuery(localDateResult);
   assert.match(rendered, /America\/Los_Angeles/);
   assert.match(rendered, /America\/Phoenix/);
@@ -1049,6 +1115,11 @@ test("isolates Archived Trip queries, Source visibility, and pagination tokens",
   const lines = Array.from({ length: 12 }, (_, index) => `- [provisional] 行程 ${index + 1} | 2026-11-${String(index + 1).padStart(2, "0")} | Page | | timezone=Asia/Taipei`).join("\n");
   const imported = service.importMarkdown(tripId, lines, { idempotencyKey: "query:archive-pagination" });
   for (const proposalId of imported.proposalIds) service.confirmProposal(tripId, "owner", proposalId);
+  const defaultPage = service.queryTrip(tripId, "member", { date: "2026-11-01" });
+  assert.equal(defaultPage.confirmed.length, 1);
+  const overviewPage = service.queryTrip(tripId, "member", {});
+  assert.equal(overviewPage.confirmed.length, 8);
+  assert.ok(overviewPage.nextPageToken);
   const firstPage = service.queryTrip(tripId, "member", { pageSize: 3 });
   assert.equal(firstPage.confirmed.length, 3);
   assert.ok(firstPage.nextPageToken);

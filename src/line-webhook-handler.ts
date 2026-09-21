@@ -84,7 +84,6 @@ export class LineWebhookHandler {
     if (!groupId) return {};
     const trip = this.service.getActiveTripForLineGroup(groupId);
     if (!trip) return this.policyReply(event, "此群組目前尚未設定 Active Trip。");
-    if (!this.isMentioned(event.message)) return {};
     const userId = event.source.userId;
     if (!event.webhookEventId || !event.message.id || !userId) return {};
 
@@ -110,10 +109,6 @@ export class LineWebhookHandler {
 
   private policyReply(event: LineEvent, text: string): { reply?: LineReplyIntent } {
     return event.replyToken ? { reply: { replyToken: event.replyToken, text } } : {};
-  }
-
-  private isMentioned(message: LineTextMessage): boolean {
-    return message.mention?.mentionees?.some((mention) => mention.type === "user" && mention.userId === this.options.officialAccountUserId) ?? false;
   }
 
   private verifySignature(rawBody: string, signature: string): boolean {

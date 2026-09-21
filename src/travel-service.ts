@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
+import { locationValueMatchesQuery, normalizeItineraryQuery } from "./location-alias.ts";
 import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter, type LlmDocumentContext, type LlmDocumentSection } from "./extraction-draft.ts";
 import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftMissing, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
@@ -1099,32 +1100,35 @@ export class TravelService {
     if (!this.isTripMember(tripId, memberId) && memberId !== this.systemAdministratorId) throw new PermissionError("Only a Trip member can query itinerary data.");
     const policy = this.getTripAccessPolicy(tripId);
     const review = this.reviewTrip(tripId);
-    const pageSize = Math.min(Math.max(query.pageSize ?? 10, 1), 10);
+    const pageSize = Math.min(Math.max(query.pageSize ?? 8, 1), 8);
     const continuation = this.readQueryToken(query.continuationToken, tripId, memberId);
-    const effectiveQuery = continuation?.query ?? query;
+    const effectiveQuery = normalizeItineraryQuery(continuation?.query ?? query);
     const matches = (item: { id?: string; title: string; localDate?: string; startsAt?: string; endsAt?: string; timezone?: string; timezoneSource?: TimezoneSource; originTimezone?: string; destinationTimezone?: string; shape?: ProposalShape; location?: string; origin?: string; destination?: string; kinds: TripItemKind[] }) => {
       if (effectiveQuery.proposalId && item.id !== effectiveQuery.proposalId) return false;
       if (effectiveQuery.date && !overlapsLocalDate(item, effectiveQuery.date, trip.timezone)) return false;
-      if (effectiveQuery.location && ![item.location, item.origin, item.destination].some((value) => value?.toLocaleLowerCase().includes(effectiveQuery.location!.toLocaleLowerCase()))) return false;
+      if (effectiveQuery.timeWindow && !matchesTimeWindow(item, effectiveQuery.timeWindow, trip.timezone)) return false;
+      if (effectiveQuery.location && ![item.title, item.location, item.origin, item.destination].some((value) => value && locationValueMatchesQuery(value, effectiveQuery.location!))) return false;
+      if (effectiveQuery.origin && !item.origin?.toLocaleLowerCase().includes(effectiveQuery.origin.toLocaleLowerCase())) return false;
+      if (effectiveQuery.destination && !item.destination?.toLocaleLowerCase().includes(effectiveQuery.destination.toLocaleLowerCase())) return false;
       if (effectiveQuery.kind && !item.kinds.includes(effectiveQuery.kind)) return false;
       return true;
     };
-    const allConfirmed = effectiveQuery.pendingOnly || effectiveQuery.reviewIssuesOnly ? [] : review.confirmed.filter(matches).sort(compareScheduledItems);
-    const allPending = policy.memberCanViewPending && !effectiveQuery.reviewIssuesOnly ? review.pending.filter(matches).sort(compareScheduledItems) : [];
+    const allConfirmed = effectiveQuery.pendingOnly || effectiveQuery.status === "pending" || effectiveQuery.reviewIssuesOnly ? [] : review.confirmed.filter(matches).sort(compareScheduledItems);
+    const allPending = policy.memberCanViewPending && effectiveQuery.status !== "confirmed" && !effectiveQuery.reviewIssuesOnly ? review.pending.filter(matches).sort(compareScheduledItems) : [];
     const offset = continuation?.offset ?? 0;
     const combined = [...allConfirmed.map((item) => ({ type: "confirmed" as const, item })), ...allPending.map((item) => ({ type: "pending" as const, item }))].sort((left, right) => compareScheduledItems(left.item, right.item));
     const page = combined.slice(offset, offset + pageSize);
     const confirmed = page.filter((entry) => entry.type === "confirmed").map((entry) => entry.item) as TripItem[];
     const pending = page.filter((entry) => entry.type === "pending").map((entry) => entry.item) as Proposal[];
-    const hasItemFilter = Boolean(effectiveQuery.date || effectiveQuery.location || effectiveQuery.kind || effectiveQuery.proposalId);
-    const openDecisions = effectiveQuery.pendingOnly || effectiveQuery.reviewIssuesOnly ? [] : (this.db.connection.prepare(`SELECT * FROM decisions WHERE trip_id = ? AND status = 'open' ORDER BY title, id`).all(tripId) as unknown as DecisionRow[])
+    const hasItemFilter = Boolean(effectiveQuery.date || effectiveQuery.timeWindow || effectiveQuery.location || effectiveQuery.origin || effectiveQuery.destination || effectiveQuery.kind || effectiveQuery.proposalId);
+    const openDecisions = effectiveQuery.pendingOnly || effectiveQuery.status || effectiveQuery.reviewIssuesOnly ? [] : (this.db.connection.prepare(`SELECT * FROM decisions WHERE trip_id = ? AND status = 'open' ORDER BY title, id`).all(tripId) as unknown as DecisionRow[])
       .filter((decision) => {
         if (!hasItemFilter) return true;
         const options = (this.db.connection.prepare(`SELECT * FROM proposals WHERE trip_id = ? AND decision_id = ? AND proposal_status = 'pending'`).all(tripId, decision.id) as unknown as ProposalRow[]).map((row) => this.hydrateProposal(row));
         return options.some(matches);
       })
       .map(toDecision);
-    const issues = policy.memberCanViewReviewIssues && !effectiveQuery.pendingOnly ? review.issues.filter((issue) => {
+    const issues = policy.memberCanViewReviewIssues && !effectiveQuery.pendingOnly && !effectiveQuery.status ? review.issues.filter((issue) => {
       if (!hasItemFilter) return true;
       const related = review.pending.filter((proposal) => issue.proposalIds.includes(proposal.id));
       return related.some(matches);
@@ -1297,17 +1301,42 @@ function toDecision(row: DecisionRow): Decision {
   return { id: row.id, tripId: row.trip_id, title: row.title, status: row.status, selectedProposalId: row.selected_proposal_id, resolvedBy: row.resolved_by, resolvedAt: row.resolved_at, cancelledBy: row.cancelled_by, cancelledAt: row.cancelled_at };
 }
 
-function compareScheduledItems(left: { localDate?: string; startsAt?: string; title: string; id: string }, right: { localDate?: string; startsAt?: string; title: string; id: string }): number {
-  // Date-only values sort by their calendar date; values without any date sort last.
+function compareScheduledItems(left: { localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; originTimezone?: string; title: string; id: string }, right: { localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; originTimezone?: string; title: string; id: string }): number {
   const leftTime = scheduledSortTime(left);
   const rightTime = scheduledSortTime(right);
   return leftTime - rightTime || left.title.localeCompare(right.title) || left.id.localeCompare(right.id);
 }
 
-function scheduledSortTime(item: { localDate?: string; startsAt?: string }): number {
-  const value = item.startsAt && !isDateOnly(item.startsAt) ? item.startsAt : item.localDate ?? item.startsAt;
-  const parsed = value ? Date.parse(value) : Number.NaN;
-  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+function scheduledSortTime(item: { localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; originTimezone?: string }): number {
+  const timezone = item.timezone ?? item.originTimezone ?? "UTC";
+  const date = item.localDate ?? (item.startsAt ? localDate(item.startsAt, timezone) : undefined);
+  if (!date) return Number.POSITIVE_INFINITY;
+  const exactTime = item.startsAt && !isDateOnly(item.startsAt) ? localClockTime(item.startsAt, timezone) : undefined;
+  const windowOrder = item.timeWindow ? ({ morning: 1, afternoon: 2, evening: 3, night: 4 } as Record<string, number>)[item.timeWindow] ?? 5 : 5;
+  const timeOrder = exactTime === undefined || exactTime === null ? 1_000_000 + windowOrder : Math.round(exactTime * 10_000);
+  return Number(date.replaceAll("-", "")) * 10_000_000 + timeOrder;
+}
+
+function matchesTimeWindow(item: { startsAt?: string; timeWindow?: string; timezone?: string }, timeWindow: NonNullable<ItineraryQuery["timeWindow"]>, tripTimezone: string): boolean {
+  if (item.timeWindow === timeWindow) return true;
+  if (!item.startsAt || isDateOnly(item.startsAt)) return false;
+  const clockTime = localClockTime(item.startsAt, item.timezone ?? tripTimezone);
+  if (clockTime === null) return false;
+  if (clockTime < 12) return timeWindow === "morning";
+  if (clockTime < 17) return timeWindow === "afternoon";
+  if (clockTime < 21) return timeWindow === "evening";
+  return timeWindow === "night";
+}
+
+function localClockTime(value: string, timezone: string): number | null {
+  const offsetless = value.match(/^\d{4}-\d{2}-\d{2}T(\d{2}):(\d{2})/);
+  if (offsetless) return Number(offsetless[1]) + Number(offsetless[2]) / 60;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  return Number.isFinite(hour) && Number.isFinite(minute) ? hour + minute / 60 : null;
 }
 
 function overlapsLocalDate(item: { localDate?: string; startsAt?: string; endsAt?: string; timezone?: string; originTimezone?: string; destinationTimezone?: string; shape?: ProposalShape }, date: string, tripTimezone: string): boolean {
