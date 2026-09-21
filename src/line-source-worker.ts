@@ -3,8 +3,10 @@ import type { WebhookInbox, WebhookInboxEvent } from "./webhook-inbox.ts";
 import { draftCommandHelp, itineraryQueryHelp, parseDraftCommand, parseItineraryMessage, parseProposalCommand, proposalCommandHelp, renderItineraryQuery } from "./itinerary-query.ts";
 import { guardExtractionDraftPayload, renderExtractionDraft, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
 import { QueryFilterValidationError, type QueryFilterAdapter, validateQueryFilter } from "./query-filter.ts";
+import { QueryRouterValidationError, type QueryRouterAdapter, validateQueryRouterResult } from "./query-router.ts";
 
 export type LineReplySender = (replyToken: string, text: string) => void | Promise<void>;
+export interface QueryRouterWorkerOptions { now?: () => number; replyDeadlineMs?: number; maxRequestsPerMemberPerMinute?: number; }
 
 function needsNaturalLanguageFallback(text: string): boolean {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "");
@@ -17,10 +19,16 @@ export class LineSourceWorker {
   private readonly reply: LineReplySender;
   private readonly extractionAdapter: LlmAdapter | null;
   private readonly queryFilterAdapter: QueryFilterAdapter | null;
+  private readonly queryRouter: QueryRouterAdapter | null;
+  private readonly routerNow: () => number;
+  private readonly replyDeadlineMs: number;
+  private readonly maxRequestsPerMemberPerMinute: number;
+  private readonly routerRequests = new Map<string, number[]>();
+  private readonly routerInFlight = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private active: Promise<"processed" | "failed" | "idle"> | null = null;
   private processing = false;
-  constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender, extractionAdapter: LlmAdapter | null = null, queryFilterAdapter: QueryFilterAdapter | null = null) { this.inbox = inbox; this.travel = travel; this.reply = reply; this.extractionAdapter = extractionAdapter; this.queryFilterAdapter = queryFilterAdapter; }
+  constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender, extractionAdapter: LlmAdapter | null = null, queryFilterAdapter: QueryFilterAdapter | null = null, queryRouter: QueryRouterAdapter | null = null, routerOptions: QueryRouterWorkerOptions = {}) { this.inbox = inbox; this.travel = travel; this.reply = reply; this.extractionAdapter = extractionAdapter; this.queryFilterAdapter = queryFilterAdapter; this.queryRouter = queryRouter; this.routerNow = routerOptions.now ?? Date.now; this.replyDeadlineMs = routerOptions.replyDeadlineMs ?? 20_000; this.maxRequestsPerMemberPerMinute = routerOptions.maxRequestsPerMemberPerMinute ?? 6; }
 
   start(intervalMs = 1_000): void {
     if (this.timer) return;
@@ -76,6 +84,14 @@ export class LineSourceWorker {
           this.inbox.complete(event.eventId, leaseToken);
           return "processed" as const;
         }
+        if (this.queryRouter) {
+          const routed = await this.routerReply(event);
+          if (routed !== null) {
+            if (replyToken) await this.reply(replyToken, routed);
+            this.inbox.complete(event.eventId, leaseToken);
+            return "processed" as const;
+          }
+        }
         if (parsed) {
           if (replyToken) {
             const targetTripId = parsed.type === "query" && parsed.query.tripId ? parsed.query.tripId : event.tripId;
@@ -111,6 +127,44 @@ export class LineSourceWorker {
         return "failed" as const;
       }
     })();
+  }
+
+  private async routerReply(event: WebhookInboxEvent): Promise<string | null> {
+    const startedAt = this.routerNow();
+    const metadata = this.queryRouter!.metadata;
+    const telemetry = (outcome: Omit<import("./webhook-inbox.ts").QueryRouterTelemetry, "latencyMs" | "provider" | "model" | "promptVersion">): void => this.inbox.recordQueryRouterEvent(event.eventId, { ...outcome, latencyMs: this.routerNow() - startedAt, provider: metadata?.provider, model: metadata?.model, promptVersion: metadata?.promptVersion });
+    if (startedAt - Date.parse(event.receivedAt) > this.replyDeadlineMs) {
+      telemetry({ outcome: "deadline_exceeded", reason: "reply_deadline" });
+      return "目前回覆時間已超過限制，請再傳一次訊息。";
+    }
+    const recent = (this.routerRequests.get(event.userId) ?? []).filter((at) => startedAt - at < 60_000);
+    if (recent.length >= this.maxRequestsPerMemberPerMinute || this.routerInFlight.has(event.userId)) {
+      telemetry({ outcome: "rate_limited", reason: recent.length >= this.maxRequestsPerMemberPerMinute ? "per_member_rate" : "per_member_in_flight" });
+      return "查詢太頻繁，請稍後再試。";
+    }
+    recent.push(startedAt);
+    this.routerRequests.set(event.userId, recent);
+    this.routerInFlight.add(event.userId);
+    try {
+      const trip = this.travel.getTrip(event.tripId);
+      if (!trip) throw new Error("Trip not found.");
+      const routed = validateQueryRouterResult(await this.queryRouter!.route({ text: event.text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
+      if (routed.intent === "itinerary_query") {
+        telemetry({ intent: routed.intent, selectedTool: "search_itinerary", outcome: "completed" });
+        return renderItineraryQuery(this.travel.queryTrip(event.tripId, event.userId, routed.overview ? {} : routed.filter!));
+      }
+      if (routed.intent === "itinerary_input") { telemetry({ intent: routed.intent, outcome: "completed" }); return null; }
+      if (routed.intent === "clarification") { telemetry({ intent: routed.intent, selectedTool: "clarify_query", outcome: "completed" }); return routed.question; }
+      telemetry({ intent: routed.intent, outcome: "rejected", reason: "unsupported_action" });
+      return routed.message ?? "這個操作目前不支援。若要查詢行程，請直接描述日期、地點或路線。";
+    } catch (error) {
+      if (error instanceof QueryRouterValidationError || error instanceof QueryFilterValidationError) {
+        telemetry({ outcome: "failed", reason: "invalid_router_output" });
+        return "目前無法理解這個查詢，請換個方式描述日期、地點或路線。";
+      }
+      telemetry({ outcome: "failed", reason: "router_failure" });
+      return "目前無法處理這個訊息，請稍後再試；也可以用日期、地點或路線描述要查的行程。";
+    } finally { this.routerInFlight.delete(event.userId); }
   }
 
   private async queryReply(event: WebhookInboxEvent, tripId: string, query: import("./domain.ts").ItineraryQuery): Promise<string> {

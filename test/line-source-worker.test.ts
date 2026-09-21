@@ -10,6 +10,7 @@ import { WebhookInbox } from "../src/webhook-inbox.ts";
 import { FakeLlmAdapter } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
 import { DeterministicQueryFilterAdapter, type QueryFilterAdapter } from "../src/query-filter.ts";
+import { FakeQueryRouterAdapter } from "../src/query-router.ts";
 
 test("ingests an unmentioned LINE group message into one Source with provenance", async () => {
   const db = new TravelDatabase();
@@ -179,6 +180,70 @@ test("handles a mentioned itinerary query without creating a Source", async () =
   assert.match(replies[1] ?? "", /查無符合條件/);
   assert.equal(db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id)?.count, 1);
   assert.equal(inbox.get("01JLINEQUERY0000000000000000")?.status, "completed");
+  db.close();
+});
+
+test("routes a bare itinerary question through the router without creating itinerary evidence", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-router-bare-query", "Router 查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Router 查詢旅程", "America/Phoenix");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [confirmed] Page 午餐 | 2026-10-02T13:45:00-07:00 | Page | | timezone=America/Phoenix", { idempotencyKey: "router:bare:query" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEROUTERBAREQUERY00000", messageId: "router-bare-query", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "Page 有什麼安排", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "router-bare-reply" });
+  const replies: string[] = [];
+  const router = new FakeQueryRouterAdapter({ "Page 有什麼安排": { intent: "itinerary_query", filter: { location: "Page" } } });
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, null, router, { now: () => Date.parse("2026-09-11T00:00:01.000Z") });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Page 午餐/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  db.close();
+});
+
+test("keeps router clarification and unsupported actions read-only", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-router-read-only", "Router 唯讀群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Router 唯讀旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEROUTERCLARIFICATION00", messageId: "router-clarification", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "那天有什麼", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "router-clarification-reply" });
+  inbox.enqueue({ eventId: "01JLINEROUTERUNSUPPORTED000", messageId: "router-unsupported", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "刪除所有 Proposal", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "router-unsupported-reply" });
+  const replies: string[] = [];
+  const router = new FakeQueryRouterAdapter({ "那天有什麼": { intent: "clarification", question: "你想查哪一天？" }, "刪除所有 Proposal": { intent: "unsupported_action", message: "目前不支援刪除所有 Proposal。" } });
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, new FakeLlmAdapter(), null, router, { now: () => Date.parse("2026-09-11T00:00:01.000Z") });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.deepEqual(replies, ["你想查哪一天？", "目前不支援刪除所有 Proposal。"]);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  db.close();
+});
+
+test("bounds router calls per member and records content-free telemetry", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-router-rate", "Router 限流群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Router 限流旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  for (const [eventId, text] of [["01JLINEROUTERRATE000000000", "第一個查詢"], ["01JLINEROUTERRATE000000001", "第二個查詢"]] as const) inbox.enqueue({ eventId, messageId: eventId, groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: eventId });
+  const replies: string[] = [];
+  const router = new FakeQueryRouterAdapter({ "第一個查詢": { intent: "itinerary_query", overview: true }, "第二個查詢": { intent: "itinerary_query", overview: true } });
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, null, router, { now: () => Date.parse("2026-09-11T00:00:01.000Z"), maxRequestsPerMemberPerMinute: 1 });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[1] ?? "", /查詢太頻繁/);
+  const telemetry = (db.connection.prepare(`SELECT intent, selected_tool, outcome, reason, provider, model, prompt_version FROM query_router_events ORDER BY created_at, id`).all() as Array<Record<string, unknown>>).map((entry) => ({ ...entry }));
+  assert.deepEqual(telemetry, [
+    { intent: "itinerary_query", selected_tool: "search_itinerary", outcome: "completed", reason: null, provider: "fake", model: "fake-query-router", prompt_version: "query-router-v1" },
+    { intent: null, selected_tool: null, outcome: "rate_limited", reason: "per_member_rate", provider: "fake", model: "fake-query-router", prompt_version: "query-router-v1" },
+  ]);
   db.close();
 });
 

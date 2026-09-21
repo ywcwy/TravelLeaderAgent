@@ -13,7 +13,14 @@ const required = {
 
 test("loads required runtime configuration without exposing secrets", () => {
   const config = loadRuntimeConfig({ ...required, TRAVEL_DATABASE_PATH: "./data/test.sqlite", PORT: "3100", WEBHOOK_BODY_LIMIT_BYTES: "128" });
-  assert.deepEqual(config, { channelSecret: "secret", channelAccessToken: "access", officialAccountUserId: "U-bot", systemAdministratorId: "system-admin", databasePath: "./data/test.sqlite", port: 3100, bodyLimitBytes: 128, requestTimeoutMs: 10_000, workerPollMs: 1_000, extractionAdapter: "fake", openAiApiKey: null, openAiModel: "gpt-4o-mini", openAiTimeoutMs: 20_000, xAiApiKey: null, xAiModel: "grok-4.6", xAiTimeoutMs: 20_000 });
+  assert.deepEqual(config, { channelSecret: "secret", channelAccessToken: "access", officialAccountUserId: "U-bot", systemAdministratorId: "system-admin", databasePath: "./data/test.sqlite", port: 3100, bodyLimitBytes: 128, requestTimeoutMs: 10_000, workerPollMs: 1_000, extractionAdapter: "fake", queryRouterAdapter: "disabled", queryRouterModel: "gpt-4o-mini", queryRouterTimeoutMs: 8_000, openAiApiKey: null, openAiModel: "gpt-4o-mini", openAiTimeoutMs: 20_000, xAiApiKey: null, xAiModel: "grok-4.6", xAiTimeoutMs: 20_000 });
+});
+
+test("configures the query router independently from extraction", () => {
+  const router = loadRuntimeConfig({ ...required, TRAVEL_QUERY_ROUTER_ADAPTER: "openai", TRAVEL_QUERY_ROUTER_MODEL: "router-model", TRAVEL_QUERY_ROUTER_TIMEOUT_MS: "8000", OPENAI_API_KEY: "test-key" });
+  assert.deepEqual({ adapter: router.queryRouterAdapter, model: router.queryRouterModel, timeout: router.queryRouterTimeoutMs }, { adapter: "openai", model: "router-model", timeout: 8000 });
+  assert.throws(() => loadRuntimeConfig({ ...required, TRAVEL_QUERY_ROUTER_ADAPTER: "openai" }), /OPENAI_API_KEY/);
+  assert.throws(() => loadRuntimeConfig({ ...required, TRAVEL_QUERY_ROUTER_ADAPTER: "unsupported" }), /TRAVEL_QUERY_ROUTER_ADAPTER/);
 });
 
 test("selects the Fake extraction adapter for local runtime", () => {

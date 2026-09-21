@@ -270,6 +270,21 @@ export class TravelDatabase {
         duplicate_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS query_router_events (
+        id TEXT PRIMARY KEY,
+        inbox_event_id TEXT NOT NULL REFERENCES webhook_inbox_events(event_id),
+        intent TEXT,
+        selected_tool TEXT,
+        outcome TEXT NOT NULL,
+        reason TEXT,
+        latency_ms INTEGER NOT NULL,
+        provider TEXT,
+        model TEXT,
+        prompt_version TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS query_router_events_inbox ON query_router_events(inbox_event_id, created_at);
     `);
     const tripItemColumns = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
     if (!tripItemColumns.some((column) => column.name === "replacement_for_item_id")) {

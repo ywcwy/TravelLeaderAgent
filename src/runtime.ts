@@ -11,6 +11,7 @@ import { TravelService } from "./travel-service.ts";
 import { WebhookInbox } from "./webhook-inbox.ts";
 import { FakeLlmAdapter, OpenAiCompatibleLlmAdapter, TimeoutFallbackLlmAdapter, type LlmAdapter } from "./extraction-draft.ts";
 import { DeterministicQueryFilterAdapter } from "./query-filter.ts";
+import { FakeQueryRouterAdapter, OpenAiCompatibleQueryRouter, type QueryRouterAdapter } from "./query-router.ts";
 
 export interface RuntimePoller { start(): void | Promise<void>; stop(): void | Promise<void>; }
 
@@ -34,7 +35,7 @@ export class TravelLeaderRuntime {
     const ingress = new LineWebhookIngress(handler, this.inbox);
     const replyClient = new LineReplyApiClient(config.channelAccessToken);
     const extractionAdapter = createExtractionAdapter(config, environment);
-    this.worker = new LineSourceWorker(this.inbox, this.service, (replyToken, text) => replyClient.reply(replyToken, text), extractionAdapter, new DeterministicQueryFilterAdapter());
+    this.worker = new LineSourceWorker(this.inbox, this.service, (replyToken, text) => replyClient.reply(replyToken, text), extractionAdapter, new DeterministicQueryFilterAdapter(), createQueryRouter(config));
     this.poller = poller ?? { start: () => this.worker.start(config.workerPollMs), stop: () => this.worker.stop() };
     this.server = new LineWebhookHttpServer({ ingress, bodyLimitBytes: config.bodyLimitBytes, requestTimeoutMs: config.requestTimeoutMs, health: () => this.database.connection.prepare("SELECT 1").get() !== undefined });
   }
@@ -48,6 +49,15 @@ export class TravelLeaderRuntime {
     await this.poller?.stop();
     this.database.close();
   }
+}
+
+export function createQueryRouter(config: RuntimeConfig): QueryRouterAdapter | null {
+  if (config.queryRouterAdapter === "disabled") return null;
+  if (config.queryRouterAdapter === "fake") return new FakeQueryRouterAdapter();
+  return new OpenAiCompatibleQueryRouter({
+    apiKey: config.queryRouterAdapter === "grok" ? config.xAiApiKey! : config.openAiApiKey!, model: config.queryRouterModel, timeoutMs: config.queryRouterTimeoutMs,
+    endpoint: config.queryRouterAdapter === "grok" ? "https://api.x.ai/v1/responses" : "https://api.openai.com/v1/responses",
+  });
 }
 
 export function createExtractionAdapter(config: RuntimeConfig, environment: Record<string, string | undefined> = process.env): LlmAdapter {
