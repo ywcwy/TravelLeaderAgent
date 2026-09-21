@@ -45,6 +45,9 @@ export interface ExtractedTripItem {
   originTimezone?: string;
   destinationTimezone?: string;
   location?: string;
+  canonicalId?: string;
+  originCanonicalId?: string;
+  destinationCanonicalId?: string;
   city?: string;
   region?: string;
   country?: string;

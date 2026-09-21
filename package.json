@@ -12,6 +12,7 @@
     "retry:trip-chunk": "node --env-file-if-exists=.env --experimental-strip-types src/retry-import-chunk.ts",
     "confirm:trip-draft": "node --env-file-if-exists=.env --experimental-strip-types src/confirm-trip-draft.ts",
     "review:trip": "node --env-file-if-exists=.env --experimental-strip-types src/review-trip.ts",
+    "normalize:locations": "node --env-file-if-exists=.env --experimental-strip-types src/renormalize-locations.ts",
     "setup:trip": "node --env-file-if-exists=.env --experimental-strip-types src/setup-trip.ts",
     "reset:trip": "node --env-file-if-exists=.env --experimental-strip-types src/reset-trip.ts",
     "start": "node --env-file-if-exists=.env --experimental-strip-types src/start.ts"

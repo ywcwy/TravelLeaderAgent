@@ -4,6 +4,8 @@ import { draftCommandHelp, itineraryQueryHelp, parseDraftCommand, parseItinerary
 import { guardExtractionDraftPayload, renderExtractionDraft, validateExtractionDraftPayload, type LlmAdapter } from "./extraction-draft.ts";
 import { QueryFilterValidationError, type QueryFilterAdapter, validateQueryFilter } from "./query-filter.ts";
 import { QueryRouterValidationError, type QueryRouterAdapter, validateQueryRouterResult } from "./query-router.ts";
+import { formatLocationCandidates } from "./location-normalization.ts";
+import { LocationAmbiguityError } from "./location-alias.ts";
 
 export type LineReplySender = (replyToken: string, text: string) => void | Promise<void>;
 export interface QueryRouterWorkerOptions { now?: () => number; replyDeadlineMs?: number; maxRequestsPerMemberPerMinute?: number; }
@@ -145,7 +147,12 @@ export class LineSourceWorker {
       if (routed.intent === "itinerary_query") {
         telemetry({ intent: routed.intent, selectedTool: "search_itinerary", outcome: "completed" });
         const query = routed.overview ? {} : routed.filter!;
-        return renderItineraryQuery(this.travel.queryTrip(event.tripId, event.userId, query), { notesRequested: routed.notesRequested, displayAlias: routed.overview ? undefined : routed.filter?.location });
+        try {
+          return renderItineraryQuery(this.travel.queryTrip(event.tripId, event.userId, query), { notesRequested: routed.notesRequested, displayAlias: routed.overview ? undefined : routed.filter?.location });
+        } catch (error) {
+          if (error instanceof LocationAmbiguityError) return `地點可能有多個候選，請補充州／地區或國家：\n${formatLocationCandidates(error.candidates)}`;
+          throw error;
+        }
       }
       if (routed.intent === "itinerary_input") {
         const fallback = await this.fallbackNaturalQuery(event);
@@ -217,11 +224,17 @@ export class LineSourceWorker {
         const text = event.text.trim().replace(/^@[^\s]+\s*/, "");
         return await this.renderAdapterQuery(event, tripId, text);
       } catch (error) {
+        if (error instanceof LocationAmbiguityError) return `地點可能有多個候選，請補充州／地區或國家：\n${formatLocationCandidates(error.candidates)}`;
         if (error instanceof QueryFilterValidationError) return `無法解析查詢條件，請使用固定格式，例如：${itineraryQueryHelp}`;
         return `目前無法解析自然語言查詢，請使用固定格式，例如：${itineraryQueryHelp}`;
       }
     }
-    return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, query), { displayAlias: query.location });
+    try {
+      return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, query), { displayAlias: query.location });
+    } catch (error) {
+      if (error instanceof LocationAmbiguityError) return `地點可能有多個候選，請補充州／地區或國家：\n${formatLocationCandidates(error.candidates)}`;
+      throw error;
+    }
   }
 
   private async draftReply(event: WebhookInboxEvent, command: Exclude<ReturnType<typeof parseDraftCommand>, null>): Promise<string> {

@@ -1,7 +1,11 @@
 export type LocationConfidence = "high" | "low";
 export type LocationSource = "registry" | "unresolved";
+export type LocationKind = "city" | "landmark" | "business" | "address-like";
 
 export interface NormalizedLocation {
+  canonicalId?: string;
+  canonicalName?: string;
+  kind?: LocationKind;
   city?: string;
   region?: string;
   country?: string;
@@ -10,70 +14,80 @@ export interface NormalizedLocation {
   confidence: LocationConfidence;
 }
 
-export type LocationQueryDimension = { city?: string; region?: string; country?: string; macroRegion?: string };
-
-export interface LocationAlias { alias: string; canonical: string; }
-
-export const LOCATION_ALIASES: readonly LocationAlias[] = [
-  { alias: "馬蹄灣", canonical: "Horseshoe Bend" },
-  { alias: "羚羊谷", canonical: "Lower Antelope Canyon" },
-  { alias: "下羚羊谷", canonical: "Lower Antelope Canyon" },
-  { alias: "大峽谷", canonical: "Grand Canyon" },
-  { alias: "Mather Point", canonical: "Mather Point" },
-  { alias: "Yavapai Point", canonical: "Yavapai Point" },
-  { alias: "Desert View Watchtower", canonical: "Desert View Watchtower" },
-  { alias: "Cameron Trading Post", canonical: "Cameron Trading Post" },
-  { alias: "Mr. D'z Route 66 Diner", canonical: "Mr. D'z Route 66 Diner" },
-  { alias: "McCarran Rent-A-Car Center", canonical: "McCarran Rent-A-Car Center" },
-];
-
-interface RegistryEntry extends Required<Omit<NormalizedLocation, "source" | "confidence">> {
-  aliases: string[];
+export interface LocationRegistryEntry {
+  canonicalId: string;
+  canonicalName: string;
+  aliases: readonly string[];
+  kind: LocationKind;
+  city?: string;
+  region?: string;
+  country?: string;
+  macroRegion?: string;
 }
 
-const ENTRIES: RegistryEntry[] = [
-  { aliases: ["page", "羚羊谷", "下羚羊谷", "lower antelope canyon", "horseshoe bend", "馬蹄灣"], city: "Page", region: "Arizona", country: "United States", macroRegion: "US-West" },
-  { aliases: ["grand canyon village", "grand canyon", "大峽谷村", "大峽谷"], city: "Grand Canyon Village", region: "Arizona", country: "United States", macroRegion: "US-West" },
-  { aliases: ["mather point", "yavapai point", "desert view watchtower", "market plaza", "hermits route"], city: "Grand Canyon Village", region: "Arizona", country: "United States", macroRegion: "US-West" },
-  { aliases: ["cameron trading post", "cameron"], city: "Cameron", region: "Arizona", country: "United States", macroRegion: "US-West" },
-  { aliases: ["tusayan"], city: "Tusayan", region: "Arizona", country: "United States", macroRegion: "US-West" },
-  { aliases: ["las vegas", "vegas", "拉斯維加斯"], city: "Las Vegas", region: "Nevada", country: "United States", macroRegion: "US-West" },
-  { aliases: ["barstow"], city: "Barstow", region: "California", country: "United States", macroRegion: "US-West" },
-  { aliases: ["ludlow"], city: "Ludlow", region: "California", country: "United States", macroRegion: "US-West" },
-  { aliases: ["seligman"], city: "Seligman", region: "Arizona", country: "United States", macroRegion: "US-West" },
-  { aliases: ["kingman", "mr. d'z route 66 diner"], city: "Kingman", region: "Arizona", country: "United States", macroRegion: "US-West" },
-  { aliases: ["los angeles"], city: "Los Angeles", region: "California", country: "United States", macroRegion: "US-West" },
-  { aliases: ["mccarran rent-a-car center", "harry reid rent-a-car center", "mccarran"], city: "Las Vegas", region: "Nevada", country: "United States", macroRegion: "US-West" },
+export const LOCATION_REGISTRY_VERSION = "location-registry-v1";
+
+export const LOCATION_REGISTRY: readonly LocationRegistryEntry[] = [
+  { canonicalId: "city:page-us", canonicalName: "Page", aliases: ["page", "佩吉"], kind: "city", city: "Page", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "landmark:lower-antelope-canyon-page-us", canonicalName: "Lower Antelope Canyon", aliases: ["lower antelope canyon", "下羚羊谷", "羚羊谷"], kind: "landmark", city: "Page", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "landmark:horseshoe-bend-page-us", canonicalName: "Horseshoe Bend", aliases: ["horseshoe bend", "馬蹄灣"], kind: "landmark", city: "Page", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "city:grand-canyon-village-us", canonicalName: "Grand Canyon Village", aliases: ["grand canyon village", "grand canyon", "大峽谷村", "大峽谷"], kind: "city", city: "Grand Canyon Village", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "landmark:mather-point-grand-canyon-us", canonicalName: "Mather Point", aliases: ["mather point"], kind: "landmark", city: "Grand Canyon Village", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "landmark:yavapai-point-grand-canyon-us", canonicalName: "Yavapai Point", aliases: ["yavapai point"], kind: "landmark", city: "Grand Canyon Village", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "landmark:desert-view-watchtower-grand-canyon-us", canonicalName: "Desert View Watchtower", aliases: ["desert view watchtower"], kind: "landmark", city: "Grand Canyon Village", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "landmark:market-plaza-grand-canyon-us", canonicalName: "Market Plaza", aliases: ["market plaza"], kind: "landmark", city: "Grand Canyon Village", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "landmark:hermits-route-grand-canyon-us", canonicalName: "Hermits Route", aliases: ["hermits route", "紅線 hermits route"], kind: "landmark", city: "Grand Canyon Village", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "city:cameron-us", canonicalName: "Cameron", aliases: ["cameron"], kind: "city", city: "Cameron", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "business:cameron-trading-post-us", canonicalName: "Cameron Trading Post", aliases: ["cameron trading post"], kind: "business", city: "Cameron", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "city:tusayan-us", canonicalName: "Tusayan", aliases: ["tusayan"], kind: "city", city: "Tusayan", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "city:las-vegas-us", canonicalName: "Las Vegas", aliases: ["las vegas", "vegas", "拉斯維加斯"], kind: "city", city: "Las Vegas", region: "Nevada", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "city:barstow-us", canonicalName: "Barstow", aliases: ["barstow"], kind: "city", city: "Barstow", region: "California", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "city:ludlow-us", canonicalName: "Ludlow", aliases: ["ludlow"], kind: "city", city: "Ludlow", region: "California", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "city:seligman-us", canonicalName: "Seligman", aliases: ["seligman"], kind: "city", city: "Seligman", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "city:kingman-us", canonicalName: "Kingman", aliases: ["kingman"], kind: "city", city: "Kingman", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "business:mr-dz-route-66-diner-kingman-us", canonicalName: "Mr. D'z Route 66 Diner", aliases: ["mr. d'z route 66 diner", "mr d'z route 66 diner"], kind: "business", city: "Kingman", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "city:los-angeles-us", canonicalName: "Los Angeles", aliases: ["los angeles", "la"], kind: "city", city: "Los Angeles", region: "California", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "business:mccarran-rent-a-car-center-las-vegas-us", canonicalName: "McCarran Rent-A-Car Center", aliases: ["mccarran rent-a-car center", "harry reid rent-a-car center", "mccarran"], kind: "business", city: "Las Vegas", region: "Nevada", country: "United States", macroRegion: "US-West" },
+  { canonicalId: "city:springfield-il-us", canonicalName: "Springfield", aliases: ["springfield"], kind: "city", city: "Springfield", region: "Illinois", country: "United States", macroRegion: "US" },
+  { canonicalId: "city:springfield-mo-us", canonicalName: "Springfield", aliases: ["springfield"], kind: "city", city: "Springfield", region: "Missouri", country: "United States", macroRegion: "US" },
 ];
 
+export type LocationQueryDimension = { city?: string; region?: string; country?: string; macroRegion?: string };
+export interface LocationAlias { alias: string; canonical: string; }
+export const LOCATION_ALIASES: readonly LocationAlias[] = LOCATION_REGISTRY.flatMap((entry) => entry.aliases.map((alias) => ({ alias, canonical: entry.canonicalName })));
+
 const QUERY_DIMENSIONS: Array<{ aliases: string[]; value: LocationQueryDimension }> = [
-  { aliases: ["grand canyon village"], value: { city: "Grand Canyon Village" } },
-  { aliases: ["page", "佩吉"], value: { city: "Page" } },
-  { aliases: ["las vegas", "vegas", "拉斯維加斯"], value: { city: "Las Vegas" } },
-  { aliases: ["tusayan"], value: { city: "Tusayan" } },
-  { aliases: ["arizona", "亞利桑那"], value: { region: "Arizona" } },
-  { aliases: ["nevada", "內華達"], value: { region: "Nevada" } },
-  { aliases: ["california", "加州", "加利福尼亞"], value: { region: "California" } },
-  { aliases: ["united states", "美國", "美利堅"], value: { country: "United States" } },
+  { aliases: ["grand canyon village"], value: { city: "Grand Canyon Village" } }, { aliases: ["page", "佩吉"], value: { city: "Page" } },
+  { aliases: ["las vegas", "vegas", "拉斯維加斯"], value: { city: "Las Vegas" } }, { aliases: ["tusayan"], value: { city: "Tusayan" } },
+  { aliases: ["arizona", "亞利桑那"], value: { region: "Arizona" } }, { aliases: ["nevada", "內華達"], value: { region: "Nevada" } },
+  { aliases: ["california", "加州", "加利福尼亞"], value: { region: "California" } }, { aliases: ["united states", "美國", "美利堅"], value: { country: "United States" } },
   { aliases: ["美西", "美國西部", "us-west"], value: { macroRegion: "US-West" } },
 ];
 
-function clean(value: string): string { return value.trim().toLocaleLowerCase(); }
+function clean(value: string): string { return value.trim().toLocaleLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, " "); }
+function matchesPhrase(value: string, alias: string): boolean {
+  const haystack = clean(value); const needle = clean(alias); if (!needle) return false;
+  if (/[^\x00-\x7F]/.test(needle)) return haystack.includes(needle);
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i").test(haystack);
+}
+function toNormalized(entry: LocationRegistryEntry): NormalizedLocation { return { canonicalId: entry.canonicalId, canonicalName: entry.canonicalName, kind: entry.kind, city: entry.city, region: entry.region, country: entry.country, macroRegion: entry.macroRegion, source: "registry", confidence: "high" }; }
 
+export type LocationResolution = { status: "resolved"; location: NormalizedLocation; candidates?: readonly NormalizedLocation[] } | { status: "ambiguous"; candidates: readonly NormalizedLocation[] } | { status: "unresolved"; candidates?: readonly NormalizedLocation[] };
+export function resolveLocationCandidates(value: string | null | undefined): LocationResolution {
+  if (!value?.trim()) return { status: "unresolved" };
+  const matched = LOCATION_REGISTRY.flatMap((entry) => entry.aliases.filter((alias) => matchesPhrase(value, alias)).map((alias) => ({ entry, alias })));
+  const matches = matched.filter(({ alias }) => !matched.some((other) => other.alias !== alias && other.alias.length > alias.length && matchesPhrase(other.alias, alias))).map(({ entry }) => entry);
+  const uniqueMatches = [...new Map(matches.map((entry) => [entry.canonicalId, entry])).values()];
+  if (uniqueMatches.length === 0) return { status: "unresolved" }; if (uniqueMatches.length > 1) return { status: "ambiguous", candidates: uniqueMatches.map(toNormalized) }; return { status: "resolved", location: toNormalized(uniqueMatches[0]) };
+}
 export function normalizeLocation(value: string | null | undefined): NormalizedLocation | null {
-  if (!value?.trim()) return null;
-  const normalized = clean(value);
-  const entry = ENTRIES.find((candidate) => candidate.aliases.some((alias) => normalized === alias || normalized.includes(alias)));
-  if (!entry) return { source: "unresolved", confidence: "low" };
-  return { city: entry.city, region: entry.region, country: entry.country, macroRegion: entry.macroRegion, source: "registry", confidence: "high" };
+  if (!value?.trim()) return null; const resolution = resolveLocationCandidates(value); return resolution.status === "resolved" ? resolution.location : { source: "unresolved", confidence: "low" };
 }
-
 export function normalizeLocationQueryDimension(value: string): LocationQueryDimension | null {
-  const normalized = clean(value);
-  return QUERY_DIMENSIONS.find((entry) => entry.aliases.some((alias) => normalized.includes(alias)))?.value ?? null;
+  const normalized = clean(value); return QUERY_DIMENSIONS.find((entry) => entry.aliases.some((alias) => matchesPhrase(normalized, alias)))?.value ?? null;
 }
-
 export function normalizeItemLocations(item: { location?: string | null; origin?: string | null; destination?: string | null }): { location?: NormalizedLocation; origin?: NormalizedLocation; destination?: NormalizedLocation } {
-  const location = normalizeLocation(item.location); const origin = normalizeLocation(item.origin); const destination = normalizeLocation(item.destination);
-  return { ...(location ? { location } : {}), ...(origin ? { origin } : {}), ...(destination ? { destination } : {}) };
+  const location = normalizeLocation(item.location); const origin = normalizeLocation(item.origin); const destination = normalizeLocation(item.destination); return { ...(location ? { location } : {}), ...(origin ? { origin } : {}), ...(destination ? { destination } : {}) };
 }
+export function formatLocationCandidates(candidates: readonly NormalizedLocation[]): string { return candidates.map((candidate) => `- ${candidate.canonicalName}｜${candidate.city ?? ""}｜${candidate.region ?? ""}｜${candidate.country ?? ""}`).join("\n"); }
