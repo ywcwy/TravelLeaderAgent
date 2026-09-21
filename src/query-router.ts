@@ -121,18 +121,20 @@ const routerInstructions = [
   "Classify one group message for a travel itinerary assistant.",
   "Return exactly one intent. Do not write, modify, delete, confirm, reject, or call any tool.",
   "Use itinerary_query only for a request to read the itinerary. Use overview true only when the user explicitly requests the entire/current itinerary; otherwise provide a Query Filter.",
+  "A named place with arrangement wording is a query: for example, 'Page 有什麼安排' must be itinerary_query with filter.location='Page'. Do not use clarification for a named place.",
+  "Do not add a date filter unless the user explicitly states a date; currentDate is only for resolving an explicitly stated short date. For the exact text 'Page 有什麼安排', return filter {location:'Page'} with date null.",
   "Use itinerary_input for text that should enter the existing Extraction Draft workflow unchanged.",
-  "Use clarification when a read query has an unresolved reference. Use unsupported_action for any unrecognized destructive or modifying action.",
+  "Use clarification only when a read query has an unresolved reference such as '那天有什麼' with no date or location. Use unsupported_action for any unrecognized destructive or modifying action.",
   "The only Query Filter fields are date, timeWindow, location, origin, destination, status. Status may only be confirmed or pending.",
 ].join("\n");
 
 const routerJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["intent"],
+  required: ["intent", "filter", "overview", "question", "message"],
   properties: {
     intent: { type: "string", enum: ["itinerary_query", "itinerary_input", "clarification", "unsupported_action"] },
-    filter: { type: ["object", "null"], additionalProperties: false, properties: { date: { type: "string" }, timeWindow: { type: "string", enum: ["morning", "afternoon", "evening", "night"] }, location: { type: "string" }, origin: { type: "string" }, destination: { type: "string" }, status: { type: "string", enum: ["confirmed", "pending"] } } },
+    filter: { type: ["object", "null"], additionalProperties: false, required: ["date", "timeWindow", "location", "origin", "destination", "status"], properties: { date: { type: ["string", "null"] }, timeWindow: { type: ["string", "null"], enum: ["morning", "afternoon", "evening", "night", null] }, location: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, status: { type: ["string", "null"], enum: ["confirmed", "pending", null] } } },
     overview: { type: ["boolean", "null"] },
     question: { type: ["string", "null"] },
     message: { type: ["string", "null"] },

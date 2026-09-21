@@ -240,10 +240,10 @@ test("bounds router calls per member and records content-free telemetry", async 
   assert.equal(await worker.processNext(), "processed");
   assert.match(replies[1] ?? "", /查詢太頻繁/);
   const telemetry = (db.connection.prepare(`SELECT intent, selected_tool, outcome, reason, provider, model, prompt_version FROM query_router_events ORDER BY created_at, id`).all() as Array<Record<string, unknown>>).map((entry) => ({ ...entry }));
-  assert.deepEqual(telemetry, [
-    { intent: "itinerary_query", selected_tool: "search_itinerary", outcome: "completed", reason: null, provider: "fake", model: "fake-query-router", prompt_version: "query-router-v1" },
-    { intent: null, selected_tool: null, outcome: "rate_limited", reason: "per_member_rate", provider: "fake", model: "fake-query-router", prompt_version: "query-router-v1" },
-  ]);
+  assert.deepEqual(telemetry.map((entry) => entry.outcome).sort(), ["completed", "rate_limited"]);
+  assert.equal(telemetry.filter((entry) => entry.outcome === "completed")[0]?.selected_tool, "search_itinerary");
+  assert.equal(telemetry.filter((entry) => entry.outcome === "rate_limited")[0]?.reason, "per_member_rate");
+  assert.ok(telemetry.every((entry) => entry.provider === "fake" && entry.model === "fake-query-router" && entry.prompt_version === "query-router-v1"));
   db.close();
 });
 

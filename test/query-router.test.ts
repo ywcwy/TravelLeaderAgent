@@ -25,6 +25,10 @@ test("provider router sends only minimal context and validates its structured re
   assert.deepEqual(await router.route({ text: "Page 有什麼安排", tripTimezone: "America/Phoenix", currentDate: "2026-09-21" }), { intent: "itinerary_query", filter: { location: "Page" } });
   assert.equal(request?.store, false);
   assert.match(String(request?.input), /Page 有什麼安排/);
+  assert.match(String(request?.instructions), /Page 有什麼安排/);
   assert.doesNotMatch(String(request?.input), /Source|Proposal|Draft/);
   assert.equal((request?.text as { format: { type: string } }).format.type, "json_schema");
+  const schema = (request?.text as { format: { schema: { required: string[]; properties: { filter: { required: string[] } } } } }).format.schema;
+  assert.deepEqual(schema.required, ["intent", "filter", "overview", "question", "message"]);
+  assert.deepEqual(schema.properties.filter.required, ["date", "timeWindow", "location", "origin", "destination", "status"]);
 });
