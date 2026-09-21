@@ -10,7 +10,7 @@ import { WebhookInbox } from "../src/webhook-inbox.ts";
 import { FakeLlmAdapter } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
 import { DeterministicQueryFilterAdapter, type QueryFilterAdapter } from "../src/query-filter.ts";
-import { FakeQueryRouterAdapter } from "../src/query-router.ts";
+import { FakeQueryRouterAdapter, type QueryRouterAdapter } from "../src/query-router.ts";
 
 test("ingests an unmentioned LINE group message into one Source with provenance", async () => {
   const db = new TravelDatabase();
@@ -334,6 +334,23 @@ test("answers natural Page questions without treating their question words as a 
   assert.match(replies[0] ?? "", /Page 午餐/);
   assert.match(replies[1] ?? "", /Page 午餐/);
   assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
+  db.close();
+});
+
+test("falls back to deterministic geography parsing when the provider router fails", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-geography-fallback", "地理 fallback 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "地理 fallback 旅程", "America/Phoenix");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [provisional] Mather Point 停留 | 2026-10-02T17:00:00-07:00 | Mather Point | | timezone=America/Phoenix", { idempotencyKey: "query:geography:fallback" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEGEOFAIL000000000000", messageId: "message-geography-fail", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "美西行程", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-geography-fail" });
+  const failingRouter: QueryRouterAdapter = { metadata: { provider: "test", model: "failing", promptVersion: "test" }, route: async () => { throw new Error("provider unavailable"); } };
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter(), failingRouter, { now: () => Date.parse("2026-09-11T00:00:01.000Z") });
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Mather Point/);
   db.close();
 });
 

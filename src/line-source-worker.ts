@@ -163,9 +163,26 @@ export class LineSourceWorker {
         telemetry({ outcome: "failed", reason: "invalid_router_output" });
         return "目前無法理解這個查詢，請換個方式描述日期、地點或路線。";
       }
+      const fallback = await this.fallbackNaturalQuery(event);
+      if (fallback) {
+        telemetry({ intent: "itinerary_query", selectedTool: "search_itinerary", outcome: "completed", reason: "deterministic_fallback" });
+        return fallback;
+      }
       telemetry({ outcome: "failed", reason: "router_failure" });
       return "目前無法處理這個訊息，請稍後再試；也可以用日期、地點或路線描述要查的行程。";
     } finally { this.routerInFlight.delete(event.userId); }
+  }
+
+  private async fallbackNaturalQuery(event: WebhookInboxEvent): Promise<string | null> {
+    if (!this.queryFilterAdapter || !/(?:查詢|行程|安排|美西|Arizona|亞利桑那|Page|Grand Canyon|大峽谷|Vegas|拉斯維加斯)/iu.test(event.text)) return null;
+    try {
+      const trip = this.travel.getTrip(event.tripId);
+      if (!trip) return null;
+      const filter = validateQueryFilter(await this.queryFilterAdapter.interpret({ text: event.text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
+      return renderItineraryQuery(this.travel.queryTrip(event.tripId, event.userId, filter), { displayAlias: filter.location });
+    } catch {
+      return null;
+    }
   }
 
   private async queryReply(event: WebhookInboxEvent, tripId: string, query: import("./domain.ts").ItineraryQuery): Promise<string> {
