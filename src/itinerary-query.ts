@@ -75,11 +75,11 @@ export function renderItineraryQuery(result: ItineraryQueryResult, options: { no
   const lines = [`${result.trip.title}｜${result.trip.status === "active" ? "Active" : "Archived"} Trip`];
   if (result.confirmed.length) {
     lines.push("", `已確認（${result.confirmed.length}）`);
-    for (const item of result.confirmed) lines.push(...formatItem(item, "confirmed", options.displayAlias));
+    for (const item of result.confirmed) lines.push(...formatItem(item, "confirmed", options.displayAlias, undefined, result.trip.timezone));
   }
   if (result.pending.length) {
     lines.push("", `待確認（${result.pending.length}）`);
-    for (const item of result.pending) lines.push(...formatItem(item, "pending", options.displayAlias, item.id));
+    for (const item of result.pending) lines.push(...formatItem(item, "pending", options.displayAlias, item.id, result.trip.timezone));
   }
   if (result.openDecisions.length) {
     lines.push("", `待選擇（${result.openDecisions.length}）`);
@@ -96,7 +96,7 @@ export function renderItineraryQuery(result: ItineraryQueryResult, options: { no
 
 export const itineraryQueryHelp = "可用查詢：查詢行程、查詢 2026-10-01 下午 Page、查詢 confirmed、查詢 pending、查詢歷史 <Trip ID>、查詢繼續 Q-XXXXXXXX。";
 
-function formatItem(item: { id?: string; title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string; origin?: string; destination?: string; notes?: string }, status: "confirmed" | "pending", displayAlias?: string, proposalId?: string): string[] {
+function formatItem(item: { id?: string; title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string; origin?: string; destination?: string; notes?: string }, status: "confirmed" | "pending", displayAlias?: string, proposalId?: string, tripTimezone?: string): string[] {
   const lines = [`- ${item.title}`];
   const time = formatDisplayTime(item);
   if (time) lines.push(`  時間：${time}`);
@@ -106,7 +106,7 @@ function formatItem(item: { id?: string; title: string; localDate?: string; star
     const originTimezone = item.originTimezone ?? item.timezone ?? "未知";
     const destinationTimezone = item.destinationTimezone ?? item.timezone ?? "未知";
     if (originTimezone !== destinationTimezone) lines.push(`  時區：${originTimezone} → ${destinationTimezone}`);
-  }
+  } else if (item.timezone && item.timezone !== tripTimezone) lines.push(`  時區：${item.timezone}`);
   lines.push(`  狀態：${status === "confirmed" ? "已確認" : "待確認"}`);
   if (item.notes) lines.push(`  備註：${item.notes}`);
   if (proposalId) lines.push(`  Proposal：${proposalId}`);
@@ -115,15 +115,23 @@ function formatItem(item: { id?: string; title: string; localDate?: string; star
 
 function formatDisplayTime(item: { localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string }): string {
   let value = "";
+  let timezoneUnresolved = false;
   if (item.startsAt) {
     value = item.timezone ? formatLocalDateTime(item.startsAt, item.timezone) : item.startsAt;
-    if (value.includes("(UTC offset unresolved)")) return `${value.replace("T", " ").replace(" (UTC offset unresolved)", "")}（時區待確認）`;
-    const match = value.match(/^\d{4}-(\d{2})-(\d{2}) (\d{2}:\d{2})(?::\d{2})? \(UTC[+-]\d{2}:\d{2}\)$/);
-    value = match ? `${match[1]}/${match[2]} ${match[3]}` : value;
+    if (value.includes("(UTC offset unresolved)")) {
+      value = value.replace("T", " ").replace(" (UTC offset unresolved)", "");
+      timezoneUnresolved = true;
+    } else {
+      const match = value.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})(?::\d{2})? \(UTC[+-]\d{2}:\d{2}\)$/);
+      const rawMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?$/);
+      value = match ? `${match[1]}-${match[2]}-${match[3]} ${match[4]}` : rawMatch ? `${rawMatch[1]}-${rawMatch[2]}-${rawMatch[3]} ${rawMatch[4]}` : value;
+      timezoneUnresolved = Boolean(rawMatch && !item.timezone);
+    }
   } else if (item.localDate) {
-    value = /^\d{4}-(\d{2})-(\d{2})$/.test(item.localDate) ? `${item.localDate.slice(5, 7)}/${item.localDate.slice(8, 10)}` : item.localDate;
+    value = item.localDate;
   }
   if (item.timeWindow) value += `${value ? " " : ""}${timeWindowLabel(item.timeWindow)}`;
+  if (timezoneUnresolved) value += "（時區待確認）";
   if (item.timezoneSource === "fallback") value += "（時區採旅程預設）";
   return value;
 }

@@ -274,7 +274,8 @@ test("queries each timed item by its local date and renders timezone context", (
   assert.deepEqual(localDateResult.pending.map((item) => item.title).sort(), ["Date-only Page", "Las Vegas evening", "Page lodging", "St George boundary", "Unknown fallback"].sort());
   assert.equal(localDateResult.pending.at(-1)?.title, "Date-only Page");
   const rendered = renderItineraryQuery(localDateResult);
-  assert.doesNotMatch(rendered, /America\//);
+  assert.match(rendered, /America\/Phoenix/);
+  assert.match(rendered, /America\/Denver/);
   assert.doesNotMatch(rendered, /UTC[+-]\d{2}:\d{2}/);
   assert.match(rendered, /時區採旅程預設/);
 
