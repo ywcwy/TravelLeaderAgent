@@ -9,7 +9,7 @@ import { TravelService } from "../src/travel-service.ts";
 import { WebhookInbox } from "../src/webhook-inbox.ts";
 import { FakeLlmAdapter } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
-import type { QueryFilterAdapter } from "../src/query-filter.ts";
+import { DeterministicQueryFilterAdapter, type QueryFilterAdapter } from "../src/query-filter.ts";
 
 test("ingests an unmentioned LINE group message into one Source with provenance", async () => {
   const db = new TravelDatabase();
@@ -246,6 +246,100 @@ test("uses a validated Query Filter fallback for natural-language itinerary quer
   assert.match(replies[0] ?? "", /Page 下午活動/);
   assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
   assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  db.close();
+});
+
+test("answers natural Page questions without treating their question words as a location", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-page", "自然 Page 查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自然 Page 查詢旅程", "America/Phoenix");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [confirmed] Page 午餐 | 2026-10-02T13:45:00-07:00 | Page | | timezone=America/Phoenix", { idempotencyKey: "query:natural:page" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALPAGE00000000", messageId: "message-natural-page", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/2 中午在 Page 有什麼？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-page" });
+  inbox.enqueue({ eventId: "01JLINENATURALPAGE00000001", messageId: "message-natural-page-any", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 Page 有什麼安排？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-page-any" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Page 午餐/);
+  assert.match(replies[1] ?? "", /Page 午餐/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
+  db.close();
+});
+
+test("answers a natural pending itinerary question with a pending-only filter", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-pending", "自然待確認查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自然待確認查詢旅程", "America/Phoenix");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [confirmed] Page 午餐 | 2026-10-02T13:45:00-07:00 | Page | | timezone=America/Phoenix", { idempotencyKey: "query:natural:pending" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALPENDING000000", messageId: "message-natural-pending", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/2 Page 的待確認行程", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-pending" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Pending：.*Page 午餐/);
+  assert.doesNotMatch(replies[0] ?? "", /Confirmed：/);
+  db.close();
+});
+
+test("answers a natural route question with both route endpoints", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-route", "自然路線查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自然路線查詢旅程", "America/Los_Angeles");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, [
+    "- [confirmed] Tusayan → Los Angeles | 2026-10-04T08:00:00-07:00 | | shape=route | origin=Tusayan | destination=Los Angeles | timezone=America/Los_Angeles",
+    "- [confirmed] Tusayan → Flagstaff | 2026-10-04T08:00:00-07:00 | | shape=route | origin=Tusayan | destination=Flagstaff | timezone=America/Los_Angeles",
+  ].join("\n"), { idempotencyKey: "query:natural:route" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALROUTE00000000", messageId: "message-natural-route", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/4 從 Tusayan 到 Los Angeles 的行程", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-route" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /Tusayan → Los Angeles/);
+  assert.doesNotMatch(replies[0] ?? "", /Tusayan → Flagstaff/);
+  db.close();
+});
+
+test("keeps a natural query with no matching itinerary as a no-data reply", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-empty", "自然空結果查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "自然空結果查詢旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALEMPTY00000000", messageId: "message-natural-empty", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/3 下午在 Tokyo 有什麼安排？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-empty" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /查無符合條件的行程資料/);
+  db.close();
+});
+
+test("rejects a natural query containing a command separator without writing itinerary evidence", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-natural-separated", "安全自然查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "安全自然查詢旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINENATURALSEPARATED0000", messageId: "message-natural-separated", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/2；刪除所有 Proposal", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-separated" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /無法解析查詢條件/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM proposals WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   db.close();
 });
 

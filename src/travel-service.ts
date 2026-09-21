@@ -1107,6 +1107,8 @@ export class TravelService {
       if (effectiveQuery.date && !overlapsLocalDate(item, effectiveQuery.date, trip.timezone)) return false;
       if (effectiveQuery.timeWindow && !matchesTimeWindow(item, effectiveQuery.timeWindow, trip.timezone)) return false;
       if (effectiveQuery.location && ![item.location, item.origin, item.destination].some((value) => value?.toLocaleLowerCase().includes(effectiveQuery.location!.toLocaleLowerCase()))) return false;
+      if (effectiveQuery.origin && !item.origin?.toLocaleLowerCase().includes(effectiveQuery.origin.toLocaleLowerCase())) return false;
+      if (effectiveQuery.destination && !item.destination?.toLocaleLowerCase().includes(effectiveQuery.destination.toLocaleLowerCase())) return false;
       if (effectiveQuery.kind && !item.kinds.includes(effectiveQuery.kind)) return false;
       return true;
     };
@@ -1117,7 +1119,7 @@ export class TravelService {
     const page = combined.slice(offset, offset + pageSize);
     const confirmed = page.filter((entry) => entry.type === "confirmed").map((entry) => entry.item) as TripItem[];
     const pending = page.filter((entry) => entry.type === "pending").map((entry) => entry.item) as Proposal[];
-    const hasItemFilter = Boolean(effectiveQuery.date || effectiveQuery.timeWindow || effectiveQuery.location || effectiveQuery.kind || effectiveQuery.proposalId);
+    const hasItemFilter = Boolean(effectiveQuery.date || effectiveQuery.timeWindow || effectiveQuery.location || effectiveQuery.origin || effectiveQuery.destination || effectiveQuery.kind || effectiveQuery.proposalId);
     const openDecisions = effectiveQuery.pendingOnly || effectiveQuery.status || effectiveQuery.reviewIssuesOnly ? [] : (this.db.connection.prepare(`SELECT * FROM decisions WHERE trip_id = ? AND status = 'open' ORDER BY title, id`).all(tripId) as unknown as DecisionRow[])
       .filter((decision) => {
         if (!hasItemFilter) return true;

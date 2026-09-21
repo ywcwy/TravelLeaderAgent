@@ -264,6 +264,8 @@ export interface ItineraryQuery {
   date?: string;
   timeWindow?: TimeWindow;
   location?: string;
+  origin?: string;
+  destination?: string;
   status?: "confirmed" | "pending";
   kind?: TripItemKind;
   pendingOnly?: boolean;
