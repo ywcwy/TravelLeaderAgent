@@ -129,7 +129,7 @@ const routerInstructions = [
   "A named place with arrangement wording is a query: for example, 'Page 有什麼安排' must be itinerary_query with filter.location='Page'. Do not use clarification for a named place.",
   "Do not add a date filter unless the user explicitly states a date; currentDate is only for resolving an explicitly stated short date. For the exact text 'Page 有什麼安排', return filter {location:'Page'} with date null.",
   "An explicit date always makes this a query, including '10/2 那天有什麼': return itinerary_query with filter.date='2026-10-02' (using the currentDate year), not clarification.",
-  "Use itinerary_input for text that should enter the existing Extraction Draft workflow unchanged.",
+  "Ordinary LINE natural-language messages are read-only itinerary queries. Never use itinerary_input for conversational text; that intent is retained only for backward-compatible validation and will be safely reclassified by the worker.",
   "Use clarification only when a read query has an unresolved reference such as '那天有什麼' with no date or location. Use unsupported_action for any unrecognized destructive or modifying action.",
   "The only Query Filter fields are date, timeWindow, location, city, region, country, macroRegion, origin, destination, status, and kind. Status may only be confirmed or pending; kind must use the existing itinerary kind vocabulary.",
   `When a location wording is not already canonical, choose only from these bounded aliases; never invent a location: ${LOCATION_ALIASES.map((entry) => `${entry.alias}=${entry.canonical}`).join(", ")}.`,

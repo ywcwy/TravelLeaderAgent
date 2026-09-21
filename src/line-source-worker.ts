@@ -10,7 +10,8 @@ export interface QueryRouterWorkerOptions { now?: () => number; replyDeadlineMs?
 
 function needsNaturalLanguageFallback(text: string): boolean {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "");
-  return /^(?:查詢|查询|query)\s+/i.test(normalized) && (/[？?]/u.test(normalized) || /\b\d{1,2}\/\d{1,2}\b/u.test(normalized));
+  if (!/^(?:查詢|查询|query)\s+/i.test(normalized) || /^(?:查詢|查询|query)\s*(?:行程|itinerary)\s*$/i.test(normalized)) return false;
+  return looksLikeNaturalQuery(normalized) || /[？?]/u.test(normalized) || /\b\d{1,2}\/\d{1,2}\b/u.test(normalized);
 }
 
 export class LineSourceWorker {
@@ -84,14 +85,6 @@ export class LineSourceWorker {
           this.inbox.complete(event.eventId, leaseToken);
           return "processed" as const;
         }
-        if (this.queryRouter) {
-          const routed = await this.routerReply(event);
-          if (routed !== null) {
-            if (replyToken) await this.reply(replyToken, routed);
-            this.inbox.complete(event.eventId, leaseToken);
-            return "processed" as const;
-          }
-        }
         if (parsed) {
           if (replyToken) {
             const targetTripId = parsed.type === "query" && parsed.query.tripId ? parsed.query.tripId : event.tripId;
@@ -101,25 +94,21 @@ export class LineSourceWorker {
           this.inbox.complete(event.eventId, leaseToken);
           return "processed" as const;
         }
-        if (isQuestion(event.text)) {
-          if (replyToken) await this.reply(replyToken, "這看起來是問題，未建立行程 Draft。請改用「查詢行程」或補充要寫入行程的內容。");
-          this.inbox.complete(event.eventId, leaseToken);
-          return "processed" as const;
-        }
-        if (isStructuredMarkdown(event.text) || !this.extractionAdapter) {
+        if (isStructuredMarkdown(event.text)) {
           const imported = this.importSource(event);
           if (replyToken) await this.reply(replyToken, this.contextualReply(event.tripId, imported.proposalIds));
           this.inbox.complete(event.eventId, leaseToken);
           return "processed" as const;
         }
-        const draft = await this.travel.createExtractionDraft(event.tripId, event.text, {
-          idempotencyKey: event.eventId,
-          sourceTime: event.receivedAt,
-          type: "line_text",
-          currentDate: event.receivedAt.slice(0, 10),
-          provenance: { provider: "line", messageId: event.messageId, groupId: event.groupId, userId: event.userId },
-        }, this.extractionAdapter!);
-        if (replyToken) await this.reply(replyToken, renderExtractionDraft(draft, { chunks: this.travel.getImportChunks(event.tripId, draft.sourceId) }));
+        const deterministic = await this.tryDeterministicNaturalQuery(event);
+        if (deterministic !== null) {
+          this.recordDeterministicQuery(event);
+          if (replyToken) await this.reply(replyToken, deterministic);
+          this.inbox.complete(event.eventId, leaseToken);
+          return "processed" as const;
+        }
+        const routed = this.queryRouter ? await this.routerReply(event) : this.noDataReply(event.tripId);
+        if (replyToken) await this.reply(replyToken, routed ?? this.noDataReply(event.tripId));
         this.inbox.complete(event.eventId, leaseToken);
         return "processed" as const;
       } catch (error) {
@@ -146,6 +135,10 @@ export class LineSourceWorker {
     this.routerRequests.set(event.userId, recent);
     this.routerInFlight.add(event.userId);
     try {
+      if (/[;；]/u.test(event.text)) {
+        telemetry({ outcome: "rejected", reason: "command_separator" });
+        return this.noDataReply(event.tripId);
+      }
       const trip = this.travel.getTrip(event.tripId);
       if (!trip) throw new Error("Trip not found.");
       const routed = validateQueryRouterResult(await this.queryRouter!.route({ text: event.text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
@@ -154,15 +147,15 @@ export class LineSourceWorker {
         const query = routed.overview ? {} : routed.filter!;
         return renderItineraryQuery(this.travel.queryTrip(event.tripId, event.userId, query), { notesRequested: routed.notesRequested, displayAlias: routed.overview ? undefined : routed.filter?.location });
       }
-      if (routed.intent === "itinerary_input") { telemetry({ intent: routed.intent, outcome: "completed" }); return null; }
+      if (routed.intent === "itinerary_input") {
+        const fallback = await this.fallbackNaturalQuery(event);
+        telemetry({ intent: routed.intent, selectedTool: fallback ? "search_itinerary" : undefined, outcome: "completed", reason: "reclassified_as_read_only_query" });
+        return fallback ?? this.noDataReply(event.tripId);
+      }
       if (routed.intent === "clarification") { telemetry({ intent: routed.intent, selectedTool: "clarify_query", outcome: "completed" }); return routed.question; }
       telemetry({ intent: routed.intent, outcome: "rejected", reason: "unsupported_action" });
       return routed.message ?? "這個操作目前不支援。若要查詢行程，請直接描述日期、地點或路線。";
     } catch (error) {
-      if (error instanceof QueryRouterValidationError || error instanceof QueryFilterValidationError) {
-        telemetry({ outcome: "failed", reason: "invalid_router_output" });
-        return "目前無法理解這個查詢，請換個方式描述日期、地點或路線。";
-      }
       const fallback = await this.fallbackNaturalQuery(event);
       if (fallback) {
         console.error(`[query-router] fallback=success input=${JSON.stringify(event.text)}`);
@@ -170,31 +163,59 @@ export class LineSourceWorker {
         return fallback;
       }
       console.error(`[query-router] fallback=unavailable input=${JSON.stringify(event.text)}`);
-      telemetry({ outcome: "failed", reason: "router_failure" });
-      return "目前無法處理這個訊息，請稍後再試；也可以用日期、地點或路線描述要查的行程。";
+      telemetry({ outcome: "failed", reason: error instanceof QueryRouterValidationError || error instanceof QueryFilterValidationError ? "invalid_router_output" : "router_failure" });
+      return this.noDataReply(event.tripId);
     } finally { this.routerInFlight.delete(event.userId); }
   }
 
   private async fallbackNaturalQuery(event: WebhookInboxEvent): Promise<string | null> {
-    if (!this.queryFilterAdapter || !/(?:查詢|行程|安排|美西|Arizona|亞利桑那|Page|Grand Canyon|大峽谷|Vegas|拉斯維加斯)/iu.test(event.text)) return null;
+    if (!this.queryFilterAdapter || !looksLikeNaturalQuery(event.text)) return null;
     try {
-      const trip = this.travel.getTrip(event.tripId);
-      if (!trip) return null;
-      const filter = validateQueryFilter(await this.queryFilterAdapter.interpret({ text: event.text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
-      return renderItineraryQuery(this.travel.queryTrip(event.tripId, event.userId, filter), { displayAlias: filter.location });
+      return await this.renderAdapterQuery(event, event.tripId, event.text);
     } catch {
       return null;
     }
   }
 
+  private async tryDeterministicNaturalQuery(event: WebhookInboxEvent): Promise<string | null> {
+    if (!this.queryFilterAdapter || !looksLikeNaturalQuery(event.text) || asksForRecordedNotes(event.text)) return null;
+    try {
+      return await this.renderAdapterQuery(event, event.tripId, event.text);
+    } catch {
+      return null;
+    }
+  }
+
+  private async renderAdapterQuery(event: WebhookInboxEvent, tripId: string, text: string): Promise<string> {
+    const trip = this.travel.getTrip(tripId);
+    if (!trip) throw new Error("Trip not found.");
+    const filter = validateQueryFilter(await this.queryFilterAdapter!.interpret({ text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
+    return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, filter), { displayAlias: filter.location });
+  }
+
+  private noDataReply(tripId: string): string {
+    const trip = this.travel.getTrip(tripId);
+    return trip ? `${trip.title}｜${trip.status === "active" ? "Active" : "Archived"} Trip\n查無符合條件的行程資料。` : "查無符合條件的行程資料。";
+  }
+
+  private recordDeterministicQuery(event: WebhookInboxEvent): void {
+    this.inbox.recordQueryRouterEvent(event.eventId, {
+      intent: "itinerary_query",
+      selectedTool: "search_itinerary",
+      outcome: "completed",
+      reason: "deterministic_query_filter",
+      latencyMs: 0,
+      provider: "deterministic",
+      model: "query-filter",
+      promptVersion: "deterministic-v1",
+    });
+  }
+
   private async queryReply(event: WebhookInboxEvent, tripId: string, query: import("./domain.ts").ItineraryQuery): Promise<string> {
     if (this.queryFilterAdapter && needsNaturalLanguageFallback(event.text)) {
       try {
-        const trip = this.travel.getTrip(tripId);
-        if (!trip) throw new Error("Trip not found.");
         const text = event.text.trim().replace(/^@[^\s]+\s*/, "");
-        const filter = validateQueryFilter(await this.queryFilterAdapter.interpret({ text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
-        return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, filter), { displayAlias: filter.location });
+        return await this.renderAdapterQuery(event, tripId, text);
       } catch (error) {
         if (error instanceof QueryFilterValidationError) return `無法解析查詢條件，請使用固定格式，例如：${itineraryQueryHelp}`;
         return `目前無法解析自然語言查詢，請使用固定格式，例如：${itineraryQueryHelp}`;
@@ -313,9 +334,14 @@ export class LineSourceWorker {
 
 }
 
-function isQuestion(text: string): boolean {
+function looksLikeNaturalQuery(text: string): boolean {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "");
-  return /[?？]\s*$/.test(normalized) || /^(?:請問|想問|為什麼|為何|怎麼|如何|what|why|how|where|when|can|could|is|are)\b/i.test(normalized);
+  return /(?:查詢|查询|query|行程|安排|什麼時候|什么时候|有什麼|有什么|注意|待確認|待确认|confirmed|pending|美西|美國西部|us[- ]?west|Arizona|亞利桑那|Page|Grand Canyon|大峽谷|Vegas|拉斯維加斯|Horseshoe Bend|馬蹄灣|羚羊谷|Tusayan|Los Angeles|從|from|到|to|\b\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,2})?\b)/iu.test(normalized);
+}
+
+function asksForRecordedNotes(text: string): boolean {
+  const normalized = text.trim().replace(/^@[^\s]+\s*/, "");
+  return /(?:注意|小心|提醒|備註|备注|需要知道|需要注意|what to watch|what should I know)/iu.test(normalized);
 }
 
 function isStructuredMarkdown(text: string): boolean {

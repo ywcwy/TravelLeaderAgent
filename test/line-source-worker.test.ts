@@ -59,7 +59,7 @@ test("still ingests a mentioned LINE group message into a Proposal", async () =>
   db.close();
 });
 
-test("keeps non-Markdown LINE text as a Source with a review issue", async () => {
+test("keeps ordinary non-Markdown LINE text read-only", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-unparsed", "未解析群組");
@@ -68,11 +68,13 @@ test("keeps non-Markdown LINE text as a Source with a review issue", async () =>
   inbox.enqueue({ eventId: "01JLINEUNPARSED000000000000", messageId: "message-unparsed", groupId: "C-unparsed", userId: "U-member", tripId: trip.id, text: "大家週五晚上吃飯", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "" });
   const worker = new LineSourceWorker(inbox, travel, () => undefined);
   assert.equal(await worker.processNext(), "processed");
-  assert.equal(travel.reviewTrip(trip.id).issues.some((issue) => issue.code === "source_unparsed"), true);
+  assert.equal(travel.reviewTrip(trip.id).provisional.length, 0);
+  assert.equal(travel.reviewTrip(trip.id).issues.some((issue) => issue.code === "source_unparsed"), false);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   db.close();
 });
 
-test("routes free-form LINE text through a Fake Adapter Draft and confirms it into Proposals", async () => {
+test("does not create a Draft from ordinary free-form LINE text", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-draft-line", "Draft LINE 群組");
@@ -80,20 +82,13 @@ test("routes free-form LINE text through a Fake Adapter Draft and confirms it in
   const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
   inbox.enqueue({ eventId: "01JLINEDRAFT0000000000000000", messageId: "draft-line-message", groupId: group.lineGroupId, userId: "U-origin", tripId: trip.id, text: "10/1 晚上到 Page，想住 Holiday Inn。", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "draft-reply" });
   const replies: string[] = [];
-  const adapterPayload: ExtractionDraftPayload = { items: [{ kind: "lodging", kinds: ["lodging"], shape: "point", shapeSource: "inferred", title: "Page 住宿", status: "provisional", startsAt: "2026-10-01T18:00:00+08:00", startTimeFlexibility: "flexible", endTimeFlexibility: "flexible", location: "Page" }], missing: [], assumptions: [], issues: [], sourceExcerpt: "10/1 晚上到 Page，想住 Holiday Inn。" };
-  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, new FakeLlmAdapter({ "10/1 晚上到 Page，想住 Holiday Inn。": adapterPayload }));
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, new FakeLlmAdapter());
 
   assert.equal(await worker.processNext(), "processed");
-  const draftRow = db.connection.prepare(`SELECT id, status FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { id: string; status: string };
-  assert.equal(draftRow.status, "pending_confirmation");
-  assert.match(replies[0] ?? "", new RegExp(`Extraction Draft ${draftRow.id}`));
-  assert.match(replies[0] ?? "", /請確認/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM proposals WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
-
-  inbox.enqueue({ eventId: "01JLINEDRAFT0000000000000001", messageId: "draft-confirm-message", groupId: group.lineGroupId, userId: "U-origin", tripId: trip.id, text: `確認 ${draftRow.id}`, receivedAt: "2026-09-11T00:00:02.000Z", rawBody: "raw", replyToken: "confirm-reply" });
-  assert.equal(await worker.processNext(), "processed");
-  assert.match(replies[1] ?? "", /已確認 Draft .*建立 Proposal：P-/);
-  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM proposals WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
+  assert.match(replies[0] ?? "", /查無符合條件/);
   db.close();
 });
 
@@ -224,6 +219,25 @@ test("keeps router clarification and unsupported actions read-only", async () =>
   db.close();
 });
 
+test("reclassifies a router itinerary_input result as a read-only query", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-router-input-guard", "Router input guard 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Router input guard 旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEROUTERINPUTGUARD0000", messageId: "router-input-guard", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "10/3 下午抵達 Page，晚上住 Tusayan", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "router-input-guard-reply" });
+  const replies: string[] = [];
+  const router = new FakeQueryRouterAdapter({ "10/3 下午抵達 Page，晚上住 Tusayan": { intent: "itinerary_input" } });
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, new FakeLlmAdapter(), null, router, { now: () => Date.parse("2026-09-11T00:00:01.000Z") });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /查無符合條件的行程資料/);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM extraction_drafts WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
+  db.close();
+});
+
 test("bounds router calls per member and records content-free telemetry", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
@@ -326,13 +340,16 @@ test("answers natural Page questions without treating their question words as a 
   const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
   inbox.enqueue({ eventId: "01JLINENATURALPAGE00000000", messageId: "message-natural-page", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 10/2 中午在 Page 有什麼？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-page" });
   inbox.enqueue({ eventId: "01JLINENATURALPAGE00000001", messageId: "message-natural-page-any", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 Page 有什麼安排？", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-page-any" });
+  inbox.enqueue({ eventId: "01JLINENATURALPAGE00000002", messageId: "message-natural-page-no-question", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 Page 有什麼安排", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-natural-page-no-question" });
   const replies: string[] = [];
   const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
 
   assert.equal(await worker.processNext(), "processed");
   assert.equal(await worker.processNext(), "processed");
+  assert.equal(await worker.processNext(), "processed");
   assert.match(replies[0] ?? "", /Page 午餐/);
   assert.match(replies[1] ?? "", /Page 午餐/);
+  assert.match(replies[2] ?? "", /Page 午餐/);
   assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 1);
   db.close();
 });
@@ -502,7 +519,7 @@ test("handles LINE Decision select and cancel commands idempotently", async () =
   db.close();
 });
 
-test("parses LINE free-form lodging and multi-leg route statements with shared Sources", async () => {
+test("keeps free-form lodging and route statements read-only", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-freeform", "自由格式群組");
@@ -516,20 +533,13 @@ test("parses LINE free-form lodging and multi-leg route statements with shared S
   assert.equal(await worker.processNext(), "processed");
   assert.equal(await worker.processNext(), "processed");
   const review = travel.reviewTrip(trip.id);
-  assert.equal(review.provisional.length, 4);
-  const lodging = review.provisional.find((proposal) => proposal.title === "住宿：Holiday Inn Express");
-  assert.equal(lodging?.shape, "point");
-  assert.deepEqual(lodging?.kinds, ["lodging"]);
-  assert.equal(lodging?.location, "Holiday Inn Express");
-  assert.deepEqual(review.provisional.filter((proposal) => proposal.shape === "route").map((proposal) => [proposal.origin, proposal.destination]).sort((left, right) => `${left[0]}${left[1]}`.localeCompare(`${right[0]}${right[1]}`)), [
-    ["Kanab", "Page"], ["Las Vegas", "St. George"], ["St. George", "Kanab"],
-  ]);
-  assert.equal(new Set(review.provisional.map((proposal) => proposal.sourceId)).size, 2);
+  assert.equal(review.provisional.length, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   assert.equal(replies.length, 2);
   db.close();
 });
 
-test("keeps an incomplete or date-less free-form route traceable", async () => {
+test("keeps incomplete free-form routes read-only", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-freeform-review", "自由格式 review 群組");
@@ -543,16 +553,13 @@ test("keeps an incomplete or date-less free-form route traceable", async () => {
   assert.equal(await worker.processNext(), "processed");
   assert.equal(await worker.processNext(), "processed");
   const review = travel.reviewTrip(trip.id);
-  assert.equal(review.provisional.length, 1);
-  assert.equal(review.provisional[0]?.startsAt, undefined);
-  assert.equal(review.issues.some((issue) => issue.code === "missing_route_endpoint"), true);
-  assert.equal(review.issues.some((issue) => issue.code === "source_unparsed"), false);
-  assert.equal(review.issues.some((issue) => issue.code === "missing_start_time" && issue.proposalIds.includes(review.provisional[0]?.id ?? "")), true);
+  assert.equal(review.provisional.length, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   assert.equal(replies.length, 2);
   db.close();
 });
 
-test("infers multiple kinds from one LINE free-form statement", async () => {
+test("does not infer kinds from ordinary LINE prose", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-freeform-kinds", "自由格式 kinds 群組");
@@ -562,13 +569,12 @@ test("infers multiple kinds from one LINE free-form statement", async () => {
   const worker = new LineSourceWorker(inbox, travel, () => undefined);
 
   assert.equal(await worker.processNext(), "processed");
-  const proposal = travel.reviewTrip(trip.id).provisional[0];
-  assert.deepEqual(proposal?.kinds, ["lodging", "meal", "transport"]);
-  assert.equal(proposal?.kind, "lodging");
+  assert.equal(travel.reviewTrip(trip.id).provisional.length, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   db.close();
 });
 
-test("supports English dining and rental-car free-form statements", async () => {
+test("keeps English free-form statements read-only", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-freeform-english", "英文自由格式群組");
@@ -580,14 +586,12 @@ test("supports English dining and rental-car free-form statements", async () => 
 
   assert.equal(await worker.processNext(), "processed");
   assert.equal(await worker.processNext(), "processed");
-  const proposals = travel.reviewTrip(trip.id).provisional;
-  assert.equal(proposals.length, 2);
-  assert.deepEqual(proposals.find((proposal) => proposal.location === "BirdHouse")?.kinds, ["meal"]);
-  assert.deepEqual(proposals.find((proposal) => proposal.location === "LAS")?.kinds, ["rental_car"]);
+  assert.equal(travel.reviewTrip(trip.id).provisional.length, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
   db.close();
 });
 
-test("produces equivalent structured records for equivalent Markdown and LINE inputs", async () => {
+test("keeps Structured Markdown import separate from LINE prose", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const markdownGroup = travel.createTravelGroup("system-admin", "C-equivalent-markdown", "Markdown 等價群組");
@@ -606,13 +610,9 @@ test("produces equivalent structured records for equivalent Markdown and LINE in
   assert.equal(await worker.processNext(), "processed");
   const lineReview = travel.reviewTrip(lineTrip.id).provisional;
 
-  const comparable = (proposal: (typeof markdownReview)[number]) => ({
-    kind: proposal.kind, kinds: proposal.kinds, shape: proposal.shape,
-    startsAt: proposal.startsAt, location: proposal.location, origin: proposal.origin, destination: proposal.destination,
-  });
-  assert.deepEqual(lineReview.map(comparable).sort((left, right) => `${left.shape}${left.location ?? left.origin}`.localeCompare(`${right.shape}${right.location ?? right.origin}`)), markdownReview.map(comparable).sort((left, right) => `${left.shape}${left.location ?? left.origin}`.localeCompare(`${right.shape}${right.location ?? right.origin}`)));
-  assert.equal(lineReview.find((proposal) => proposal.shape === "route")?.shapeSource, "inferred");
-  assert.equal(markdownReview.find((proposal) => proposal.shape === "route")?.shapeSource, "explicit");
+  assert.equal(markdownReview.length, 2);
+  assert.equal(lineReview.length, 0);
+  assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(lineTrip.id) as { count: number }).count, 0);
   db.close();
 });
 
@@ -630,7 +630,7 @@ test("does not turn a LINE question into a Source or Proposal", async () => {
   assert.equal(travel.reviewTrip(trip.id).provisional.length, 0);
   assert.equal(travel.reviewTrip(trip.id).issues.some((issue) => issue.code === "source_unparsed"), false);
   assert.equal((db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id) as { count: number }).count, 0);
-  assert.deepEqual(replies, ["這看起來是問題，未建立行程 Draft。請改用「查詢行程」或補充要寫入行程的內容。"]);
+  assert.deepEqual(replies, [`${trip.title}｜Active Trip\n查無符合條件的行程資料。`]);
   db.close();
 });
 
