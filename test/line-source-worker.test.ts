@@ -11,7 +11,7 @@ import { FakeLlmAdapter } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
 import type { QueryFilterAdapter } from "../src/query-filter.ts";
 
-test("ingests a mentioned LINE group message into one Source with provenance", async () => {
+test("ingests an unmentioned LINE group message into one Source with provenance", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-end-to-end", "E2E 群組");
@@ -20,7 +20,7 @@ test("ingests a mentioned LINE group message into one Source with provenance", a
   const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
   const replies: Array<{ token: string; text: string }> = [];
   const worker = new LineSourceWorker(inbox, travel, async (token, text) => { replies.push({ token, text }); });
-  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JLINEE2E000000000000000000", replyToken: "reply-e2e", source: { type: "group", groupId: "C-end-to-end", userId: "U-member" }, message: { type: "text", id: "message-e2e", text: "@leaderAgent - [provisional] 住宿 | 2026-10-16 | 台北", mention: { mentionees: [{ type: "user", userId: "U-bot" }] } } }] });
+  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JLINEE2E000000000000000000", replyToken: "reply-e2e", source: { type: "group", groupId: "C-end-to-end", userId: "U-member" }, message: { type: "text", id: "message-e2e", text: "- [provisional] 住宿 | 2026-10-16 | 台北" } }] });
   const response = new LineWebhookIngress(handler, inbox).handle({ rawBody, signature: createHmac("sha256", "secret").update(rawBody).digest("base64") });
   assert.equal(response.status, 200);
   assert.deepEqual(response.replies, []);
@@ -33,12 +33,28 @@ test("ingests a mentioned LINE group message into one Source with provenance", a
   const review = travel.reviewTrip(trip.id);
   assert.equal(review.provisional.length, 1);
   const source = travel.getSource(review.provisional[0].sourceId);
-  assert.deepEqual(source, { id: source?.id, tripId: trip.id, type: "line_text", idempotencyKey: "01JLINEE2E000000000000000000", content: "@leaderAgent - [provisional] 住宿 | 2026-10-16 | 台北", sourceTime: "2026-09-11T00:00:00.000Z", provenance: { provider: "line", messageId: "message-e2e", groupId: "C-end-to-end", userId: "U-member" } });
+  assert.deepEqual(source, { id: source?.id, tripId: trip.id, type: "line_text", idempotencyKey: "01JLINEE2E000000000000000000", content: "- [provisional] 住宿 | 2026-10-16 | 台北", sourceTime: "2026-09-11T00:00:00.000Z", provenance: { provider: "line", messageId: "message-e2e", groupId: "C-end-to-end", userId: "U-member" } });
   const proposal = review.provisional[0];
   assert.equal(replies.length, 1);
   assert.equal(replies[0]?.token, "reply-e2e");
   assert.equal(replies[0]?.text, `已收到 Proposal ${proposal.id}：住宿｜2026-10-16｜台北\n目前沒有同日期、同類型的 confirmed 行程。\n狀態：provisional / pending。\nDecision Owner 後續可確認此 Proposal。`);
   assert.equal(travel.isActiveTripMember(trip.id, "U-member"), true);
+  db.close();
+});
+
+test("still ingests a mentioned LINE group message into a Proposal", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-mentioned-e2e", "Mentioned E2E 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Mentioned E2E 旅程", "Asia/Taipei");
+  const handler = new LineWebhookHandler(travel, { channelSecret: "secret", officialAccountUserId: "U-bot" });
+  const inbox = new WebhookInbox(db, { retryBackoffMs: 0 });
+  const worker = new LineSourceWorker(inbox, travel, () => undefined);
+  const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "01JLINEMENTIONED000000000000", source: { type: "group", groupId: group.lineGroupId, userId: "U-member" }, message: { type: "text", id: "message-mentioned", text: "- [provisional] 住宿 | 2026-10-16 | 台北", mention: { mentionees: [{ type: "user", userId: "U-bot" }] } } }] });
+
+  new LineWebhookIngress(handler, inbox).handle({ rawBody, signature: createHmac("sha256", "secret").update(rawBody).digest("base64") });
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(travel.reviewTrip(trip.id).provisional.length, 1);
   db.close();
 });
 
