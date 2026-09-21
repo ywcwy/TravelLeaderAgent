@@ -364,6 +364,29 @@ test("imports explicit Point and Route Proposal structure and infers legacy Poin
   db.close();
 });
 
+test("normalizes known landmark endpoints and avoids duplicate Route location issues", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-location-registry");
+  const result = service.importMarkdown(tripId, "- [provisional] Mather Point to Yavapai Point | 2026-10-02T17:00:00-07:00 | Mather Point | | shape=route | origin=Mather Point | destination=Yavapai Point | timezone=America/Phoenix", { idempotencyKey: "test:location-registry" });
+  const proposal = service.getProposal(tripId, result.proposalIds[0]);
+  assert.equal(proposal?.originCity, "Grand Canyon Village");
+  assert.equal(proposal?.destinationCity, "Grand Canyon Village");
+  assert.equal(service.reviewTrip(tripId).issues.filter((issue) => issue.code === "unresolved_location").length, 0);
+  db.close();
+});
+
+test("queries imported items by normalized geography", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-location-query");
+  service.importMarkdown(tripId, "- [provisional] Mather Point 停留 | 2026-10-02T17:00:00-07:00 | Mather Point | | timezone=America/Phoenix", { idempotencyKey: "test:location-query" });
+  const result = service.queryTrip(tripId, "system-admin", { city: "Grand Canyon Village" });
+  assert.equal(result.pending.length, 1);
+  assert.equal(result.pending[0].location, "Mather Point");
+  db.close();
+});
+
 test("persists ordered Import Chunks for a multi-section Markdown batch", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

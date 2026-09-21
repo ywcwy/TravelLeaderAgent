@@ -11,7 +11,7 @@ export interface QueryRouterInput {
 }
 
 export type QueryRouterResult =
-  | { intent: "itinerary_query"; filter?: Pick<ItineraryQuery, "date" | "timeWindow" | "location" | "origin" | "destination" | "status" | "kind">; overview?: boolean; notesRequested?: boolean }
+  | { intent: "itinerary_query"; filter?: Pick<ItineraryQuery, "date" | "timeWindow" | "location" | "city" | "region" | "country" | "macroRegion" | "origin" | "destination" | "status" | "kind">; overview?: boolean; notesRequested?: boolean }
   | { intent: "itinerary_input" }
   | { intent: "clarification"; question: string }
   | { intent: "unsupported_action"; message?: string };
@@ -128,7 +128,7 @@ const routerInstructions = [
   "An explicit date always makes this a query, including '10/2 那天有什麼': return itinerary_query with filter.date='2026-10-02' (using the currentDate year), not clarification.",
   "Use itinerary_input for text that should enter the existing Extraction Draft workflow unchanged.",
   "Use clarification only when a read query has an unresolved reference such as '那天有什麼' with no date or location. Use unsupported_action for any unrecognized destructive or modifying action.",
-  "The only Query Filter fields are date, timeWindow, location, origin, destination, status, and kind. Status may only be confirmed or pending; kind must use the existing itinerary kind vocabulary.",
+  "The only Query Filter fields are date, timeWindow, location, city, region, country, macroRegion, origin, destination, status, and kind. Status may only be confirmed or pending; kind must use the existing itinerary kind vocabulary.",
   `When a location wording is not already canonical, choose only from these bounded aliases; never invent a location: ${LOCATION_ALIASES.map((entry) => `${entry.alias}=${entry.canonical}`).join(", ")}.`,
 ].join("\n");
 
@@ -138,7 +138,7 @@ const routerJsonSchema = {
   required: ["intent", "filter", "overview", "question", "message", "notesRequested"],
   properties: {
     intent: { type: "string", enum: ["itinerary_query", "itinerary_input", "clarification", "unsupported_action"] },
-    filter: { type: ["object", "null"], additionalProperties: false, required: ["date", "timeWindow", "location", "origin", "destination", "status", "kind"], properties: { date: { type: ["string", "null"] }, timeWindow: { type: ["string", "null"], enum: ["morning", "afternoon", "evening", "night", null] }, location: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, status: { type: ["string", "null"], enum: ["confirmed", "pending", null] }, kind: { type: ["string", "null"], enum: ["flight", "lodging", "rental_car", "transport", "meal", "activity", "shopping", "meeting", "other", null] } } },
+    filter: { type: ["object", "null"], additionalProperties: false, required: ["date", "timeWindow", "location", "city", "region", "country", "macroRegion", "origin", "destination", "status", "kind"], properties: { date: { type: ["string", "null"] }, timeWindow: { type: ["string", "null"], enum: ["morning", "afternoon", "evening", "night", null] }, location: { type: ["string", "null"] }, city: { type: ["string", "null"] }, region: { type: ["string", "null"] }, country: { type: ["string", "null"] }, macroRegion: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, status: { type: ["string", "null"], enum: ["confirmed", "pending", null] }, kind: { type: ["string", "null"], enum: ["flight", "lodging", "rental_car", "transport", "meal", "activity", "shopping", "meeting", "other", null] } } },
     overview: { type: ["boolean", "null"] },
     question: { type: ["string", "null"] },
     message: { type: ["string", "null"] },

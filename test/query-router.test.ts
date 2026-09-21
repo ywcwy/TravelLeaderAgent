@@ -30,7 +30,7 @@ test("provider router sends only minimal context and validates its structured re
   assert.equal((request?.text as { format: { type: string } }).format.type, "json_schema");
   const schema = (request?.text as { format: { schema: { required: string[]; properties: { filter: { required: string[] } } } } }).format.schema;
   assert.deepEqual(schema.required, ["intent", "filter", "overview", "question", "message", "notesRequested"]);
-  assert.deepEqual(schema.properties.filter.required, ["date", "timeWindow", "location", "origin", "destination", "status", "kind"]);
+  assert.deepEqual(schema.properties.filter.required, ["date", "timeWindow", "location", "city", "region", "country", "macroRegion", "origin", "destination", "status", "kind"]);
 });
 
 test("normalizes a model that mixes explicit date extraction with clarification", async () => {

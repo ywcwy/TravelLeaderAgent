@@ -18,8 +18,9 @@ export class DeterministicQueryFilterAdapter implements QueryFilterAdapter {
     ].find(([, pattern]) => (pattern as RegExp).test(text))?.[0];
     const status = /(?:待確認|待确认|pending)/i.test(text) ? "pending" : /(?:已確認|已确认|confirmed)/i.test(text) ? "confirmed" : undefined;
     const kind = parseKind(text);
-    const location = route ? undefined : text.replace(/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}|上午|早上|中午|下午|傍晚|晚上|深夜|夜晚|什麼時候(?:會有)?|有什麼(?:安排)?[？?]?|(?:待確認|待确认|pending|已確認|已确认|confirmed)(?:行程)?|逛街|購物|购物|買東西|买东西|shopping|行程|安排|在|的/g, " ").trim().replace(/\s+/g, " ");
-    return { ...(date ? { date } : {}), ...(timeWindow ? { timeWindow } : {}), ...(status ? { status } : {}), ...(route ? { origin: route[1].trim(), destination: route[2].trim() } : {}), ...(kind ? { kind } : {}), ...(location ? { location } : {}) };
+    const dimension = parseLocationDimension(text);
+    const location = route || dimension ? undefined : text.replace(/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}|上午|早上|中午|下午|傍晚|晚上|深夜|夜晚|什麼時候(?:會有)?|有什麼(?:安排)?[？?]?|(?:待確認|待确认|pending|已確認|已确认|confirmed)(?:行程)?|逛街|購物|购物|買東西|买东西|shopping|行程|安排|在|的/g, " ").trim().replace(/\s+/g, " ");
+    return { ...(date ? { date } : {}), ...(timeWindow ? { timeWindow } : {}), ...(status ? { status } : {}), ...(route ? { origin: route[1].trim(), destination: route[2].trim() } : {}), ...(kind ? { kind } : {}), ...(dimension ?? {}), ...(location ? { location } : {}) };
   }
 }
 
@@ -33,23 +34,40 @@ function parseShortDate(text: string, currentDate: string): string | undefined {
 
 export class QueryFilterValidationError extends Error {}
 
-export function validateQueryFilter(value: unknown): Pick<ItineraryQuery, "date" | "timeWindow" | "location" | "origin" | "destination" | "status" | "kind"> {
+export function validateQueryFilter(value: unknown): Pick<ItineraryQuery, "date" | "timeWindow" | "location" | "city" | "region" | "country" | "macroRegion" | "origin" | "destination" | "status" | "kind"> {
   if (!isRecord(value)) throw new QueryFilterValidationError("Query Filter must be an object.");
-  const allowed = new Set(["date", "timeWindow", "location", "origin", "destination", "status", "kind"]);
+  const allowed = new Set(["date", "timeWindow", "location", "city", "region", "country", "macroRegion", "origin", "destination", "status", "kind"]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new QueryFilterValidationError(`Unsupported Query Filter field: ${key}.`);
   const date = optionalString(value.date, "date");
   if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new QueryFilterValidationError("Query Filter date must be an ISO local date.");
   const timeWindow = optionalString(value.timeWindow, "timeWindow");
   if (timeWindow && !timeWindows.includes(timeWindow as (typeof timeWindows)[number])) throw new QueryFilterValidationError("Query Filter Time Window is unsupported.");
   const location = optionalString(value.location, "location");
+  const city = optionalString(value.city, "city");
+  const region = optionalString(value.region, "region");
+  const country = optionalString(value.country, "country");
+  const macroRegion = optionalString(value.macroRegion, "macroRegion");
   const origin = optionalString(value.origin, "origin");
   const destination = optionalString(value.destination, "destination");
   const status = optionalString(value.status, "status");
   const kind = optionalString(value.kind, "kind");
   if (kind && !tripItemKinds.includes(kind as (typeof tripItemKinds)[number])) throw new QueryFilterValidationError("Query Filter kind is unsupported.");
   if (status && status !== "confirmed" && status !== "pending") throw new QueryFilterValidationError("Query Filter status is unsupported.");
-  if (!date && !timeWindow && !location && !origin && !destination && !status && !kind) throw new QueryFilterValidationError("Query Filter needs at least one condition.");
-  return { ...(date ? { date } : {}), ...(timeWindow ? { timeWindow: timeWindow as ItineraryQuery["timeWindow"] } : {}), ...(location ? { location } : {}), ...(origin ? { origin } : {}), ...(destination ? { destination } : {}), ...(status ? { status: status as "confirmed" | "pending" } : {}), ...(kind ? { kind: kind as ItineraryQuery["kind"] } : {}) };
+  if (!date && !timeWindow && !location && !city && !region && !country && !macroRegion && !origin && !destination && !status && !kind) throw new QueryFilterValidationError("Query Filter needs at least one condition.");
+  return { ...(date ? { date } : {}), ...(timeWindow ? { timeWindow: timeWindow as ItineraryQuery["timeWindow"] } : {}), ...(location ? { location } : {}), ...(city ? { city } : {}), ...(region ? { region } : {}), ...(country ? { country } : {}), ...(macroRegion ? { macroRegion } : {}), ...(origin ? { origin } : {}), ...(destination ? { destination } : {}), ...(status ? { status: status as "confirmed" | "pending" } : {}), ...(kind ? { kind: kind as ItineraryQuery["kind"] } : {}) };
+}
+
+function parseLocationDimension(text: string): Pick<ItineraryQuery, "city" | "region" | "country" | "macroRegion"> | null {
+  if (/(?:美西|美國西部|us[- ]?west)/i.test(text)) return { macroRegion: "US-West" };
+  if (/Grand Canyon Village/i.test(text)) return { city: "Grand Canyon Village" };
+  if (/(?:Page|佩吉)/i.test(text)) return { city: "Page" };
+  if (/(?:Las Vegas|Vegas|拉斯維加斯)/i.test(text)) return { city: "Las Vegas" };
+  if (/Tusayan/i.test(text)) return { city: "Tusayan" };
+  if (/(?:Arizona|亞利桑那)/i.test(text)) return { region: "Arizona" };
+  if (/(?:Nevada|內華達)/i.test(text)) return { region: "Nevada" };
+  if (/(?:California|加州|加利福尼亞)/i.test(text)) return { region: "California" };
+  if (/(?:United States|美國|美利堅)/i.test(text)) return { country: "United States" };
+  return null;
 }
 
 function parseKind(text: string): ItineraryQuery["kind"] | undefined {

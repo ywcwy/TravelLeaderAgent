@@ -17,16 +17,19 @@ interface RegistryEntry extends Required<Omit<NormalizedLocation, "source" | "co
 const ENTRIES: RegistryEntry[] = [
   { aliases: ["page", "羚羊谷", "下羚羊谷", "lower antelope canyon", "horseshoe bend", "馬蹄灣"], city: "Page", region: "Arizona", country: "United States", macroRegion: "US-West" },
   { aliases: ["grand canyon village", "grand canyon", "大峽谷村", "大峽谷"], city: "Grand Canyon Village", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { aliases: ["mather point", "yavapai point", "desert view watchtower", "market plaza", "hermits route"], city: "Grand Canyon Village", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { aliases: ["cameron trading post", "cameron"], city: "Cameron", region: "Arizona", country: "United States", macroRegion: "US-West" },
   { aliases: ["tusayan"], city: "Tusayan", region: "Arizona", country: "United States", macroRegion: "US-West" },
   { aliases: ["las vegas", "vegas", "拉斯維加斯"], city: "Las Vegas", region: "Nevada", country: "United States", macroRegion: "US-West" },
   { aliases: ["barstow"], city: "Barstow", region: "California", country: "United States", macroRegion: "US-West" },
   { aliases: ["ludlow"], city: "Ludlow", region: "California", country: "United States", macroRegion: "US-West" },
   { aliases: ["seligman"], city: "Seligman", region: "Arizona", country: "United States", macroRegion: "US-West" },
-  { aliases: ["kingman"], city: "Kingman", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  { aliases: ["kingman", "mr. d'z route 66 diner"], city: "Kingman", region: "Arizona", country: "United States", macroRegion: "US-West" },
   { aliases: ["los angeles"], city: "Los Angeles", region: "California", country: "United States", macroRegion: "US-West" },
+  { aliases: ["mccarran rent-a-car center", "harry reid rent-a-car center", "mccarran"], city: "Las Vegas", region: "Nevada", country: "United States", macroRegion: "US-West" },
 ];
 
-function clean(value: string): string { return value.trim().toLocaleLowerCase().replace(/[,，].*$/u, ""); }
+function clean(value: string): string { return value.trim().toLocaleLowerCase(); }
 
 export function normalizeLocation(value: string | null | undefined): NormalizedLocation | null {
   if (!value?.trim()) return null;

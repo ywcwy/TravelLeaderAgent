@@ -7,6 +7,9 @@ import { TravelService } from "../src/travel-service.ts";
 test("normalizes known aliases to city, region, country, and macro region", () => {
   assert.deepEqual(normalizeLocation("Lower Antelope Canyon"), { city: "Page", region: "Arizona", country: "United States", macroRegion: "US-West", source: "registry", confidence: "high" });
   assert.deepEqual(normalizeLocation("vegas"), { city: "Las Vegas", region: "Nevada", country: "United States", macroRegion: "US-West", source: "registry", confidence: "high" });
+  assert.equal(normalizeLocation("Mather Point")?.city, "Grand Canyon Village");
+  assert.equal(normalizeLocation("Indn, Route 222, Page, AZ 86040")?.city, "Page");
+  assert.equal(normalizeLocation("McCarran Rent-A-Car Center")?.city, "Las Vegas");
 });
 
 test("normalizes route endpoints independently and preserves unknowns", () => {
