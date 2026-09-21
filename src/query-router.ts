@@ -160,6 +160,8 @@ function normalizeProviderResult(value: unknown, currentDate: string, inputText:
   const filter = isRecord(value.filter) ? { ...value.filter } : null;
   const alias = LOCATION_ALIASES.find((entry) => inputText.toLocaleLowerCase().includes(entry.alias.toLocaleLowerCase()));
   if (filter && alias) filter.location = normalizeLocationQuery(alias.alias);
+  const hasExplicitDate = /\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\b/u.test(inputText);
+  if (filter && !hasExplicitDate) delete filter.date;
   if (filter && typeof filter.date === "string") {
     const shortDate = filter.date.match(/^(\d{1,2})\/(\d{1,2})$/u);
     if (shortDate) filter.date = `${currentDate.slice(0, 4)}-${shortDate[1].padStart(2, "0")}-${shortDate[2].padStart(2, "0")}`;

@@ -46,3 +46,8 @@ test("normalizes a location alias from a notes question before querying", async 
   const router = new OpenAiCompatibleQueryRouter({ apiKey: "test", model: "test", fetchImpl: async () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: JSON.stringify({ intent: "itinerary_query", filter: { date: null, timeWindow: null, location: "馬蹄灣", origin: null, destination: null, status: null, kind: null }, overview: null, question: null, message: null, notesRequested: true }) }] }] })) });
   assert.deepEqual(await router.route({ text: "去馬蹄灣有什麼事情需要注意？", tripTimezone: "Asia/Taipei", currentDate: "2026-09-21" }), { intent: "itinerary_query", filter: { location: "Horseshoe Bend" }, notesRequested: true });
 });
+
+test("does not retain a model-invented date for a date-less location question", async () => {
+  const router = new OpenAiCompatibleQueryRouter({ apiKey: "test", model: "test", fetchImpl: async () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: JSON.stringify({ intent: "itinerary_query", filter: { date: "2026-09-21", timeWindow: null, location: "大峽谷", origin: null, destination: null, status: null, kind: null }, overview: null, question: null, message: null, notesRequested: true }) }] }] })) });
+  assert.deepEqual(await router.route({ text: "去大峽谷有什麼事情需要注意？", tripTimezone: "Asia/Taipei", currentDate: "2026-09-21" }), { intent: "itinerary_query", filter: { location: "Grand Canyon" }, notesRequested: true });
+});
