@@ -41,3 +41,8 @@ test("normalizes a model that mixes explicit date extraction with clarification"
 test("accepts a read-only notes request", () => {
   assert.deepEqual(validateQueryRouterResult({ intent: "itinerary_query", filter: { location: "Lower Antelope Canyon" }, notesRequested: true }), { intent: "itinerary_query", filter: { location: "Lower Antelope Canyon" }, notesRequested: true });
 });
+
+test("normalizes a location alias from a notes question before querying", async () => {
+  const router = new OpenAiCompatibleQueryRouter({ apiKey: "test", model: "test", fetchImpl: async () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: JSON.stringify({ intent: "itinerary_query", filter: { date: null, timeWindow: null, location: "馬蹄灣", origin: null, destination: null, status: null, kind: null }, overview: null, question: null, message: null, notesRequested: true }) }] }] })) });
+  assert.deepEqual(await router.route({ text: "去馬蹄灣有什麼事情需要注意？", tripTimezone: "Asia/Taipei", currentDate: "2026-09-21" }), { intent: "itinerary_query", filter: { location: "Horseshoe Bend" }, notesRequested: true });
+});

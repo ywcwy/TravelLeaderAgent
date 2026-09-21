@@ -1,6 +1,6 @@
 import type { ItineraryQuery } from "./domain.ts";
 import { validateQueryFilter } from "./query-filter.ts";
-import { LOCATION_ALIASES } from "./location-alias.ts";
+import { LOCATION_ALIASES, normalizeLocationQuery } from "./location-alias.ts";
 
 export const QUERY_ROUTER_PROMPT_VERSION = "query-router-v1";
 
@@ -65,7 +65,7 @@ export class OpenAiCompatibleQueryRouter implements QueryRouterAdapter {
       if (!output) throw new QueryRouterProviderError("Router provider returned no structured output.");
       let parsed: unknown;
       try { parsed = JSON.parse(output); } catch { throw new QueryRouterProviderError("Router provider returned malformed structured JSON."); }
-      try { return validateQueryRouterResult(normalizeProviderResult(removeNulls(parsed), input.currentDate)); } catch { throw new QueryRouterProviderError("Router provider returned invalid structured output."); }
+      try { return validateQueryRouterResult(normalizeProviderResult(removeNulls(parsed), input.currentDate, input.text)); } catch { throw new QueryRouterProviderError("Router provider returned invalid structured output."); }
     } catch (error) {
       if (error instanceof QueryRouterProviderError) throw error;
       if (error instanceof DOMException && error.name === "AbortError") throw new QueryRouterProviderError("Router provider request timed out.");
@@ -155,15 +155,17 @@ function responseText(body: unknown): string | null {
   return typeof body.output_text === "string" ? body.output_text : null;
 }
 
-function normalizeProviderResult(value: unknown, currentDate: string): unknown {
+function normalizeProviderResult(value: unknown, currentDate: string, inputText: string): unknown {
   if (!isRecord(value)) return value;
   const filter = isRecord(value.filter) ? { ...value.filter } : null;
+  const alias = LOCATION_ALIASES.find((entry) => inputText.toLocaleLowerCase().includes(entry.alias.toLocaleLowerCase()));
+  if (filter && alias) filter.location = normalizeLocationQuery(alias.alias);
   if (filter && typeof filter.date === "string") {
     const shortDate = filter.date.match(/^(\d{1,2})\/(\d{1,2})$/u);
     if (shortDate) filter.date = `${currentDate.slice(0, 4)}-${shortDate[1].padStart(2, "0")}-${shortDate[2].padStart(2, "0")}`;
     if (value.intent === "clarification") return { intent: "itinerary_query", filter };
   }
-  return value;
+  return filter ? { ...value, filter } : value;
 }
 
 function removeNulls(value: unknown): unknown {
