@@ -49,6 +49,7 @@ export class OpenAiCompatibleQueryRouter implements QueryRouterAdapter {
   }
 
   async route(input: QueryRouterInput): Promise<QueryRouterResult> {
+    console.error(`[query-router] input=${JSON.stringify(input.text)}`);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
     try {
@@ -63,10 +64,12 @@ export class OpenAiCompatibleQueryRouter implements QueryRouterAdapter {
       try { body = await response.json(); } catch { throw new QueryRouterProviderError("Router provider returned malformed JSON."); }
       const output = responseText(body);
       if (!output) throw new QueryRouterProviderError("Router provider returned no structured output.");
+      console.error(`[query-router] output=${output}`);
       let parsed: unknown;
       try { parsed = JSON.parse(output); } catch { throw new QueryRouterProviderError("Router provider returned malformed structured JSON."); }
       try { return validateQueryRouterResult(normalizeProviderResult(removeNulls(parsed), input.currentDate, input.text)); } catch { throw new QueryRouterProviderError("Router provider returned invalid structured output."); }
     } catch (error) {
+      console.error(`[query-router] error=${error instanceof Error ? error.message : String(error)}`);
       if (error instanceof QueryRouterProviderError) throw error;
       if (error instanceof DOMException && error.name === "AbortError") throw new QueryRouterProviderError("Router provider request timed out.");
       throw new QueryRouterProviderError("Router provider request failed.");

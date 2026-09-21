@@ -165,9 +165,11 @@ export class LineSourceWorker {
       }
       const fallback = await this.fallbackNaturalQuery(event);
       if (fallback) {
+        console.error(`[query-router] fallback=success input=${JSON.stringify(event.text)}`);
         telemetry({ intent: "itinerary_query", selectedTool: "search_itinerary", outcome: "completed", reason: "deterministic_fallback" });
         return fallback;
       }
+      console.error(`[query-router] fallback=unavailable input=${JSON.stringify(event.text)}`);
       telemetry({ outcome: "failed", reason: "router_failure" });
       return "目前無法處理這個訊息，請稍後再試；也可以用日期、地點或路線描述要查的行程。";
     } finally { this.routerInFlight.delete(event.userId); }
