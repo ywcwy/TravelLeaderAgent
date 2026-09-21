@@ -64,7 +64,7 @@ export class OpenAiCompatibleQueryRouter implements QueryRouterAdapter {
       if (!output) throw new QueryRouterProviderError("Router provider returned no structured output.");
       let parsed: unknown;
       try { parsed = JSON.parse(output); } catch { throw new QueryRouterProviderError("Router provider returned malformed structured JSON."); }
-      try { return validateQueryRouterResult(removeNulls(parsed)); } catch { throw new QueryRouterProviderError("Router provider returned invalid structured output."); }
+      try { return validateQueryRouterResult(normalizeProviderResult(removeNulls(parsed), input.currentDate)); } catch { throw new QueryRouterProviderError("Router provider returned invalid structured output."); }
     } catch (error) {
       if (error instanceof QueryRouterProviderError) throw error;
       if (error instanceof DOMException && error.name === "AbortError") throw new QueryRouterProviderError("Router provider request timed out.");
@@ -123,6 +123,7 @@ const routerInstructions = [
   "Use itinerary_query only for a request to read the itinerary. Use overview true only when the user explicitly requests the entire/current itinerary; otherwise provide a Query Filter.",
   "A named place with arrangement wording is a query: for example, 'Page 有什麼安排' must be itinerary_query with filter.location='Page'. Do not use clarification for a named place.",
   "Do not add a date filter unless the user explicitly states a date; currentDate is only for resolving an explicitly stated short date. For the exact text 'Page 有什麼安排', return filter {location:'Page'} with date null.",
+  "An explicit date always makes this a query, including '10/2 那天有什麼': return itinerary_query with filter.date='2026-10-02' (using the currentDate year), not clarification.",
   "Use itinerary_input for text that should enter the existing Extraction Draft workflow unchanged.",
   "Use clarification only when a read query has an unresolved reference such as '那天有什麼' with no date or location. Use unsupported_action for any unrecognized destructive or modifying action.",
   "The only Query Filter fields are date, timeWindow, location, origin, destination, status. Status may only be confirmed or pending.",
@@ -148,6 +149,17 @@ function responseText(body: unknown): string | null {
     for (const content of output.content) if (isRecord(content) && content.type === "output_text" && typeof content.text === "string") return content.text;
   }
   return typeof body.output_text === "string" ? body.output_text : null;
+}
+
+function normalizeProviderResult(value: unknown, currentDate: string): unknown {
+  if (!isRecord(value)) return value;
+  const filter = isRecord(value.filter) ? { ...value.filter } : null;
+  if (filter && typeof filter.date === "string") {
+    const shortDate = filter.date.match(/^(\d{1,2})\/(\d{1,2})$/u);
+    if (shortDate) filter.date = `${currentDate.slice(0, 4)}-${shortDate[1].padStart(2, "0")}-${shortDate[2].padStart(2, "0")}`;
+    if (value.intent === "clarification") return { intent: "itinerary_query", filter };
+  }
+  return value;
 }
 
 function removeNulls(value: unknown): unknown {

@@ -32,3 +32,8 @@ test("provider router sends only minimal context and validates its structured re
   assert.deepEqual(schema.required, ["intent", "filter", "overview", "question", "message"]);
   assert.deepEqual(schema.properties.filter.required, ["date", "timeWindow", "location", "origin", "destination", "status"]);
 });
+
+test("normalizes a model that mixes explicit date extraction with clarification", async () => {
+  const router = new OpenAiCompatibleQueryRouter({ apiKey: "test-key", model: "router-test", fetchImpl: async () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: JSON.stringify({ intent: "clarification", filter: { date: "10/2" }, overview: null, question: null, message: null }) }] }] }), { status: 200 }) });
+  assert.deepEqual(await router.route({ text: "10/2 那天有什麼", tripTimezone: "America/Phoenix", currentDate: "2026-09-21" }), { intent: "itinerary_query", filter: { date: "2026-10-02" } });
+});
