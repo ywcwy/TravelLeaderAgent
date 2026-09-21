@@ -37,5 +37,6 @@ export function normalizeLocation(value: string | null | undefined): NormalizedL
 }
 
 export function normalizeItemLocations(item: { location?: string | null; origin?: string | null; destination?: string | null }): { location?: NormalizedLocation; origin?: NormalizedLocation; destination?: NormalizedLocation } {
-  return { ...(normalizeLocation(item.location) ? { location: normalizeLocation(item.location)! } : {}), ...(normalizeLocation(item.origin) ? { origin: normalizeLocation(item.origin)! } : {}), ...(normalizeLocation(item.destination) ? { destination: normalizeLocation(item.destination)! } : {}) };
+  const location = normalizeLocation(item.location); const origin = normalizeLocation(item.origin); const destination = normalizeLocation(item.destination);
+  return { ...(location ? { location } : {}), ...(origin ? { origin } : {}), ...(destination ? { destination } : {}) };
 }

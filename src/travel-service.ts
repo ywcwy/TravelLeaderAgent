@@ -2029,11 +2029,17 @@ function buildReviewIssues(proposals: Proposal[], confirmed: TripItem[]): Review
     if (proposal.shape === "route" && proposal.startsAt && !isDateOnly(proposal.startsAt) && (!proposal.originTimezone || !proposal.destinationTimezone)) {
       issues.push({ code: "missing_endpoint_timezone", message: `「${proposal.title}」缺少起點或終點 IANA timezone，查詢將使用 Route timezone/Trip Timezone compatibility fallback。`, proposalIds: [proposal.id] });
     }
-    if (proposal.startsAt && !isDateOnly(proposal.startsAt) && isOffsetlessDateTime(proposal.startsAt) && (!proposal.timezone || formatLocalDateTime(proposal.startsAt, proposal.timezone).includes("UTC offset unresolved"))) {
+    let localTimeUnresolved = false;
+    if (proposal.startsAt && !isDateOnly(proposal.startsAt) && isOffsetlessDateTime(proposal.startsAt) && proposal.timezone) {
+      try { localTimeUnresolved = formatLocalDateTime(proposal.startsAt, proposal.timezone).includes("UTC offset unresolved"); } catch { localTimeUnresolved = true; }
+    }
+    if (proposal.startsAt && !isDateOnly(proposal.startsAt) && isOffsetlessDateTime(proposal.startsAt) && (!proposal.timezone || localTimeUnresolved)) {
       issues.push({ code: "ambiguous_local_time", message: `「${proposal.title}」的時間沒有 UTC offset；若落在 DST 轉換時段，可能存在重複或不存在的 local time，請補充 offset。`, proposalIds: [proposal.id] });
     }
     if (proposal.shape === "point" && !proposal.location) issues.push({ code: "missing_location", message: `「${proposal.title}」缺少地點。`, proposalIds: [proposal.id] });
     if (proposal.location && proposal.locationConfidence === "low") issues.push({ code: "unresolved_location", message: `「${proposal.title}」的地點「${proposal.location}」尚未正規化，請確認城市、州／地區與國家。`, proposalIds: [proposal.id] });
+    if (proposal.origin && !proposal.originCity) issues.push({ code: "unresolved_location", message: `「${proposal.title}」的起點「${proposal.origin}」尚未正規化，請確認城市、州／地區與國家。`, proposalIds: [proposal.id] });
+    if (proposal.destination && !proposal.destinationCity) issues.push({ code: "unresolved_location", message: `「${proposal.title}」的終點「${proposal.destination}」尚未正規化，請確認城市、州／地區與國家。`, proposalIds: [proposal.id] });
   }
   const scheduled = [...proposals.filter((proposal) => proposal.startsAt), ...confirmed];
   for (let i = 0; i < scheduled.length; i += 1) {
