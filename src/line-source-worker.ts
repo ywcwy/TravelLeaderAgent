@@ -175,13 +175,13 @@ export class LineSourceWorker {
         if (!trip) throw new Error("Trip not found.");
         const text = event.text.trim().replace(/^@[^\s]+\s*/, "");
         const filter = validateQueryFilter(await this.queryFilterAdapter.interpret({ text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
-        return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, filter));
+        return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, filter), { displayAlias: filter.location });
       } catch (error) {
         if (error instanceof QueryFilterValidationError) return `無法解析查詢條件，請使用固定格式，例如：${itineraryQueryHelp}`;
         return `目前無法解析自然語言查詢，請使用固定格式，例如：${itineraryQueryHelp}`;
       }
     }
-    return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, query));
+    return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, query), { displayAlias: query.location });
   }
 
   private async draftReply(event: WebhookInboxEvent, command: Exclude<ReturnType<typeof parseDraftCommand>, null>): Promise<string> {

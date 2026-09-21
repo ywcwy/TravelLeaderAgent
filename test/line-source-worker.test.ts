@@ -270,7 +270,7 @@ test("normalizes fixed-format Time Window synonyms without creating itinerary ev
   db.close();
 });
 
-test("renders query results in separate readable sections with route details and Proposal IDs", async () => {
+test("renders query results as readable item blocks with route details and Proposal IDs", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-query-render-line", "查詢顯示群組");
@@ -288,8 +288,10 @@ test("renders query results in separate readable sections with route details and
   const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
 
   assert.equal(await worker.processNext(), "processed");
-  assert.match(replies[0] ?? "", /Confirmed：.*Las Vegas → Page.*Route: Las Vegas → Page.*confirmed.*車程約 4 小時/);
-  assert.match(replies[0] ?? "", new RegExp(`Pending：.*${imported.proposalIds[1]}.*Page 午餐.*Page.*pending.*訂位待確認`));
+  assert.match(replies[0] ?? "", /已確認/);
+  assert.match(replies[0] ?? "", /Las Vegas → Page[\s\S]*路線：Las Vegas → Page[\s\S]*狀態：已確認[\s\S]*備註：車程約 4 小時/);
+  assert.match(replies[0] ?? "", /待確認/);
+  assert.match(replies[0] ?? "", new RegExp(`Page 午餐[\\s\\S]*地點：Page[\\s\\S]*狀態：待確認[\\s\\S]*備註：訂位待確認[\\s\\S]*Proposal：${imported.proposalIds[1]}`));
   assert.doesNotMatch(replies[0] ?? "", /S-[A-Z0-9]/);
   db.close();
 });
@@ -348,8 +350,8 @@ test("answers a natural pending itinerary question with a pending-only filter", 
   const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
 
   assert.equal(await worker.processNext(), "processed");
-  assert.match(replies[0] ?? "", /Pending：.*Page 午餐/);
-  assert.doesNotMatch(replies[0] ?? "", /Confirmed：/);
+  assert.match(replies[0] ?? "", /待確認[\s\S]*Page 午餐/);
+  assert.doesNotMatch(replies[0] ?? "", /已確認/);
   db.close();
 });
 

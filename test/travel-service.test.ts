@@ -274,13 +274,12 @@ test("queries each timed item by its local date and renders timezone context", (
   assert.deepEqual(localDateResult.pending.map((item) => item.title).sort(), ["Date-only Page", "Las Vegas evening", "Page lodging", "St George boundary", "Unknown fallback"].sort());
   assert.equal(localDateResult.pending.at(-1)?.title, "Date-only Page");
   const rendered = renderItineraryQuery(localDateResult);
-  assert.match(rendered, /America\/Los_Angeles/);
-  assert.match(rendered, /America\/Phoenix/);
-  assert.match(rendered, /America\/Denver/);
-  assert.match(rendered, /UTC-07:00/);
+  assert.doesNotMatch(rendered, /America\//);
+  assert.doesNotMatch(rendered, /UTC[+-]\d{2}:\d{2}/);
+  assert.match(rendered, /時區採旅程預設/);
 
   const fallbackResult = service.queryActiveTrip(tripId, "U-member", { location: "Somewhere" });
-  assert.match(renderItineraryQuery(fallbackResult), /timezone fallback/);
+  assert.match(renderItineraryQuery(fallbackResult), /時區採旅程預設/);
   db.close();
 });
 
@@ -323,7 +322,7 @@ test("retains Route Source evidence when endpoint timezone data is invalid or am
   assert.equal(review.issues.some((issue) => issue.code === "ambiguous_local_time" && issue.proposalIds.includes(imported.proposalIds[0])), true);
   const ambiguousResult = service.queryActiveTrip(tripId, "system-admin", { date: "2026-11-01" });
   assert.equal(ambiguousResult.pending.length, 1);
-  assert.match(renderItineraryQuery(ambiguousResult), /2026-11-01T01:30 \(UTC offset unresolved\)/);
+  assert.match(renderItineraryQuery(ambiguousResult), /2026-11-01 01:30（時區待確認）/);
   assert.ok(service.getSource(imported.sourceId));
   const seed = service.importMarkdown(tripId, "- [provisional] Seed | 2026-11-02T10:00:00Z | Somewhere", { idempotencyKey: "query:route-timezone-seed" });
   assert.throws(() => service.createProposal(tripId, seed.sourceId, {

@@ -73,26 +73,63 @@ export function parseItineraryMessage(text: string): ParsedItineraryMessage {
 
 export function renderItineraryQuery(result: ItineraryQueryResult, options: { notesRequested?: boolean; displayAlias?: string } = {}): string {
   const lines = [`${result.trip.title}｜${result.trip.status === "active" ? "Active" : "Archived"} Trip`];
-  if (result.confirmed.length) lines.push(`Confirmed：${result.confirmed.map((item) => formatItem(item, "confirmed", options.displayAlias)).join("、")}`);
-  if (result.pending.length) lines.push(`Pending：${result.pending.map((item) => `${item.id} ${formatItem(item, "pending", options.displayAlias)}`).join("、")}`);
-  if (result.openDecisions.length) lines.push(`Open Decision：${result.openDecisions.map((decision) => `${decision.id} ${decision.title}`).join("、")}`);
-  if (result.issues.length) lines.push(`Review Issues：${result.issues.length} 筆`);
+  if (result.confirmed.length) {
+    lines.push("", `已確認（${result.confirmed.length}）`);
+    for (const item of result.confirmed) lines.push(...formatItem(item, "confirmed", options.displayAlias));
+  }
+  if (result.pending.length) {
+    lines.push("", `待確認（${result.pending.length}）`);
+    for (const item of result.pending) lines.push(...formatItem(item, "pending", options.displayAlias, item.id));
+  }
+  if (result.openDecisions.length) {
+    lines.push("", `待選擇（${result.openDecisions.length}）`);
+    for (const decision of result.openDecisions) lines.push(`- ${decision.title}`, `  Decision：${decision.id}`);
+  }
+  if (result.issues.length) lines.push("", `⚠️ Review Issues：${result.issues.length} 筆`);
   const matchedItems = [...result.confirmed, ...result.pending];
-  if (options.notesRequested && matchedItems.length > 0 && matchedItems.every((item) => !item.notes)) lines.push("注意事項：行程未記錄注意事項");
-  if (result.sources.length) lines.push(`Source 原文：${result.sources.map((source) => `${source.id}｜${source.content}`).join("\n")}`);
-  if (result.nextPageToken) lines.push(`下一頁：查詢繼續 ${result.nextPageToken}`);
+  if (options.notesRequested && matchedItems.length > 0 && matchedItems.every((item) => !item.notes)) lines.push("", "注意事項：行程未記錄注意事項");
+  if (result.sources.length) lines.push("", "來源原文：", ...result.sources.map((source) => `${source.id}｜${source.content}`));
+  if (result.nextPageToken) lines.push("", `下一頁：查詢繼續 ${result.nextPageToken}`);
   if (lines.length === 1) return `${lines[0]}\n查無符合條件的行程資料。`;
   return lines.join("\n");
 }
 
 export const itineraryQueryHelp = "可用查詢：查詢行程、查詢 2026-10-01 下午 Page、查詢 confirmed、查詢 pending、查詢歷史 <Trip ID>、查詢繼續 Q-XXXXXXXX。";
 
-function formatItem(item: { title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string; origin?: string; destination?: string; notes?: string }, status: "confirmed" | "pending", displayAlias?: string): string {
-  const time = item.startsAt ? `｜${item.timezone ? formatLocalDateTime(item.startsAt, item.timezone) : item.startsAt}` : item.localDate ? `｜${item.localDate}${item.timeWindow ? ` ${item.timeWindow}` : ""}` : item.timeWindow ? `｜${item.timeWindow}` : "";
-  const endpointZones = item.originTimezone || item.destinationTimezone ? `｜${item.originTimezone ?? item.timezone ?? "?"} → ${item.destinationTimezone ?? item.timezone ?? "?"}` : "";
-  const place = item.origin && item.destination ? `｜Route: ${displayLocationAlias(item.origin, displayAlias)} → ${displayLocationAlias(item.destination, displayAlias)}` : item.location ? `｜${displayLocationAlias(item.location, displayAlias)}` : "";
-  const notes = item.notes ? `｜備註: ${item.notes}` : "";
-  return `${item.title}${time}${place}｜${status}${notes}${item.timezone ? `｜${item.timezone}` : ""}${endpointZones}${item.timezoneSource === "fallback" ? "｜timezone fallback" : ""}`;
+function formatItem(item: { id?: string; title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string; origin?: string; destination?: string; notes?: string }, status: "confirmed" | "pending", displayAlias?: string, proposalId?: string): string[] {
+  const lines = [`- ${item.title}`];
+  const time = formatDisplayTime(item);
+  if (time) lines.push(`  時間：${time}`);
+  if (item.origin && item.destination) lines.push(`  路線：${displayLocationAlias(item.origin, displayAlias)} → ${displayLocationAlias(item.destination, displayAlias)}`);
+  else if (item.location) lines.push(`  地點：${displayLocationAlias(item.location, displayAlias)}`);
+  if (item.originTimezone || item.destinationTimezone) {
+    const originTimezone = item.originTimezone ?? item.timezone ?? "未知";
+    const destinationTimezone = item.destinationTimezone ?? item.timezone ?? "未知";
+    if (originTimezone !== destinationTimezone) lines.push(`  時區：${originTimezone} → ${destinationTimezone}`);
+  }
+  lines.push(`  狀態：${status === "confirmed" ? "已確認" : "待確認"}`);
+  if (item.notes) lines.push(`  備註：${item.notes}`);
+  if (proposalId) lines.push(`  Proposal：${proposalId}`);
+  return lines;
+}
+
+function formatDisplayTime(item: { localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string }): string {
+  let value = "";
+  if (item.startsAt) {
+    value = item.timezone ? formatLocalDateTime(item.startsAt, item.timezone) : item.startsAt;
+    if (value.includes("(UTC offset unresolved)")) return `${value.replace("T", " ").replace(" (UTC offset unresolved)", "")}（時區待確認）`;
+    const match = value.match(/^\d{4}-(\d{2})-(\d{2}) (\d{2}:\d{2})(?::\d{2})? \(UTC[+-]\d{2}:\d{2}\)$/);
+    value = match ? `${match[1]}/${match[2]} ${match[3]}` : value;
+  } else if (item.localDate) {
+    value = /^\d{4}-(\d{2})-(\d{2})$/.test(item.localDate) ? `${item.localDate.slice(5, 7)}/${item.localDate.slice(8, 10)}` : item.localDate;
+  }
+  if (item.timeWindow) value += `${value ? " " : ""}${timeWindowLabel(item.timeWindow)}`;
+  if (item.timezoneSource === "fallback") value += "（時區採旅程預設）";
+  return value;
+}
+
+function timeWindowLabel(value: string): string {
+  return ({ morning: "早上", afternoon: "下午", evening: "傍晚", night: "晚上" } as Record<string, string>)[value] ?? value;
 }
 
 function parseKind(value: string): TripItemKind | undefined {
