@@ -1,5 +1,6 @@
 import type { ItineraryQuery } from "./domain.ts";
 import { validateQueryFilter } from "./query-filter.ts";
+import { LOCATION_ALIASES } from "./location-alias.ts";
 
 export const QUERY_ROUTER_PROMPT_VERSION = "query-router-v1";
 
@@ -10,7 +11,7 @@ export interface QueryRouterInput {
 }
 
 export type QueryRouterResult =
-  | { intent: "itinerary_query"; filter?: Pick<ItineraryQuery, "date" | "timeWindow" | "location" | "origin" | "destination" | "status">; overview?: boolean }
+  | { intent: "itinerary_query"; filter?: Pick<ItineraryQuery, "date" | "timeWindow" | "location" | "origin" | "destination" | "status" | "kind">; overview?: boolean; notesRequested?: boolean }
   | { intent: "itinerary_input" }
   | { intent: "clarification"; question: string }
   | { intent: "unsupported_action"; message?: string };
@@ -78,12 +79,13 @@ export function validateQueryRouterResult(value: unknown): QueryRouterResult {
   if (!isRecord(value) || typeof value.intent !== "string") throw new QueryRouterValidationError("Router output must include an intent.");
   switch (value.intent) {
     case "itinerary_query": {
-      const keys = new Set(["intent", "filter", "overview"]);
+      const keys = new Set(["intent", "filter", "overview", "notesRequested"]);
       rejectUnknown(value, keys);
       if (value.overview !== undefined && value.overview !== true) throw new QueryRouterValidationError("Router overview must be true.");
+      if (value.notesRequested !== undefined && value.notesRequested !== true) throw new QueryRouterValidationError("Router notesRequested must be true.");
       if (value.overview === true && value.filter !== undefined) throw new QueryRouterValidationError("Router overview cannot include a filter.");
       if (value.overview !== true && value.filter === undefined) throw new QueryRouterValidationError("Router query needs a filter or overview.");
-      return value.overview === true ? { intent: "itinerary_query", overview: true } : { intent: "itinerary_query", filter: validateQueryFilter(value.filter) };
+      return { intent: "itinerary_query", ...(value.overview === true ? { overview: true } : { filter: validateQueryFilter(value.filter) }), ...(value.notesRequested === true ? { notesRequested: true } : {}) };
     }
     case "itinerary_input":
       rejectUnknown(value, new Set(["intent"]));
@@ -120,25 +122,27 @@ function rejectUnknown(value: Record<string, unknown>, allowed: Set<string>): vo
 const routerInstructions = [
   "Classify one group message for a travel itinerary assistant.",
   "Return exactly one intent. Do not write, modify, delete, confirm, reject, or call any tool.",
-  "Use itinerary_query only for a request to read the itinerary. Use overview true only when the user explicitly requests the entire/current itinerary; otherwise provide a Query Filter.",
+  "Use itinerary_query only for a request to read the itinerary. Use overview true only when the user explicitly requests the entire/current itinerary; otherwise provide a Query Filter. If the user asks what to pay attention to, set notesRequested true and return only recorded itinerary notes.",
   "A named place with arrangement wording is a query: for example, 'Page 有什麼安排' must be itinerary_query with filter.location='Page'. Do not use clarification for a named place.",
   "Do not add a date filter unless the user explicitly states a date; currentDate is only for resolving an explicitly stated short date. For the exact text 'Page 有什麼安排', return filter {location:'Page'} with date null.",
   "An explicit date always makes this a query, including '10/2 那天有什麼': return itinerary_query with filter.date='2026-10-02' (using the currentDate year), not clarification.",
   "Use itinerary_input for text that should enter the existing Extraction Draft workflow unchanged.",
   "Use clarification only when a read query has an unresolved reference such as '那天有什麼' with no date or location. Use unsupported_action for any unrecognized destructive or modifying action.",
-  "The only Query Filter fields are date, timeWindow, location, origin, destination, status. Status may only be confirmed or pending.",
+  "The only Query Filter fields are date, timeWindow, location, origin, destination, status, and kind. Status may only be confirmed or pending; kind must use the existing itinerary kind vocabulary.",
+  `When a location wording is not already canonical, choose only from these bounded aliases; never invent a location: ${LOCATION_ALIASES.map((entry) => `${entry.alias}=${entry.canonical}`).join(", ")}.`,
 ].join("\n");
 
 const routerJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["intent", "filter", "overview", "question", "message"],
+    required: ["intent", "filter", "overview", "question", "message", "notesRequested"],
   properties: {
     intent: { type: "string", enum: ["itinerary_query", "itinerary_input", "clarification", "unsupported_action"] },
-    filter: { type: ["object", "null"], additionalProperties: false, required: ["date", "timeWindow", "location", "origin", "destination", "status"], properties: { date: { type: ["string", "null"] }, timeWindow: { type: ["string", "null"], enum: ["morning", "afternoon", "evening", "night", null] }, location: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, status: { type: ["string", "null"], enum: ["confirmed", "pending", null] } } },
+    filter: { type: ["object", "null"], additionalProperties: false, required: ["date", "timeWindow", "location", "origin", "destination", "status", "kind"], properties: { date: { type: ["string", "null"] }, timeWindow: { type: ["string", "null"], enum: ["morning", "afternoon", "evening", "night", null] }, location: { type: ["string", "null"] }, origin: { type: ["string", "null"] }, destination: { type: ["string", "null"] }, status: { type: ["string", "null"], enum: ["confirmed", "pending", null] }, kind: { type: ["string", "null"], enum: ["flight", "lodging", "rental_car", "transport", "meal", "activity", "shopping", "meeting", "other", null] } } },
     overview: { type: ["boolean", "null"] },
     question: { type: ["string", "null"] },
     message: { type: ["string", "null"] },
+    notesRequested: { type: ["boolean", "null"] },
   },
 };
 

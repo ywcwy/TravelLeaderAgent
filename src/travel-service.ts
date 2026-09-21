@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { isDateOnly, localDate } from "./timezone.ts";
+import { normalizeItineraryQuery, normalizeLocationQuery } from "./location-alias.ts";
 import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter, type LlmDocumentContext, type LlmDocumentSection } from "./extraction-draft.ts";
 import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftMissing, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
@@ -1101,12 +1102,12 @@ export class TravelService {
     const review = this.reviewTrip(tripId);
     const pageSize = Math.min(Math.max(query.pageSize ?? 8, 1), 8);
     const continuation = this.readQueryToken(query.continuationToken, tripId, memberId);
-    const effectiveQuery = continuation?.query ?? query;
+    const effectiveQuery = normalizeItineraryQuery(continuation?.query ?? query);
     const matches = (item: { id?: string; title: string; localDate?: string; startsAt?: string; endsAt?: string; timezone?: string; timezoneSource?: TimezoneSource; originTimezone?: string; destinationTimezone?: string; shape?: ProposalShape; location?: string; origin?: string; destination?: string; kinds: TripItemKind[] }) => {
       if (effectiveQuery.proposalId && item.id !== effectiveQuery.proposalId) return false;
       if (effectiveQuery.date && !overlapsLocalDate(item, effectiveQuery.date, trip.timezone)) return false;
       if (effectiveQuery.timeWindow && !matchesTimeWindow(item, effectiveQuery.timeWindow, trip.timezone)) return false;
-      if (effectiveQuery.location && ![item.location, item.origin, item.destination].some((value) => value?.toLocaleLowerCase().includes(effectiveQuery.location!.toLocaleLowerCase()))) return false;
+      if (effectiveQuery.location && ![item.title, item.location, item.origin, item.destination].some((value) => value && normalizeLocationQuery(value).toLocaleLowerCase().includes(effectiveQuery.location!.toLocaleLowerCase()))) return false;
       if (effectiveQuery.origin && !item.origin?.toLocaleLowerCase().includes(effectiveQuery.origin.toLocaleLowerCase())) return false;
       if (effectiveQuery.destination && !item.destination?.toLocaleLowerCase().includes(effectiveQuery.destination.toLocaleLowerCase())) return false;
       if (effectiveQuery.kind && !item.kinds.includes(effectiveQuery.kind)) return false;

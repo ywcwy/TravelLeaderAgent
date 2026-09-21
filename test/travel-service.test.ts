@@ -191,6 +191,37 @@ test("queries policy-permitted Active Trip records with stable filters", () => {
   db.close();
 });
 
+test("matches itinerary location aliases and Proposal Kinds without changing stored evidence", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-enriched-query");
+  service.ensureGroupMember(tripId, "member", "Member");
+  service.importMarkdown(tripId, [
+    "- [provisional] 馬蹄灣 | 2026-10-02T12:30:00-07:00 | Horseshoe Bend | | kinds=activity | timezone=America/Phoenix",
+    "- [provisional] 逛街 | 2026-10-03T10:00:00-07:00 | Las Vegas | | kinds=shopping | timezone=America/Los_Angeles",
+  ].join("\n"), { idempotencyKey: "query:enrichment" });
+
+  const locationResult = service.queryTrip(tripId, "member", { location: "馬蹄灣" });
+  assert.equal(locationResult.pending.length, 1);
+  assert.equal(locationResult.pending[0]?.title, "馬蹄灣");
+  const kindResult = service.queryTrip(tripId, "member", { kind: "shopping" });
+  assert.equal(kindResult.pending.length, 1);
+  assert.equal(kindResult.pending[0]?.title, "逛街");
+  const stored = service.reviewTrip(tripId).pending.find((item) => item.title === "馬蹄灣");
+  assert.equal(stored?.location, "Horseshoe Bend");
+  db.close();
+});
+
+test("renders a clear no-recorded-notes result for a notes query", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-notes-query");
+  service.importMarkdown(tripId, "- [provisional] 馬蹄灣 | 2026-10-02T12:30:00-07:00 | Horseshoe Bend | | timezone=America/Phoenix", { idempotencyKey: "query:no-notes" });
+  const result = service.queryTrip(tripId, "system-admin", { location: "馬蹄灣" });
+  assert.match(renderItineraryQuery(result, { notesRequested: true }), /行程未記錄注意事項/);
+  db.close();
+});
+
 test("filters confirmed and pending itinerary entries by Time Window", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

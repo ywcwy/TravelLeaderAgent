@@ -69,12 +69,13 @@ export function parseItineraryMessage(text: string): ParsedItineraryMessage {
   return { type: "query", query: { location: rest } };
 }
 
-export function renderItineraryQuery(result: ItineraryQueryResult): string {
+export function renderItineraryQuery(result: ItineraryQueryResult, options: { notesRequested?: boolean } = {}): string {
   const lines = [`${result.trip.title}｜${result.trip.status === "active" ? "Active" : "Archived"} Trip`];
   if (result.confirmed.length) lines.push(`Confirmed：${result.confirmed.map((item) => formatItem(item, "confirmed")).join("、")}`);
   if (result.pending.length) lines.push(`Pending：${result.pending.map((item) => `${item.id} ${formatItem(item, "pending")}`).join("、")}`);
   if (result.openDecisions.length) lines.push(`Open Decision：${result.openDecisions.map((decision) => `${decision.id} ${decision.title}`).join("、")}`);
   if (result.issues.length) lines.push(`Review Issues：${result.issues.length} 筆`);
+  if (options.notesRequested && [...result.confirmed, ...result.pending].every((item) => !item.notes)) lines.push("注意事項：行程未記錄注意事項");
   if (result.sources.length) lines.push(`Source 原文：${result.sources.map((source) => `${source.id}｜${source.content}`).join("\n")}`);
   if (result.nextPageToken) lines.push(`下一頁：查詢繼續 ${result.nextPageToken}`);
   if (lines.length === 1) return `${lines[0]}\n查無符合條件的行程資料。`;
@@ -95,7 +96,7 @@ function parseKind(value: string): TripItemKind | undefined {
   const aliases: Record<string, TripItemKind> = {
     flight: "flight", 航班: "flight", lodging: "lodging", 住宿: "lodging", 飯店: "lodging", hotel: "lodging",
     rental_car: "rental_car", 租車: "rental_car", transport: "transport", 交通: "transport", meal: "meal", 餐: "meal",
-    activity: "activity", 活動: "activity", shopping: "shopping", 購物: "shopping", meeting: "meeting", 會議: "meeting",
+    activity: "activity", 活動: "activity", shopping: "shopping", 購物: "shopping", 购物: "shopping", 逛街: "shopping", 買東西: "shopping", 买东西: "shopping", meeting: "meeting", 會議: "meeting",
     other: "other",
   };
   return aliases[value.toLocaleLowerCase()];
