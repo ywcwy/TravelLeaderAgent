@@ -51,3 +51,12 @@ test("does not retain a model-invented date for a date-less location question", 
   const router = new OpenAiCompatibleQueryRouter({ apiKey: "test", model: "test", fetchImpl: async () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: JSON.stringify({ intent: "itinerary_query", filter: { date: "2026-09-21", timeWindow: null, location: "大峽谷", origin: null, destination: null, status: null, kind: null }, overview: null, question: null, message: null, notesRequested: true }) }] }] })) });
   assert.deepEqual(await router.route({ text: "去大峽谷有什麼事情需要注意？", tripTimezone: "Asia/Taipei", currentDate: "2026-09-21" }), { intent: "itinerary_query", filter: { location: "Grand Canyon" }, notesRequested: true });
 });
+
+test("bounds the provider prompt with Phase 14 landmark aliases", async () => {
+  const router = new OpenAiCompatibleQueryRouter({ apiKey: "test", model: "test", fetchImpl: async (_url, init) => {
+    const request = JSON.parse(String(init?.body)) as { instructions: string };
+    assert.match(request.instructions, /Mather Point/);
+    return new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: JSON.stringify({ intent: "itinerary_query", filter: { location: "Mather Point" } }) }] }] }));
+  } });
+  await router.route({ text: "Mather Point 有什麼安排", tripTimezone: "America/Phoenix", currentDate: "2026-09-21" });
+});

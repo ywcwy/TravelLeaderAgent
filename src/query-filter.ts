@@ -1,5 +1,6 @@
 import { timeWindows, tripItemKinds, type ItineraryQuery } from "./domain.ts";
 import { parseItineraryKindMention } from "./itinerary-kinds.ts";
+import { normalizeLocationQueryDimension } from "./location-normalization.ts";
 
 export interface QueryFilterAdapter {
   interpret(input: { text: string; tripTimezone: string; currentDate: string }): unknown | Promise<unknown>;
@@ -53,21 +54,18 @@ export function validateQueryFilter(value: unknown): Pick<ItineraryQuery, "date"
   const kind = optionalString(value.kind, "kind");
   if (kind && !tripItemKinds.includes(kind as (typeof tripItemKinds)[number])) throw new QueryFilterValidationError("Query Filter kind is unsupported.");
   if (status && status !== "confirmed" && status !== "pending") throw new QueryFilterValidationError("Query Filter status is unsupported.");
+  const dimensions: Array<[string, string | undefined, "city" | "region" | "country" | "macroRegion"]> = [["city", city, "city"], ["region", region, "region"], ["country", country, "country"], ["macroRegion", macroRegion, "macroRegion"]];
+  for (const [field, candidate, key] of dimensions) {
+    if (!candidate) continue;
+    const resolved = normalizeLocationQueryDimension(candidate);
+    if (!resolved || resolved[key] !== candidate) throw new QueryFilterValidationError(`Query Filter ${field} is not a known normalized location.`);
+  }
   if (!date && !timeWindow && !location && !city && !region && !country && !macroRegion && !origin && !destination && !status && !kind) throw new QueryFilterValidationError("Query Filter needs at least one condition.");
   return { ...(date ? { date } : {}), ...(timeWindow ? { timeWindow: timeWindow as ItineraryQuery["timeWindow"] } : {}), ...(location ? { location } : {}), ...(city ? { city } : {}), ...(region ? { region } : {}), ...(country ? { country } : {}), ...(macroRegion ? { macroRegion } : {}), ...(origin ? { origin } : {}), ...(destination ? { destination } : {}), ...(status ? { status: status as "confirmed" | "pending" } : {}), ...(kind ? { kind: kind as ItineraryQuery["kind"] } : {}) };
 }
 
 function parseLocationDimension(text: string): Pick<ItineraryQuery, "city" | "region" | "country" | "macroRegion"> | null {
-  if (/(?:美西|美國西部|us[- ]?west)/i.test(text)) return { macroRegion: "US-West" };
-  if (/Grand Canyon Village/i.test(text)) return { city: "Grand Canyon Village" };
-  if (/(?:Page|佩吉)/i.test(text)) return { city: "Page" };
-  if (/(?:Las Vegas|Vegas|拉斯維加斯)/i.test(text)) return { city: "Las Vegas" };
-  if (/Tusayan/i.test(text)) return { city: "Tusayan" };
-  if (/(?:Arizona|亞利桑那)/i.test(text)) return { region: "Arizona" };
-  if (/(?:Nevada|內華達)/i.test(text)) return { region: "Nevada" };
-  if (/(?:California|加州|加利福尼亞)/i.test(text)) return { region: "California" };
-  if (/(?:United States|美國|美利堅)/i.test(text)) return { country: "United States" };
-  return null;
+  return normalizeLocationQueryDimension(text);
 }
 
 function parseKind(text: string): ItineraryQuery["kind"] | undefined {
