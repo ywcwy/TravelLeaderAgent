@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { normalizeItemLocations } from "./location-normalization.ts";
 
 export type SqlValue = string | number | null;
 
@@ -172,6 +173,20 @@ export class TravelDatabase {
         timezone TEXT,
         timezone_source TEXT,
         location TEXT,
+        city TEXT,
+        region TEXT,
+        country TEXT,
+        macro_region TEXT,
+        location_source TEXT,
+        location_confidence TEXT,
+        origin_city TEXT,
+        origin_region TEXT,
+        origin_country TEXT,
+        origin_macro_region TEXT,
+        destination_city TEXT,
+        destination_region TEXT,
+        destination_country TEXT,
+        destination_macro_region TEXT,
         notes TEXT,
         confirmed_by TEXT,
         created_at TEXT NOT NULL
@@ -217,6 +232,20 @@ export class TravelDatabase {
         timezone TEXT,
         timezone_source TEXT,
         location TEXT,
+        city TEXT,
+        region TEXT,
+        country TEXT,
+        macro_region TEXT,
+        location_source TEXT,
+        location_confidence TEXT,
+        origin_city TEXT,
+        origin_region TEXT,
+        origin_country TEXT,
+        origin_macro_region TEXT,
+        destination_city TEXT,
+        destination_region TEXT,
+        destination_country TEXT,
+        destination_macro_region TEXT,
         notes TEXT,
         deadline_at TEXT,
         confirmed_trip_item_id TEXT REFERENCES trip_items(id),
@@ -404,6 +433,8 @@ export class TravelDatabase {
     this.connection.exec(`UPDATE trip_items SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.backfillTimezoneMetadata("proposals");
     this.backfillTimezoneMetadata("trip_items");
+    this.backfillLocationNormalization("proposals");
+    this.backfillLocationNormalization("trip_items");
     this.connection.exec(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) SELECT id, kind FROM proposals WHERE kind IS NOT NULL`);
     this.connection.exec(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) SELECT id, kind FROM trip_items WHERE kind IS NOT NULL`);
     this.connection.exec(`INSERT OR IGNORE INTO trip_access_policies (trip_id) SELECT id FROM trips`);
@@ -421,6 +452,19 @@ export class TravelDatabase {
       const valid = row.timezone !== null && isIanaTimezoneValue(row.timezone);
       const fallback = tripTimezone.get(row.trip_id)?.timezone ?? "UTC";
       update.run(valid ? row.timezone : fallback, valid ? "explicit" : "fallback", row.id);
+    }
+  }
+
+  private backfillLocationNormalization(table: "proposals" | "trip_items"): void {
+    const columns = ["city", "region", "country", "macro_region", "location_source", "location_confidence", "origin_city", "origin_region", "origin_country", "origin_macro_region", "destination_city", "destination_region", "destination_country", "destination_macro_region"];
+    const existing = this.connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    for (const column of columns) if (!existing.some((entry) => entry.name === column)) this.connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+    const rows = this.connection.prepare(`SELECT id, location, origin, destination FROM ${table}`).all() as Array<{ id: string; location: string | null; origin: string | null; destination: string | null }>;
+    const update = this.connection.prepare(`UPDATE ${table} SET city = ?, region = ?, country = ?, macro_region = ?, location_source = ?, location_confidence = ?, origin_city = ?, origin_region = ?, origin_country = ?, origin_macro_region = ?, destination_city = ?, destination_region = ?, destination_country = ?, destination_macro_region = ? WHERE id = ?`);
+    for (const row of rows) {
+      const normalized = normalizeItemLocations(row);
+      const location = normalized.location; const origin = normalized.origin; const destination = normalized.destination;
+      update.run(location?.city ?? null, location?.region ?? null, location?.country ?? null, location?.macroRegion ?? null, location?.source ?? null, location?.confidence ?? null, origin?.city ?? null, origin?.region ?? null, origin?.country ?? null, origin?.macroRegion ?? null, destination?.city ?? null, destination?.region ?? null, destination?.country ?? null, destination?.macroRegion ?? null, row.id);
     }
   }
 }

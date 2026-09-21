@@ -17,11 +17,14 @@ export function normalizeLocationQuery(value: string): string {
 }
 
 export function normalizeItineraryQuery(query: ItineraryQuery): ItineraryQuery {
+  const macroRegion = query.macroRegion ?? (query.location && /^(?:美西|美國西部|us[- ]?west)$/i.test(query.location.trim()) ? "US-West" : undefined);
+  const isMacroOnlyLocation = Boolean(query.location && macroRegion && /^(?:美西|美國西部|us[- ]?west)$/i.test(query.location.trim()));
   return {
     ...query,
-    ...(query.location ? { location: normalizeLocationQuery(query.location) } : {}),
+    ...(query.location && !isMacroOnlyLocation ? { location: normalizeLocationQuery(query.location) } : {}),
     ...(query.origin ? { origin: normalizeLocationQuery(query.origin) } : {}),
     ...(query.destination ? { destination: normalizeLocationQuery(query.destination) } : {}),
+    ...(macroRegion ? { macroRegion } : {}),
   };
 }
 

@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
-import { isDateOnly, localDate } from "./timezone.ts";
+import { formatLocalDateTime, isDateOnly, localDate } from "./timezone.ts";
 import { locationValueMatchesQuery, normalizeItineraryQuery } from "./location-alias.ts";
+import { normalizeItemLocations } from "./location-normalization.ts";
 import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter, type LlmDocumentContext, type LlmDocumentSection } from "./extraction-draft.ts";
 import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftMissing, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
@@ -773,6 +774,7 @@ export class TravelService {
       timezone.value, timezone.source ?? null, item.location ?? null, item.notes ?? null, item.deadlineAt ?? null, item.sourceLine ?? null, item.sourceExcerpt ?? null, now());
     const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) VALUES (?, ?)`);
     for (const kind of kinds) insertKind.run(id, kind);
+    this.persistLocationNormalization("proposals", id, item);
     return id;
   }
 
@@ -814,6 +816,7 @@ export class TravelService {
       timezone.value, timezone.source ?? null, item.location ?? null, item.notes ?? null, item.deadlineAt ?? null, item.sourceLine ?? null, item.sourceExcerpt ?? null, now());
     const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) VALUES (?, ?)`);
     for (const kind of kinds) insertKind.run(id, kind);
+    this.persistLocationNormalization("proposals", id, item);
     return id;
   }
 
@@ -831,6 +834,7 @@ export class TravelService {
     const kinds = this.getTripItemKinds(predecessorItemId);
     const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) VALUES (?, ?)`);
     for (const kind of kinds) insertKind.run(id, kind);
+    this.persistLocationNormalization("proposals", id, fields);
     return id;
   }
 
@@ -906,6 +910,7 @@ export class TravelService {
         .run(item.id, tripId, item.sourceId, item.replacementForItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.originTimezone ?? null, item.destinationTimezone ?? null, item.title, item.status, item.localDate ?? null, item.startsAt ?? null, item.endsAt ?? null, item.startTimeFlexibility ?? null, item.endTimeFlexibility ?? null, item.timeWindow ?? null, JSON.stringify(item.assumptions ?? []), item.timezone ?? null, item.timezoneSource ?? null, item.location ?? null, item.notes ?? null, ownerId, resolvedAt);
       const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) VALUES (?, ?)`);
       for (const kind of item.kinds) insertKind.run(item.id, kind);
+      this.persistLocationNormalization("trip_items", item.id, item);
       this.db.connection.prepare(`UPDATE proposals SET proposal_status = CASE WHEN id = ? THEN 'confirmed' ELSE 'rejected' END, rejection_reason = CASE WHEN id = ? THEN rejection_reason ELSE 'Not selected in Decision ' || ? END, rejected_by = CASE WHEN id = ? THEN rejected_by ELSE ? END, rejected_at = CASE WHEN id = ? THEN rejected_at ELSE ? END WHERE decision_id = ? AND proposal_status = 'pending'`)
         .run(selectedProposalId, selectedProposalId, decisionId, selectedProposalId, ownerId, selectedProposalId, resolvedAt, decisionId);
       this.db.connection.prepare(`UPDATE proposals SET confirmed_trip_item_id = ? WHERE id = ?`).run(item.id, selectedProposalId);
@@ -972,6 +977,7 @@ export class TravelService {
         .run(item.id, tripId, item.sourceId, item.replacementForItemId, item.kind, item.shape, item.shapeSource, item.origin ?? null, item.destination ?? null, item.originTimezone ?? null, item.destinationTimezone ?? null, item.title, item.status, item.localDate ?? null, item.startsAt ?? null, item.endsAt ?? null, item.startTimeFlexibility ?? null, item.endTimeFlexibility ?? null, item.timeWindow ?? null, JSON.stringify(item.assumptions ?? []), item.timezone ?? null, item.timezoneSource ?? null, item.location ?? null, item.notes ?? null, ownerId, now());
       const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) VALUES (?, ?)`);
       for (const kind of item.kinds) insertKind.run(item.id, kind);
+      this.persistLocationNormalization("trip_items", item.id, item);
       if (proposal.replacement_for_item_id) {
         this.db.connection.prepare(`UPDATE trip_items SET status = 'cancelled' WHERE id = ? AND trip_id = ? AND status = 'confirmed'`).run(proposal.replacement_for_item_id, tripId);
       }
@@ -1103,11 +1109,15 @@ export class TravelService {
     const pageSize = Math.min(Math.max(query.pageSize ?? 8, 1), 8);
     const continuation = this.readQueryToken(query.continuationToken, tripId, memberId);
     const effectiveQuery = normalizeItineraryQuery(continuation?.query ?? query);
-    const matches = (item: { id?: string; title: string; localDate?: string; startsAt?: string; endsAt?: string; timezone?: string; timezoneSource?: TimezoneSource; originTimezone?: string; destinationTimezone?: string; shape?: ProposalShape; location?: string; origin?: string; destination?: string; kinds: TripItemKind[] }) => {
+    const matches = (item: { id?: string; title: string; localDate?: string; startsAt?: string; endsAt?: string; timezone?: string; timezoneSource?: TimezoneSource; originTimezone?: string; destinationTimezone?: string; shape?: ProposalShape; location?: string; origin?: string; destination?: string; city?: string; region?: string; country?: string; macroRegion?: string; originCity?: string; originRegion?: string; originCountry?: string; originMacroRegion?: string; destinationCity?: string; destinationRegion?: string; destinationCountry?: string; destinationMacroRegion?: string; kinds: TripItemKind[] }) => {
       if (effectiveQuery.proposalId && item.id !== effectiveQuery.proposalId) return false;
       if (effectiveQuery.date && !overlapsLocalDate(item, effectiveQuery.date, trip.timezone)) return false;
       if (effectiveQuery.timeWindow && !matchesTimeWindow(item, effectiveQuery.timeWindow, trip.timezone)) return false;
       if (effectiveQuery.location && ![item.title, item.location, item.origin, item.destination].some((value) => value && locationValueMatchesQuery(value, effectiveQuery.location!))) return false;
+      if (effectiveQuery.city && ![item.city, item.originCity, item.destinationCity].some((value) => value && value.toLocaleLowerCase().includes(effectiveQuery.city!.toLocaleLowerCase()))) return false;
+      if (effectiveQuery.region && ![item.region, item.originRegion, item.destinationRegion].some((value) => value && value.toLocaleLowerCase().includes(effectiveQuery.region!.toLocaleLowerCase()))) return false;
+      if (effectiveQuery.country && ![item.country, item.originCountry, item.destinationCountry].some((value) => value && value.toLocaleLowerCase().includes(effectiveQuery.country!.toLocaleLowerCase()))) return false;
+      if (effectiveQuery.macroRegion && ![item.macroRegion, item.originMacroRegion, item.destinationMacroRegion].some((value) => value && value.toLocaleLowerCase() === effectiveQuery.macroRegion!.toLocaleLowerCase())) return false;
       if (effectiveQuery.origin && !item.origin?.toLocaleLowerCase().includes(effectiveQuery.origin.toLocaleLowerCase())) return false;
       if (effectiveQuery.destination && !item.destination?.toLocaleLowerCase().includes(effectiveQuery.destination.toLocaleLowerCase())) return false;
       if (effectiveQuery.kind && !item.kinds.includes(effectiveQuery.kind)) return false;
@@ -1120,7 +1130,7 @@ export class TravelService {
     const page = combined.slice(offset, offset + pageSize);
     const confirmed = page.filter((entry) => entry.type === "confirmed").map((entry) => entry.item) as TripItem[];
     const pending = page.filter((entry) => entry.type === "pending").map((entry) => entry.item) as Proposal[];
-    const hasItemFilter = Boolean(effectiveQuery.date || effectiveQuery.timeWindow || effectiveQuery.location || effectiveQuery.origin || effectiveQuery.destination || effectiveQuery.kind || effectiveQuery.proposalId);
+    const hasItemFilter = Boolean(effectiveQuery.date || effectiveQuery.timeWindow || effectiveQuery.location || effectiveQuery.city || effectiveQuery.region || effectiveQuery.country || effectiveQuery.macroRegion || effectiveQuery.origin || effectiveQuery.destination || effectiveQuery.kind || effectiveQuery.proposalId);
     const openDecisions = effectiveQuery.pendingOnly || effectiveQuery.status || effectiveQuery.reviewIssuesOnly ? [] : (this.db.connection.prepare(`SELECT * FROM decisions WHERE trip_id = ? AND status = 'open' ORDER BY title, id`).all(tripId) as unknown as DecisionRow[])
       .filter((decision) => {
         if (!hasItemFilter) return true;
@@ -1161,6 +1171,16 @@ export class TravelService {
 
   private hydrateProposal(row: ProposalRow): Proposal {
     return toProposal(row, this.getProposalKinds(row.id));
+  }
+
+  private persistLocationNormalization(table: "proposals" | "trip_items", id: string, item: { location?: string | null; origin?: string | null; destination?: string | null }): void {
+    const normalized = normalizeItemLocations(item);
+    const location = normalized.location; const origin = normalized.origin; const destination = normalized.destination;
+    this.db.connection.prepare(`UPDATE ${table} SET city = ?, region = ?, country = ?, macro_region = ?, location_source = ?, location_confidence = ?, origin_city = ?, origin_region = ?, origin_country = ?, origin_macro_region = ?, destination_city = ?, destination_region = ?, destination_country = ?, destination_macro_region = ? WHERE id = ?`).run(
+      location?.city ?? null, location?.region ?? null, location?.country ?? null, location?.macroRegion ?? null, location?.source ?? null, location?.confidence ?? null,
+      origin?.city ?? null, origin?.region ?? null, origin?.country ?? null, origin?.macroRegion ?? null,
+      destination?.city ?? null, destination?.region ?? null, destination?.country ?? null, destination?.macroRegion ?? null, id,
+    );
   }
 
   private hydrateTripItem(row: Record<string, unknown>): TripItem {
@@ -1286,7 +1306,7 @@ function toTripAccessPolicy(row: TripAccessPolicyRow): TripAccessPolicy {
 
 interface ProposalRow {
   id: string; source_id: string; replacement_for_item_id: string | null; removal_for_item_id: string | null; confirmed_trip_item_id: string | null; rejection_reason: string | null; rejected_by: string | null; rejected_at: string | null; kind: string; shape: ProposalShape | null; shape_source: ProposalShapeSource | null; origin: string | null; destination: string | null; origin_timezone: string | null; destination_timezone: string | null; title: string; item_status: TripItemStatus; proposal_status: "pending" | "confirmed" | "rejected"; decision_id: string | null;
-  local_date: string | null; starts_at: string | null; ends_at: string | null; start_time_flexibility: ExtractedTripItem["startTimeFlexibility"] | null; end_time_flexibility: ExtractedTripItem["endTimeFlexibility"] | null; time_window: ExtractedTripItem["timeWindow"] | null; assumptions_json: string; timezone: string | null; timezone_source: TimezoneSource | null; location: string | null; notes: string | null; deadline_at: string | null; source_line: number | null; source_excerpt: string | null;
+  local_date: string | null; starts_at: string | null; ends_at: string | null; start_time_flexibility: ExtractedTripItem["startTimeFlexibility"] | null; end_time_flexibility: ExtractedTripItem["endTimeFlexibility"] | null; time_window: ExtractedTripItem["timeWindow"] | null; assumptions_json: string; timezone: string | null; timezone_source: TimezoneSource | null; location: string | null; city: string | null; region: string | null; country: string | null; macro_region: string | null; location_source: "registry" | "unresolved" | null; location_confidence: "high" | "low" | null; origin_city: string | null; origin_region: string | null; origin_country: string | null; origin_macro_region: string | null; destination_city: string | null; destination_region: string | null; destination_country: string | null; destination_macro_region: string | null; notes: string | null; deadline_at: string | null; source_line: number | null; source_excerpt: string | null;
 }
 
 interface ProposalMembershipRow {
@@ -1354,7 +1374,7 @@ function overlapsLocalDate(item: { localDate?: string; startsAt?: string; endsAt
 
 function toProposal(row: ProposalRow, kinds = [row.kind as Proposal["kind"]]): Proposal {
   const shape = row.shape ?? (row.location ? "point" : "point");
-  return { id: row.id, sourceId: row.source_id, replacementForItemId: row.replacement_for_item_id, removalForItemId: row.removal_for_item_id, kind: row.kind as Proposal["kind"], kinds, shape, shapeSource: row.shape_source ?? "inferred", origin: row.origin ?? undefined, destination: row.destination ?? undefined, originTimezone: row.origin_timezone ?? undefined, destinationTimezone: row.destination_timezone ?? undefined, title: row.title, itemStatus: row.item_status, status: row.proposal_status, localDate: row.local_date ?? undefined, startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, startTimeFlexibility: row.start_time_flexibility ?? undefined, endTimeFlexibility: row.end_time_flexibility ?? undefined, timeWindow: row.time_window ?? undefined, assumptions: parseAssumptions(row.assumptions_json), timezone: row.timezone ?? undefined, timezoneSource: row.timezone_source ?? undefined, location: row.location ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, rejectionReason: row.rejection_reason, rejectedBy: row.rejected_by, rejectedAt: row.rejected_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
+  return { id: row.id, sourceId: row.source_id, replacementForItemId: row.replacement_for_item_id, removalForItemId: row.removal_for_item_id, kind: row.kind as Proposal["kind"], kinds, shape, shapeSource: row.shape_source ?? "inferred", origin: row.origin ?? undefined, destination: row.destination ?? undefined, originTimezone: row.origin_timezone ?? undefined, destinationTimezone: row.destination_timezone ?? undefined, title: row.title, itemStatus: row.item_status, status: row.proposal_status, localDate: row.local_date ?? undefined, startsAt: row.starts_at ?? undefined, endsAt: row.ends_at ?? undefined, startTimeFlexibility: row.start_time_flexibility ?? undefined, endTimeFlexibility: row.end_time_flexibility ?? undefined, timeWindow: row.time_window ?? undefined, assumptions: parseAssumptions(row.assumptions_json), timezone: row.timezone ?? undefined, timezoneSource: row.timezone_source ?? undefined, location: row.location ?? undefined, city: row.city ?? undefined, region: row.region ?? undefined, country: row.country ?? undefined, macroRegion: row.macro_region ?? undefined, locationSource: row.location_source ?? undefined, locationConfidence: row.location_confidence ?? undefined, originCity: row.origin_city ?? undefined, originRegion: row.origin_region ?? undefined, originCountry: row.origin_country ?? undefined, originMacroRegion: row.origin_macro_region ?? undefined, destinationCity: row.destination_city ?? undefined, destinationRegion: row.destination_region ?? undefined, destinationCountry: row.destination_country ?? undefined, destinationMacroRegion: row.destination_macro_region ?? undefined, notes: row.notes ?? undefined, deadlineAt: row.deadline_at, rejectionReason: row.rejection_reason, rejectedBy: row.rejected_by, rejectedAt: row.rejected_at, sourceLine: row.source_line ?? undefined, sourceExcerpt: row.source_excerpt ?? undefined };
 }
 
 function parseAssumptions(value: string | null | undefined): string[] {
@@ -1432,7 +1452,7 @@ function payloadChanges(before: ExtractionDraftPayload, after: ExtractionDraftPa
 }
 
 function toTripItem(row: Record<string, unknown>, kinds = [row.kind as TripItem["kind"]]): TripItem {
-  return { id: row.id as string, sourceId: row.source_id as string, replacementForItemId: (row.replacement_for_item_id as string) ?? null, kind: row.kind as TripItem["kind"], kinds, shape: (row.shape as ProposalShape | null) ?? "point", shapeSource: (row.shape_source as ProposalShapeSource | null) ?? "inferred", origin: (row.origin as string) ?? undefined, destination: (row.destination as string) ?? undefined, originTimezone: (row.origin_timezone as string) ?? undefined, destinationTimezone: (row.destination_timezone as string) ?? undefined, title: row.title as string, status: row.status as TripItemStatus, localDate: (row.local_date as string) ?? undefined, startsAt: (row.starts_at as string) ?? undefined, endsAt: (row.ends_at as string) ?? undefined, startTimeFlexibility: row.start_time_flexibility as ExtractedTripItem["startTimeFlexibility"] ?? undefined, endTimeFlexibility: row.end_time_flexibility as ExtractedTripItem["endTimeFlexibility"] ?? undefined, timeWindow: row.time_window as ExtractedTripItem["timeWindow"] ?? undefined, assumptions: parseAssumptions(row.assumptions_json as string | null | undefined), timezone: (row.timezone as string) ?? undefined, timezoneSource: (row.timezone_source as TimezoneSource | null) ?? undefined, location: (row.location as string) ?? undefined, notes: (row.notes as string) ?? undefined, confirmedBy: (row.confirmed_by as string) ?? null };
+  return { id: row.id as string, sourceId: row.source_id as string, replacementForItemId: (row.replacement_for_item_id as string) ?? null, kind: row.kind as TripItem["kind"], kinds, shape: (row.shape as ProposalShape | null) ?? "point", shapeSource: (row.shape_source as ProposalShapeSource | null) ?? "inferred", origin: (row.origin as string) ?? undefined, destination: (row.destination as string) ?? undefined, originTimezone: (row.origin_timezone as string) ?? undefined, destinationTimezone: (row.destination_timezone as string) ?? undefined, title: row.title as string, status: row.status as TripItemStatus, localDate: (row.local_date as string) ?? undefined, startsAt: (row.starts_at as string) ?? undefined, endsAt: (row.ends_at as string) ?? undefined, startTimeFlexibility: row.start_time_flexibility as ExtractedTripItem["startTimeFlexibility"] ?? undefined, endTimeFlexibility: row.end_time_flexibility as ExtractedTripItem["endTimeFlexibility"] ?? undefined, timeWindow: row.time_window as ExtractedTripItem["timeWindow"] ?? undefined, assumptions: parseAssumptions(row.assumptions_json as string | null | undefined), timezone: (row.timezone as string) ?? undefined, timezoneSource: (row.timezone_source as TimezoneSource | null) ?? undefined, location: (row.location as string) ?? undefined, city: (row.city as string) ?? undefined, region: (row.region as string) ?? undefined, country: (row.country as string) ?? undefined, macroRegion: (row.macro_region as string) ?? undefined, locationSource: (row.location_source as "registry" | "unresolved") ?? undefined, locationConfidence: (row.location_confidence as "high" | "low") ?? undefined, originCity: (row.origin_city as string) ?? undefined, originRegion: (row.origin_region as string) ?? undefined, originCountry: (row.origin_country as string) ?? undefined, originMacroRegion: (row.origin_macro_region as string) ?? undefined, destinationCity: (row.destination_city as string) ?? undefined, destinationRegion: (row.destination_region as string) ?? undefined, destinationCountry: (row.destination_country as string) ?? undefined, destinationMacroRegion: (row.destination_macro_region as string) ?? undefined, notes: (row.notes as string) ?? undefined, confirmedBy: (row.confirmed_by as string) ?? null };
 }
 
 const canonicalTripItemKinds = new Set<TripItemKind>(["flight", "lodging", "rental_car", "transport", "meal", "activity", "shopping", "meeting", "other"]);
@@ -2009,7 +2029,7 @@ function buildReviewIssues(proposals: Proposal[], confirmed: TripItem[]): Review
     if (proposal.shape === "route" && proposal.startsAt && !isDateOnly(proposal.startsAt) && (!proposal.originTimezone || !proposal.destinationTimezone)) {
       issues.push({ code: "missing_endpoint_timezone", message: `「${proposal.title}」缺少起點或終點 IANA timezone，查詢將使用 Route timezone/Trip Timezone compatibility fallback。`, proposalIds: [proposal.id] });
     }
-    if (proposal.startsAt && !isDateOnly(proposal.startsAt) && isOffsetlessDateTime(proposal.startsAt)) {
+    if (proposal.startsAt && !isDateOnly(proposal.startsAt) && isOffsetlessDateTime(proposal.startsAt) && (!proposal.timezone || formatLocalDateTime(proposal.startsAt, proposal.timezone).includes("UTC offset unresolved"))) {
       issues.push({ code: "ambiguous_local_time", message: `「${proposal.title}」的時間沒有 UTC offset；若落在 DST 轉換時段，可能存在重複或不存在的 local time，請補充 offset。`, proposalIds: [proposal.id] });
     }
     if (proposal.shape === "point" && !proposal.location) issues.push({ code: "missing_location", message: `「${proposal.title}」缺少地點。`, proposalIds: [proposal.id] });
