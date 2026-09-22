@@ -22,6 +22,13 @@ item timezone is missing or invalid. Fallback remains queryable but creates a
 Review Issue.
 _Avoid_: timezone confidence, user timezone
 
+**Timezone Resolver**:
+The authority pipeline that assigns an IANA timezone to a timed itinerary item:
+explicit Source evidence first, then a supported local place mapping, otherwise
+Trip Timezone fallback with a Review Issue. The MVP does not call an external
+geocoding service.
+_Avoid_: LLM timezone guess, timezone lookup only
+
 **Trip**:
 A bounded, independently managed group journey. Its sources, proposals, effective
 itinerary, members, and reminders do not mix with another trip.
@@ -58,6 +65,119 @@ The explicit identity assigned to one manual itinerary import attempt. Reusing a
 Import Batch returns its original Source and Proposal IDs; a changed document must
 use a new Import Batch.
 _Avoid_: upload session, filename
+
+**Import Chunk**:
+A retryable, semantically bounded portion of an Import Batch, normally aligned to a
+date heading or itinerary section. A Chunk retains its own extraction result and
+failure state; retrying one Chunk does not reprocess unchanged Chunks.
+_Avoid_: partial file, temporary batch
+
+**Document Context**:
+The structured date, section, timezone, and source-line context derived from one
+itinerary document. It anchors each Import Chunk without requiring the entire
+document to be sent to the LLM.
+_Avoid_: LLM memory, document summary
+
+**Location Registry**:
+A curated, versioned set of canonical places and approved aliases, each with a
+stable identity and geographic hierarchy. It is the authority for normalizing
+explicit place evidence and for constraining any contextual place selection.
+_Avoid_: geocoder, place database, inferred location
+
+**Registry Candidate**:
+A proposed canonical place and alias mapping identified while reviewing an
+unresolved location. A Registry Candidate is not authoritative until it is
+manually reviewed and added to the Location Registry.
+_Avoid_: automatic registry entry, model fact
+
+**Location Inventory**:
+A read-only report of unresolved location text, occurrence counts, typed record
+references, and matching candidates. It identifies Location Registry gaps without
+changing Sources, Proposals, or Trip Items.
+_Avoid_: normalization run, geocoding report
+
+**Coarse Location Match**:
+A Registry match that safely resolves only a broader geographic level, such as a
+city, when a more specific business or landmark cannot be uniquely identified.
+The original location text remains preserved as evidence.
+_Avoid_: guessed venue, fuzzy address
+
+**Exact Location Match**:
+A Registry match whose canonical place is uniquely identified by explicit place
+evidence or an approved alias. It may provide the full geographic hierarchy
+without changing the original location text.
+_Avoid_: fuzzy match, probable place
+
+**Ambiguous Location Match**:
+A location lookup with multiple plausible Registry places and insufficient
+evidence to select one safely. It remains unresolved until the source or user
+provides a disambiguating detail such as city or region.
+_Avoid_: best guess, first match
+
+**Registry Revision**:
+The versioned state of the Location Registry used to resolve a Proposal or Trip
+Item. A revision identifies which approved names, aliases, and geographic
+hierarchies were authoritative at that time.
+_Avoid_: import version, model version
+
+**Inactive Registry Entry**:
+A historical Registry place that should not be selected for new matches but must
+remain available for interpreting existing itinerary evidence.
+_Avoid_: deleted place, removed location
+
+**Contextual Location Inference**:
+A location conclusion for an item whose Source does not name a complete place,
+derived from bounded nearby itinerary context. It may fill only the geographic
+precision supported by that context and never replaces explicit Source evidence.
+_Avoid_: guessed address, automatic geocoding, LLM memory
+
+**Location Provenance**:
+The authority of a Proposal or Trip Item's geographic fields: `explicit` when
+the Source names the place, `registry` when an explicit alias resolves directly,
+or `context_inferred` when bounded itinerary context supplies a missing place.
+_Avoid_: location confidence, canonical name
+
+**Geographic Precision**:
+The most detailed geographic level supported by evidence, such as macro-region,
+country, region, city, landmark, business, or address. Contextual inference may
+stop at city or region rather than inventing a more specific place.
+_Avoid_: location accuracy, map precision
+
+**Date Section**:
+A contiguous portion of a Source associated with one itinerary date. It ends at the
+next Markdown heading with an explicit date; undated Markdown subheadings and their
+entries inherit the parent date unless a more explicit item-level date or cross-day
+statement overrides it.
+_Avoid_: calendar day, Chunk date
+
+**Date Provenance**:
+The authority of an extracted local date, such as an explicit item date, Date
+Section heading, Document Context, user override, or LLM inference. Provenance is
+retained so derived or conflicting dates remain reviewable.
+_Avoid_: date confidence, guessed date
+
+**Extraction Cache**:
+A persisted result of an LLM extraction keyed by normalized Chunk content, related
+context, Prompt and schema versions, model configuration, and provider. A cache hit
+may skip the LLM call, but deterministic guards still run.
+_Avoid_: LLM memory, Draft history
+
+**Batch Budget**:
+The maximum estimated or actual LLM usage allowed for one Import Batch. Reaching
+the budget stops new provider calls while preserving successful Chunks for review.
+_Avoid_: Trip budget, API quota
+
+**Guard Revision**:
+An auditable deterministic correction applied after extraction, recording the
+original value, corrected value, rule version, and time. A Guard Revision is not a
+new Source and does not claim user authority.
+_Avoid_: model confidence, silent normalization
+
+**Partial Batch**:
+An Import Batch with both successful and unresolved Chunks. Successful results may
+be reviewed and confirmed while failed or conflicting Chunks remain explicitly
+visible and retryable.
+_Avoid_: completed batch, partial itinerary
 
 **Research Source**:
 An external-search record containing retrieval time, URL, title, concise summary,
@@ -170,6 +290,54 @@ pending Proposals, Decisions, or Review Issues. An Itinerary Query is not a
 Source and does not change Trip state.
 _Avoid_: itinerary evidence, Proposal
 
+**Query Filter**:
+A normalized set of conditions for an Itinerary Query: one local date, one time
+window, one location, one route endpoint, one Proposal Kind, and one visibility
+status. It describes what to read and never grants authority to change the Trip.
+_Avoid_: SQL query, search keyword
+
+**Natural-language Itinerary Query**:
+An Itinerary Query expressed conversationally and interpreted into a Query Filter.
+It may clarify missing conditions but never invents itinerary facts or recommendations.
+_Avoid_: itinerary instruction, planning request
+
+**Read-only LINE Routing Policy**:
+The current policy that treats ordinary LINE natural-language messages as
+read-only Itinerary Queries. It does not create a Source, Extraction Draft, or
+Proposal. Natural-language itinerary writing requires a separate future policy;
+Structured Markdown import remains an import workflow rather than ordinary LINE
+conversation.
+_Avoid_: implicit write intent, conversational import
+
+**Location Alias**:
+A user-facing name that deterministically identifies a canonical itinerary location,
+such as 馬蹄灣 for Horseshoe Bend. An Alias is used for query interpretation and
+display context; it never changes the canonical location or Source evidence.
+_Avoid_: translated location overwrite, guessed destination
+
+**Kind Filter**:
+A Query Filter condition over the existing Proposal Kinds vocabulary, such as
+`shopping` for wording like 逛街、購物, or 買東西. It selects itinerary facets and
+does not create a new Proposal Kind.
+_Avoid_: semantic category, recommendation type
+
+**Itinerary Note**:
+A note already recorded on a Proposal or Trip Item and returned as evidence for a
+matching Itinerary Query. An Itinerary Note is not generated travel advice and does
+not become a new Source.
+_Avoid_: travel recommendation, LLM advice
+
+**Time Window**:
+One of the standard temporal buckets `morning`, `afternoon`, `evening`, or
+`night`. An exact time supplied in a query may be mapped to a Time Window for
+the MVP, but the response must disclose that approximation.
+_Avoid_: exact-time filter, time estimate
+
+**Query Page**:
+A bounded, ordered slice of an Itinerary Query result. A continuation keeps the
+original Query Filter and does not broaden the requested scope.
+_Avoid_: random page, new query
+
 **Decision Needs Options**:
 The lifecycle state of a Decision whose current Proposals have all been
 rejected, while the underlying decision topic remains open for new options.
@@ -209,6 +377,36 @@ _Avoid_: proposal, booking
 A Trip Item known to occur on a calendar date but without a specific time. It may
 be part of the Effective Itinerary but cannot trigger a time-specific reminder.
 _Avoid_: all-day event, timed item
+
+**Time Flexibility**:
+The commitment level of an itinerary time: `required` means the time is necessary
+but may still be missing from an unconfirmed Proposal, `estimated` means the time
+is approximate, and `flexible` means no time-of-day is required. A period's start
+and end each carry their own Time Flexibility.
+_Avoid_: time confidence, timezone confidence
+
+**Time Window**:
+An approximate part-of-day preference such as morning, afternoon, evening, or night.
+It preserves a Source's wording without inventing an exact clock time and is independent of Time Flexibility.
+_Avoid_: exact time, timezone
+
+**Extraction Draft**:
+A structured interpretation of a Source awaiting user confirmation. It may contain
+missing facts and Review Issues, but it does not become a Proposal until the user
+confirms the interpretation.
+_Avoid_: confirmed itinerary, LLM memory
+
+**Batch Confirmation**:
+The originating user's confirmation of an entire Extraction Draft batch. It creates
+pending Proposals for the successfully extracted items together, while unresolved
+items remain represented by Review Issues.
+_Avoid_: Decision Owner approval, item-by-item confirmation
+
+**Batch Approval**:
+A Decision Owner's approval of all non-conflicting pending Proposals in a selected
+batch. Conflicting or otherwise blocked Proposals remain pending and are reported
+explicitly rather than being auto-resolved.
+_Avoid_: Draft confirmation, automatic merge
 
 **Confirmed Deadline**:
 A deadline explicitly approved by a Decision Owner. It may produce a Group

@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildLocationInventory, inferContextualLocations, normalizeLocation, normalizeItemLocations, normalizeLocationQueryDimension, resolveLocationCandidates } from "../src/location-normalization.ts";
+import { buildLocationInventory, findLocationRegistryEntry, inferContextualLocations, LOCATION_REGISTRY_VERSION, normalizeLocation, normalizeItemLocations, normalizeLocationQueryDimension, resolveLocationCandidates } from "../src/location-normalization.ts";
+import type { LocationRegistryEntry } from "../src/location-normalization.ts";
 import { TravelDatabase } from "../src/database.ts";
 import { TravelService } from "../src/travel-service.ts";
 import type { ExtractedTripItem } from "../src/domain.ts";
@@ -20,6 +21,18 @@ test("uses complete aliases and exposes ambiguity candidates", () => {
   assert.equal(normalizeLocation("Pageant venue")?.source, "unresolved");
   assert.equal(resolveLocationCandidates("Springfield").status, "ambiguous");
   assert.deepEqual(resolveLocationCandidates("Springfield").candidates?.map((candidate) => candidate.canonicalId), ["city:springfield-il-us", "city:springfield-mo-us"]);
+});
+
+test("excludes inactive Registry entries from new matches while retaining them for historical canonical IDs", () => {
+  const registry: readonly LocationRegistryEntry[] = [
+    { canonicalId: "business:active-cafe-us", canonicalName: "Active Cafe", aliases: ["active cafe"], kind: "business", city: "Page", region: "Arizona", country: "United States", macroRegion: "US-West" },
+    { canonicalId: "business:retired-cafe-us", canonicalName: "Retired Cafe", aliases: ["retired cafe"], kind: "business", status: "inactive", city: "Page", region: "Arizona", country: "United States", macroRegion: "US-West" },
+  ];
+
+  assert.equal(normalizeLocation("Active Cafe", registry)?.canonicalId, "business:active-cafe-us");
+  assert.deepEqual(normalizeLocation("Retired Cafe", registry), { source: "unresolved", confidence: "low" });
+  assert.deepEqual(findLocationRegistryEntry("business:retired-cafe-us", registry), registry[1]);
+  assert.match(LOCATION_REGISTRY_VERSION, /^location-registry-v\d+$/);
 });
 
 test("normalizes Phase 18 cities, landmarks, and compound business locations", () => {

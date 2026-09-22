@@ -1,6 +1,7 @@
 export type LocationConfidence = "high" | "low";
 export type LocationSource = "registry" | "unresolved";
 export type LocationKind = "city" | "landmark" | "business" | "address-like";
+export type LocationRegistryEntryStatus = "active" | "inactive";
 
 export interface NormalizedLocation {
   canonicalId?: string;
@@ -19,13 +20,16 @@ export interface LocationRegistryEntry {
   canonicalName: string;
   aliases: readonly string[];
   kind: LocationKind;
+  /** Inactive entries remain addressable by canonical ID, but never resolve new source text. */
+  status?: LocationRegistryEntryStatus;
   city?: string;
   region?: string;
   country?: string;
   macroRegion?: string;
 }
 
-export const LOCATION_REGISTRY_VERSION = "location-registry-v1";
+/** Bump whenever approved aliases, hierarchy, or lifecycle state changes. */
+export const LOCATION_REGISTRY_VERSION = "location-registry-v2";
 
 export const LOCATION_REGISTRY: readonly LocationRegistryEntry[] = [
   { canonicalId: "city:page-us", canonicalName: "Page", aliases: ["page", "佩吉"], kind: "city", city: "Page", region: "Arizona", country: "United States", macroRegion: "US-West" },
@@ -65,7 +69,16 @@ export const LOCATION_REGISTRY: readonly LocationRegistryEntry[] = [
 
 export type LocationQueryDimension = { city?: string; region?: string; country?: string; macroRegion?: string };
 export interface LocationAlias { alias: string; canonical: string; }
-export const LOCATION_ALIASES: readonly LocationAlias[] = LOCATION_REGISTRY.flatMap((entry) => entry.aliases.map((alias) => ({ alias, canonical: entry.canonicalName })));
+export function isActiveRegistryEntry(entry: LocationRegistryEntry): boolean { return entry.status !== "inactive"; }
+
+/** Includes inactive entries so persisted canonical IDs remain interpretable after retirement. */
+export function findLocationRegistryEntry(canonicalId: string, registry: readonly LocationRegistryEntry[] = LOCATION_REGISTRY): LocationRegistryEntry | undefined {
+  return registry.find((entry) => entry.canonicalId === canonicalId);
+}
+
+export const LOCATION_ALIASES: readonly LocationAlias[] = LOCATION_REGISTRY
+  .filter(isActiveRegistryEntry)
+  .flatMap((entry) => entry.aliases.map((alias) => ({ alias, canonical: entry.canonicalName })));
 
 const QUERY_DIMENSIONS: Array<{ aliases: string[]; value: LocationQueryDimension }> = [
   { aliases: ["grand canyon village"], value: { city: "Grand Canyon Village" } }, { aliases: ["page", "佩吉"], value: { city: "Page" } },
@@ -86,9 +99,9 @@ function matchesPhrase(value: string, alias: string): boolean {
 function toNormalized(entry: LocationRegistryEntry): NormalizedLocation { return { canonicalId: entry.canonicalId, canonicalName: entry.canonicalName, kind: entry.kind, city: entry.city, region: entry.region, country: entry.country, macroRegion: entry.macroRegion, source: "registry", confidence: "high" }; }
 
 export type LocationResolution = { status: "resolved"; location: NormalizedLocation; candidates?: readonly NormalizedLocation[] } | { status: "ambiguous"; candidates: readonly NormalizedLocation[] } | { status: "unresolved"; candidates?: readonly NormalizedLocation[] };
-export function resolveLocationCandidates(value: string | null | undefined): LocationResolution {
+export function resolveLocationCandidates(value: string | null | undefined, registry: readonly LocationRegistryEntry[] = LOCATION_REGISTRY): LocationResolution {
   if (!value?.trim()) return { status: "unresolved" };
-  const matched = LOCATION_REGISTRY.flatMap((entry) => entry.aliases.filter((alias) => matchesPhrase(value, alias)).map((alias) => ({ entry, alias })));
+  const matched = registry.filter(isActiveRegistryEntry).flatMap((entry) => entry.aliases.filter((alias) => matchesPhrase(value, alias)).map((alias) => ({ entry, alias })));
   const matches = matched.filter(({ alias }) => !matched.some((other) => other.alias !== alias && other.alias.length > alias.length && matchesPhrase(other.alias, alias))).map(({ entry }) => entry);
   const uniqueMatches = [...new Map(matches.map((entry) => [entry.canonicalId, entry])).values()];
   const sharedCity = uniqueMatches.length > 1 && uniqueMatches.every((entry) => entry.city) && new Set(uniqueMatches.map((entry) => entry.city)).size === 1;
@@ -96,8 +109,8 @@ export function resolveLocationCandidates(value: string | null | undefined): Loc
   if (specificMatches.length === 1) return { status: "resolved", location: toNormalized(specificMatches[0]!) };
   if (uniqueMatches.length === 0) return { status: "unresolved" }; if (uniqueMatches.length > 1) return { status: "ambiguous", candidates: uniqueMatches.map(toNormalized) }; return { status: "resolved", location: toNormalized(uniqueMatches[0]) };
 }
-export function normalizeLocation(value: string | null | undefined): NormalizedLocation | null {
-  if (!value?.trim()) return null; const resolution = resolveLocationCandidates(value); return resolution.status === "resolved" ? resolution.location : { source: "unresolved", confidence: "low" };
+export function normalizeLocation(value: string | null | undefined, registry: readonly LocationRegistryEntry[] = LOCATION_REGISTRY): NormalizedLocation | null {
+  if (!value?.trim()) return null; const resolution = resolveLocationCandidates(value, registry); return resolution.status === "resolved" ? resolution.location : { source: "unresolved", confidence: "low" };
 }
 export function normalizeLocationQueryDimension(value: string): LocationQueryDimension | null {
   const normalized = clean(value); return QUERY_DIMENSIONS.find((entry) => entry.aliases.some((alias) => matchesPhrase(normalized, alias)))?.value ?? null;
