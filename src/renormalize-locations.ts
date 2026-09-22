@@ -8,7 +8,9 @@ if (!tripId?.trim()) {
   process.stderr.write("Usage: npm run normalize:locations -- <trip-id> [--context] [--json]\n");
   process.exitCode = 1;
 } else {
-  const database = new TravelDatabase(databasePath);
+  // This command is the explicit maintenance boundary; opening it must not
+  // perform an implicit location backfill before reporting its own changes.
+  const database = new TravelDatabase(databasePath, { backfill: false });
   try {
     const travel = new TravelService(database, process.env.TRAVEL_SYSTEM_ADMINISTRATOR_ID?.trim() || "system-admin");
     if (!travel.getTrip(tripId.trim())) throw new NotFoundError(`Trip ${tripId} was not found.`);

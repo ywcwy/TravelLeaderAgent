@@ -3,11 +3,21 @@ import { LOCATION_REGISTRY_VERSION, normalizeItemLocations } from "./location-no
 
 export type SqlValue = string | number | null;
 
+export interface TravelDatabaseOptions {
+  /** Skip deterministic data backfills while opening an already-migrated database. */
+  backfill?: boolean;
+  /** Open an existing database without schema migrations or any data writes. */
+  readOnly?: boolean;
+}
+
 export class TravelDatabase {
   readonly connection: DatabaseSync;
 
-  constructor(path = ":memory:", options: { backfill?: boolean } = {}) {
-    this.connection = new DatabaseSync(path);
+  constructor(path = ":memory:", options: TravelDatabaseOptions = {}) {
+    this.connection = new DatabaseSync(path, { readOnly: options.readOnly === true });
+    // A Location Inventory must not create schema, migrate old rows, or run a
+    // deterministic backfill just because an operator inspected a Trip.
+    if (options.readOnly) return;
     this.connection.exec(`
       PRAGMA busy_timeout = 5000;
       PRAGMA foreign_keys = ON;

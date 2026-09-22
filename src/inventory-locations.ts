@@ -8,7 +8,7 @@ if (!tripId?.trim()) {
   process.stderr.write("Usage: npm run inventory:locations -- <trip-id> [--json]\n");
   process.exitCode = 1;
 } else {
-  const database = new TravelDatabase(databasePath, { backfill: false });
+  const database = new TravelDatabase(databasePath, { readOnly: true });
   try {
     const proposals = database.connection.prepare("SELECT id, location, origin, destination FROM proposals WHERE trip_id = ?").all(tripId.trim()) as Array<{ id: string; location: string | null; origin: string | null; destination: string | null }>;
     const tripItems = database.connection.prepare("SELECT id, location, origin, destination FROM trip_items WHERE trip_id = ?").all(tripId.trim()) as Array<{ id: string; location: string | null; origin: string | null; destination: string | null }>;
