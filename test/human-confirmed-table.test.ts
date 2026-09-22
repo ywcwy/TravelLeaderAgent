@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { TravelDatabase } from "../src/database.ts";
-import { isHumanConfirmedTable, parseHumanConfirmedTable } from "../src/human-confirmed-table.ts";
+import { isHumanConfirmedTable, parseHumanConfirmedTable, validateHumanConfirmedTableItems } from "../src/human-confirmed-table.ts";
 import { PermissionError, TravelService } from "../src/travel-service.ts";
 
 const table = `<!-- itinerary-table -->
@@ -80,6 +80,17 @@ test("retains malformed row width and unsupported status as Draft review issues"
   assert.ok(parsed.issues.some((issue) => /status 不支援/.test(issue.message)));
   assert.ok(parsed.issues.some((issue) => /欄位數量錯誤/.test(issue.message)));
   assert.equal(parsed.items.length, 2);
+});
+
+test("validates confirmed geography and time fields without removing valid rows", () => {
+  const parsed = parseHumanConfirmedTable(table);
+  const point = { ...parsed.items[0]!, city: "Las Vegas", region: "Nevada" };
+  const route = { ...parsed.items[1]!, status: "confirmed" as const, originCity: undefined, originRegion: undefined, originCountry: undefined, originTimezone: undefined };
+  const issues = validateHumanConfirmedTableItems([point, route]);
+  assert.equal(parsed.items.length, 2);
+  assert.ok(issues.some((issue) => /與 Registry 不一致/.test(issue.message)));
+  assert.ok(issues.some((issue) => /origin_city/.test(issue.message)));
+  assert.ok(issues.some((issue) => /origin_timezone/.test(issue.message)));
 });
 
 test("CLI detects Human-confirmed Table input without invoking an LLM", () => {

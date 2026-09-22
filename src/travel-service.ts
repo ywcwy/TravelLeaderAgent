@@ -3,7 +3,7 @@ import { TravelDatabase } from "./database.ts";
 import { formatLocalDateTime, isDateOnly, localDate } from "./timezone.ts";
 import { locationValueMatchesQuery, normalizeItineraryQuery } from "./location-alias.ts";
 import { inferContextualLocations, isSemanticLocationRole, LOCATION_REGISTRY_VERSION, normalizeItemLocations, resolveLocationCandidates, type NormalizedLocation } from "./location-normalization.ts";
-import { parseHumanConfirmedTable } from "./human-confirmed-table.ts";
+import { parseHumanConfirmedTable, validateHumanConfirmedTableItems } from "./human-confirmed-table.ts";
 import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter, type LlmDocumentContext, type LlmDocumentSection } from "./extraction-draft.ts";
 import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftMissing, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, LocationRegistryCandidate, LocationRegistryCandidateStatus, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
@@ -342,7 +342,7 @@ export class TravelService {
         "Table was parsed deterministically; no Proposal is created until Draft confirmation.",
         ...table.notes.map((note) => `Table Note: ${note}`),
       ],
-      issues: table.issues.map((issue) => ({ code: issue.code, message: `${issue.itemKey ? `［${issue.itemKey}］` : ""}${issue.message}` })),
+      issues: [...table.issues, ...validateHumanConfirmedTableItems(table.items)].map((issue) => ({ code: issue.code, message: `${issue.itemKey && !issue.message.startsWith("［") ? `［${issue.itemKey}］` : ""}${issue.message}` })),
       sourceExcerpt: markdown.trim().slice(0, 500),
     };
     const status: ExtractionDraft["status"] = payload.items.length > 0 ? "pending_confirmation" : "failed";

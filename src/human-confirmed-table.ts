@@ -1,4 +1,5 @@
 import type { ExtractedTripItem, ProposalShape, TripItemKind, TripItemStatus } from "./domain.ts";
+import { resolveLocationCandidates } from "./location-normalization.ts";
 
 export const HUMAN_CONFIRMED_TABLE_FORMAT_VERSION = "1";
 export const HUMAN_CONFIRMED_TABLE_MARKER = "<!-- itinerary-table -->";
@@ -6,10 +7,53 @@ export const HUMAN_CONFIRMED_TABLE_MARKER = "<!-- itinerary-table -->";
 export type HumanTableConfirmationStatus = "draft" | "confirmed";
 
 export interface HumanTableIssue {
-  code: "table_format" | "table_metadata" | "table_header" | "table_row";
+  code: "table_format" | "table_metadata" | "table_header" | "table_row" | "table_validation";
   message: string;
   sourceLine?: number;
   itemKey?: string;
+}
+
+/** Validate human-entered geography and time fields without rewriting the row. */
+export function validateHumanConfirmedTableItems(items: readonly ExtractedTripItem[]): HumanTableIssue[] {
+  const issues: HumanTableIssue[] = [];
+  for (const item of items) {
+    const prefix = item.itemKey ? `［${item.itemKey}］` : `「${item.title}」`;
+    const add = (field: string, message: string): void => { issues.push({ code: "table_validation", message: `${prefix}${field}：${message}`, sourceLine: item.sourceLine, ...(item.itemKey ? { itemKey: item.itemKey } : {}) }); };
+    const confirmed = item.status === "confirmed";
+    if (containsPlaceholder(item.location)) add("location", "不可使用 TBD、待確認 或其他 placeholder。");
+    if (containsPlaceholder(item.origin)) add("origin", "不可使用 TBD、待確認 或其他 placeholder。");
+    if (containsPlaceholder(item.destination)) add("destination", "不可使用 TBD、待確認 或其他 placeholder。");
+    if (item.shape === "point") {
+      if (confirmed) {
+        requireField(add, "location", item.location);
+        requireField(add, "city", item.city);
+        requireField(add, "region", item.region);
+        requireField(add, "country", item.country);
+      }
+      validatePlace(add, "location", item.location, item.city, item.region, item.country);
+    } else {
+      if (confirmed) {
+        requireField(add, "origin", item.origin);
+        requireField(add, "origin_city", item.originCity);
+        requireField(add, "origin_region", item.originRegion);
+        requireField(add, "origin_country", item.originCountry);
+        requireField(add, "destination", item.destination);
+        requireField(add, "destination_city", item.destinationCity);
+        requireField(add, "destination_region", item.destinationRegion);
+        requireField(add, "destination_country", item.destinationCountry);
+      }
+      validatePlace(add, "origin", item.origin, item.originCity, item.originRegion, item.originCountry);
+      validatePlace(add, "destination", item.destination, item.destinationCity, item.destinationRegion, item.destinationCountry);
+    }
+    if (confirmed && (item.startsAt || item.endsAt)) {
+      if (item.shape === "point") validateTimezone(add, "timezone", item.timezone);
+      else {
+        validateTimezone(add, "origin_timezone", item.originTimezone);
+        validateTimezone(add, "destination_timezone", item.destinationTimezone);
+      }
+    }
+  }
+  return issues;
 }
 
 export interface HumanConfirmedTableParseResult {
@@ -118,6 +162,9 @@ export function parseHumanConfirmedTable(markdown: string): HumanConfirmedTableP
     const startTime = values.start_time?.trim();
     const endTime = values.end_time?.trim();
     if (!date) rowIssue(`Table Item ${itemKey ?? "(unknown)"} 缺少 date。`);
+    else if (!isIsoDate(date)) rowIssue(`Table Item ${itemKey ?? "(unknown)"} 的 date 必須是有效的 YYYY-MM-DD。`);
+    if (startTime && !isClockTime(startTime)) rowIssue(`Table Item ${itemKey ?? "(unknown)"} 的 start_time 必須是 HH:MM 或 HH:MM:SS。`);
+    if (endTime && !isClockTime(endTime)) rowIssue(`Table Item ${itemKey ?? "(unknown)"} 的 end_time 必須是 HH:MM 或 HH:MM:SS。`);
     if ((startTime || endTime) && !date) rowIssue(`Table Item ${itemKey ?? "(unknown)"} 有時間但缺少 date。`);
     if (shape === "route" && (!values.origin?.trim() || !values.destination?.trim())) rowIssue(`Table Item ${itemKey ?? "(unknown)"} 的 route 缺少 origin 或 destination。`);
     const item: ExtractedTripItem = {
@@ -200,4 +247,51 @@ function splitTableRow(line: string): string[] {
 function combineDateTime(date: string, time: string): string | undefined {
   if (!date || !time) return undefined;
   return `${date}T${time.length === 5 ? `${time}:00` : time}`;
+}
+
+function isIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const candidate = new Date(Date.UTC(year!, month! - 1, day!));
+  return candidate.getUTCFullYear() === year && candidate.getUTCMonth() === month! - 1 && candidate.getUTCDate() === day;
+}
+
+function isClockTime(value: string): boolean {
+  const match = value.match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return false;
+  const hour = Number(match[1]); const minute = Number(match[2]); const second = Number(match[3] ?? "0");
+  return hour <= 23 && minute <= 59 && second <= 59;
+}
+
+function requireField(add: (field: string, message: string) => void, field: string, value: string | undefined): void {
+  if (!value?.trim()) add(field, "缺少必要欄位。");
+}
+
+function containsPlaceholder(value: string | undefined): boolean {
+  return Boolean(value && /^(?:tbd|待確認|待定|unknown|n\/a|-)$/iu.test(value.trim()));
+}
+
+function validateTimezone(add: (field: string, message: string) => void, field: string, value: string | undefined): void {
+  if (!value?.trim()) {
+    add(field, "有時間的 confirmed row 必須填寫 IANA timezone。");
+    return;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+  } catch {
+    add(field, `不是有效的 IANA timezone：${value}。`);
+  }
+}
+
+function validatePlace(add: (field: string, message: string) => void, field: string, text: string | undefined, city: string | undefined, region: string | undefined, country: string | undefined): void {
+  if (!text?.trim() || containsPlaceholder(text)) return;
+  const resolution = resolveLocationCandidates(text);
+  if (resolution.status !== "resolved") {
+    add(field, resolution.status === "ambiguous" ? "對應到多個 Registry 地點，請改用明確名稱。" : `尚未在 Location Registry 正規化：${text}。`);
+    return;
+  }
+  const expected: Array<[string, string | undefined, string | undefined]> = [["city", city, resolution.location.city], ["region", region, resolution.location.region], ["country", country, resolution.location.country]];
+  for (const [name, actual, canonical] of expected) {
+    if (actual?.trim() && canonical && actual.trim().toLocaleLowerCase() !== canonical.trim().toLocaleLowerCase()) add(`${field}.${name}`, `與 Registry 不一致：填入「${actual}」，Registry 為「${canonical}」。`);
+  }
 }
