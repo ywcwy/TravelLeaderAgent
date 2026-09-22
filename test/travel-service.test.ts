@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { TravelDatabase } from "../src/database.ts";
 import { FakeLlmAdapter, LlmProviderError, type LlmAdapter, type LlmDocumentContext } from "../src/extraction-draft.ts";
 import type { ExtractionDraftPayload } from "../src/domain.ts";
+import { LocationAmbiguityError } from "../src/location-alias.ts";
 import { ConflictError, InvalidSourceError, InvalidTimezoneError, PermissionError, TravelService, TripNotActiveError } from "../src/travel-service.ts";
 import { renderItineraryQuery } from "../src/itinerary-query.ts";
 
@@ -384,6 +385,51 @@ test("queries imported items by normalized geography", () => {
   const result = service.queryTrip(tripId, "system-admin", { city: "Grand Canyon Village" });
   assert.equal(result.pending.length, 1);
   assert.equal(result.pending[0].location, "Mather Point");
+  db.close();
+});
+
+test("includes registered child places for city and geography queries, while landmark queries remain exact", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-location-query-hierarchy");
+  service.importMarkdown(tripId, [
+    "- [provisional] Mather Point 停留 | 2026-10-02T10:00:00-07:00 | Mather Point | | timezone=America/Phoenix",
+    "- [provisional] Yavapai Point 停留 | 2026-10-02T11:00:00-07:00 | Yavapai Point | | timezone=America/Phoenix",
+    "- [provisional] Page 午餐 | 2026-10-02T12:00:00-07:00 | Page | | timezone=America/Phoenix",
+    "- [provisional] Mather Point → Yavapai Point | 2026-10-02T13:00:00-07:00 | | shape=route | origin=Mather Point | destination=Yavapai Point | timezone=America/Phoenix",
+  ].join("\n"), { idempotencyKey: "test:location-query-hierarchy" });
+
+  const landmark = service.queryTrip(tripId, "system-admin", { location: "Mather Point" });
+  assert.deepEqual(landmark.pending.map((item) => item.title), ["Mather Point 停留", "Mather Point → Yavapai Point"]);
+
+  const city = service.queryTrip(tripId, "system-admin", { location: "Grand Canyon Village" });
+  assert.deepEqual(city.pending.map((item) => item.title), ["Mather Point 停留", "Yavapai Point 停留", "Mather Point → Yavapai Point"]);
+
+  const region = service.queryTrip(tripId, "system-admin", { region: "Arizona" });
+  assert.equal(region.pending.length, 4);
+  const macroRegion = service.queryTrip(tripId, "system-admin", { macroRegion: "US-West" });
+  assert.equal(macroRegion.pending.length, 4);
+
+  const cityOrigin = service.queryTrip(tripId, "system-admin", { origin: "Grand Canyon Village" });
+  assert.deepEqual(cityOrigin.pending.map((item) => item.title), ["Mather Point → Yavapai Point"]);
+  const landmarkDestination = service.queryTrip(tripId, "system-admin", { destination: "Yavapai Point" });
+  assert.deepEqual(landmarkDestination.pending.map((item) => item.title), ["Mather Point → Yavapai Point"]);
+  db.close();
+});
+
+test("rejects an ambiguous Location Registry query with all candidates", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-location-query-ambiguity");
+
+  assert.throws(
+    () => service.queryTrip(tripId, "system-admin", { location: "Springfield" }),
+    (error: unknown) => {
+      assert.ok(error instanceof LocationAmbiguityError);
+      assert.deepEqual(error.candidates.map((candidate) => candidate.canonicalId), ["city:springfield-il-us", "city:springfield-mo-us"]);
+      return true;
+    },
+  );
   db.close();
 });
 

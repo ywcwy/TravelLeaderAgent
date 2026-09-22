@@ -48,7 +48,12 @@ export function locationValueMatchesQuery(value: string, queryLocation: string):
   const valueResolution = resolveLocationCandidates(value);
   const queryResolution = resolveLocationCandidates(queryLocation);
   if (valueResolution.status === "resolved" && queryResolution.status === "resolved") {
-    return valueResolution.location.canonicalId === queryResolution.location.canonicalId || valueResolution.location.city === queryResolution.location.city;
+    if (valueResolution.location.canonicalId === queryResolution.location.canonicalId) return true;
+
+    // A city query intentionally includes its registered landmarks and businesses.
+    // A landmark or business query must remain exact: sharing a city is not enough.
+    return queryResolution.location.kind === "city"
+      && valueResolution.location.city === queryResolution.location.city;
   }
   return value.trim().toLocaleLowerCase() === queryLocation.trim().toLocaleLowerCase();
 }

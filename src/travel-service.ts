@@ -1170,8 +1170,8 @@ export class TravelService {
       if (effectiveQuery.region && ![item.region, item.originRegion, item.destinationRegion].some((value) => value && value.toLocaleLowerCase().includes(effectiveQuery.region!.toLocaleLowerCase()))) return false;
       if (effectiveQuery.country && ![item.country, item.originCountry, item.destinationCountry].some((value) => value && value.toLocaleLowerCase().includes(effectiveQuery.country!.toLocaleLowerCase()))) return false;
       if (effectiveQuery.macroRegion && ![item.macroRegion, item.originMacroRegion, item.destinationMacroRegion].some((value) => value && value.toLocaleLowerCase() === effectiveQuery.macroRegion!.toLocaleLowerCase())) return false;
-      if (effectiveQuery.origin && !item.origin?.toLocaleLowerCase().includes(effectiveQuery.origin.toLocaleLowerCase())) return false;
-      if (effectiveQuery.destination && !item.destination?.toLocaleLowerCase().includes(effectiveQuery.destination.toLocaleLowerCase())) return false;
+      if (effectiveQuery.origin && ![item.origin, item.originCity].some((value) => value && locationValueMatchesQuery(value, effectiveQuery.origin!))) return false;
+      if (effectiveQuery.destination && ![item.destination, item.destinationCity].some((value) => value && locationValueMatchesQuery(value, effectiveQuery.destination!))) return false;
       if (effectiveQuery.kind && !item.kinds.includes(effectiveQuery.kind)) return false;
       return true;
     };

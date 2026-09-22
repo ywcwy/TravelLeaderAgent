@@ -178,6 +178,24 @@ test("handles a mentioned itinerary query without creating a Source", async () =
   db.close();
 });
 
+test("returns all Location Registry candidates for an ambiguous itinerary query", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-location-ambiguity", "歧義查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "歧義查詢旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEQUERYAMBIGUITY00000", messageId: "message-query-ambiguity", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 Springfield", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-query-ambiguity" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /地點可能有多個候選/);
+  assert.match(replies[0] ?? "", /Illinois/);
+  assert.match(replies[0] ?? "", /Missouri/);
+  db.close();
+});
+
 test("routes a bare itinerary question through the router without creating itinerary evidence", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
