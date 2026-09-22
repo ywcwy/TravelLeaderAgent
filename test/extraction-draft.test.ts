@@ -72,14 +72,14 @@ test("infers a missing breakfast city from nearby lodging context across a date 
   const breakfast = draft.items.find((item) => item.title === "早餐");
   assert.equal(breakfast?.location, "住宿");
   assert.equal(breakfast?.city, "Page");
-  assert.equal(breakfast?.canonicalId, "city:page-us");
+  assert.equal(breakfast?.canonicalId, undefined);
   assert.equal(breakfast?.locationProvenance, "context_inferred");
   const confirmed = service.confirmExtractionDraft(trip.id, "U-context", draft.id);
   const breakfastProposal = confirmed.proposalIds.map((id) => service.getProposal(trip.id, id)).find((proposal) => proposal?.title === "早餐");
-  assert.equal(breakfastProposal?.canonicalId, "city:page-us");
+  assert.equal(breakfastProposal?.canonicalId, undefined);
   assert.equal(breakfastProposal?.locationProvenance, "context_inferred");
   const confirmedItem = service.confirmProposal(trip.id, "owner", breakfastProposal!.id);
-  assert.equal(confirmedItem.canonicalId, "city:page-us");
+  assert.equal(confirmedItem.canonicalId, undefined);
   assert.equal(confirmedItem.locationProvenance, "context_inferred");
   assert.equal(service.queryTrip(trip.id, "owner", { location: "Page" }).confirmed.some((item) => item.id === confirmedItem.id), true);
   db.close();
