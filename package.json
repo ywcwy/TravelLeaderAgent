@@ -9,6 +9,7 @@
     "demo": "node --experimental-strip-types src/demo.ts",
     "draft:demo": "node --experimental-strip-types src/extraction-draft-demo.ts",
     "import:trip": "node --env-file-if-exists=.env --experimental-strip-types src/import-itinerary.ts",
+    "preview:trip-table": "node --env-file-if-exists=.env --experimental-strip-types src/import-itinerary.ts",
     "retry:trip-chunk": "node --env-file-if-exists=.env --experimental-strip-types src/retry-import-chunk.ts",
     "confirm:trip-draft": "node --env-file-if-exists=.env --experimental-strip-types src/confirm-trip-draft.ts",
     "review:trip": "node --env-file-if-exists=.env --experimental-strip-types src/review-trip.ts",

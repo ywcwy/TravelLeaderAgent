@@ -169,8 +169,27 @@ test("CLI detects Human-confirmed Table input without invoking an LLM", () => {
     env: { ...process.env, TRAVEL_DATABASE_PATH: databasePath, TRAVEL_SYSTEM_ADMINISTRATOR_ID: "system-admin", TRAVEL_EXTRACTION_ADAPTER: "fake" },
     encoding: "utf8",
   });
-  const result = JSON.parse(output) as { itemCount: number; outcome: string };
+  const result = JSON.parse(output) as { itemCount: number; outcome: string; draftId: string };
   assert.equal(result.itemCount, 3);
   assert.equal(result.outcome, "created");
+  const previewOutput = execFileSync(process.execPath, ["--experimental-strip-types", "src/import-itinerary.ts", trip.id, "preview-table-v1", markdownPath, "--preview", "--json"], {
+    cwd: process.cwd(),
+    env: { ...process.env, TRAVEL_DATABASE_PATH: databasePath, TRAVEL_SYSTEM_ADMINISTRATOR_ID: "system-admin", TRAVEL_EXTRACTION_ADAPTER: "fake" },
+    encoding: "utf8",
+  });
+  const preview = JSON.parse(previewOutput) as { itemCount: number; validationIssues: unknown[]; intendedWrites: { confirmedTripItems: number; provisionalProposals: number; decisions: number } };
+  assert.equal(preview.itemCount, 3);
+  assert.equal(preview.validationIssues.length, 0);
+  assert.deepEqual(preview.intendedWrites, { confirmedTripItems: 1, provisionalProposals: 1, decisions: 1, openDecisionProposals: 1 });
+  const confirmationOutput = execFileSync(process.execPath, ["--experimental-strip-types", "src/confirm-trip-draft.ts", trip.id, result.draftId, "system-admin"], {
+    cwd: process.cwd(),
+    env: { ...process.env, TRAVEL_DATABASE_PATH: databasePath, TRAVEL_SYSTEM_ADMINISTRATOR_ID: "system-admin" },
+    encoding: "utf8",
+  });
+  const confirmation = JSON.parse(confirmationOutput) as { status: string; tripItemIds: string[]; proposalIds: string[]; decisionIds: string[] };
+  assert.equal(confirmation.status, "confirmed");
+  assert.equal(confirmation.tripItemIds.length, 1);
+  assert.equal(confirmation.proposalIds.length, 2);
+  assert.equal(confirmation.decisionIds.length, 1);
   rmSync(directory, { recursive: true, force: true });
 });
