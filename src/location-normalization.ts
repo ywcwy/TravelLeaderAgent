@@ -178,13 +178,12 @@ export function inferContextualLocations<T extends ExtractedTripItem>(items: rea
     const evidence = nearby.map((anchor) => `sourceLine:${anchor.item.sourceLine ?? anchor.index + 1}`);
     return {
       ...item,
-      canonicalId: cityEntry.canonicalId,
       city: cityEntry.city,
       region: cityEntry.region,
       country: cityEntry.country,
       macroRegion: cityEntry.macroRegion,
-      locationSource: "registry",
-      locationConfidence: "high",
+      locationSource: "unresolved",
+      locationConfidence: "low",
       locationProvenance: "context_inferred",
       locationInferenceEvidence: evidence,
       locationResolverVersion: CONTEXT_LOCATION_RESOLVER_VERSION,

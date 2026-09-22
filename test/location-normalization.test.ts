@@ -121,7 +121,8 @@ test("context-aware re-normalization fills a placeholder from an explicit nearby
   const result = service.renormalizeTripLocations(trip.id, { contextual: true });
   const after = service.getProposal(trip.id, imported.proposalIds[1]!);
   assert.equal(result.changed, 1);
-  assert.equal(after?.canonicalId, "city:page-us");
+  assert.equal(after?.canonicalId, undefined);
+  assert.equal(after?.city, "Page");
   assert.equal(after?.locationProvenance, "context_inferred");
   db.close();
 });
@@ -141,6 +142,7 @@ test("preserves contextual normalization after reopening the database", () => {
   const secondService = new TravelService(secondDb, "admin");
   const breakfast = secondService.getProposal(trip.id, imported.proposalIds[1]!);
   assert.equal(breakfast?.city, "Page");
+  assert.equal(breakfast?.canonicalId, undefined);
   assert.equal(breakfast?.locationProvenance, "context_inferred");
   secondDb.close();
   rmSync(directory, { recursive: true, force: true });
