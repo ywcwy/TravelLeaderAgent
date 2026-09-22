@@ -31,7 +31,10 @@ export function normalizeItineraryQuery(query: ItineraryQuery): ItineraryQuery {
   const isMacroOnlyLocation = Boolean(query.location && macroRegion && /^(?:美西|美國西部|us[- ]?west)$/i.test(query.location.trim()));
   return {
     ...query,
-    ...(query.location && !isMacroOnlyLocation ? { location: normalizeLocationQuery(query.location) } : {}),
+    // `美西` is a geographic dimension, not a literal location value.  Leaving
+    // it in `location` would require every matching row to contain that text in
+    // addition to belonging to US-West.
+    ...(query.location ? { location: isMacroOnlyLocation ? undefined : normalizeLocationQuery(query.location) } : {}),
     ...(query.origin ? { origin: normalizeLocationQuery(query.origin) } : {}),
     ...(query.destination ? { destination: normalizeLocationQuery(query.destination) } : {}),
     ...(macroRegion ? { macroRegion } : {}),

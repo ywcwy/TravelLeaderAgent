@@ -4,7 +4,7 @@ import { LOCATION_REGISTRY_VERSION, normalizeItemLocations } from "./location-no
 export type SqlValue = string | number | null;
 
 export interface TravelDatabaseOptions {
-  /** Skip deterministic data backfills while opening an already-migrated database. */
+  /** Apply deterministic Location Registry maintenance while opening. Off by default. */
   backfill?: boolean;
   /** Open an existing database without schema migrations or any data writes. */
   readOnly?: boolean;
@@ -147,6 +147,27 @@ export class TravelDatabase {
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS guard_revisions_source ON guard_revisions(source_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS location_registry_candidates (
+        id TEXT PRIMARY KEY,
+        trip_id TEXT NOT NULL REFERENCES trips(id),
+        source_id TEXT NOT NULL REFERENCES sources(id),
+        extraction_draft_id TEXT REFERENCES extraction_drafts(id),
+        source_field TEXT NOT NULL CHECK (source_field IN ('location', 'origin', 'destination')),
+        source_line INTEGER,
+        source_text TEXT NOT NULL,
+        suggested_canonical_name TEXT NOT NULL,
+        suggested_city TEXT,
+        suggested_region TEXT,
+        suggested_country TEXT,
+        suggested_macro_region TEXT,
+        status TEXT NOT NULL CHECK (status IN ('pending_review', 'approved', 'rejected')) DEFAULT 'pending_review',
+        reviewed_by TEXT,
+        reviewed_at TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (extraction_draft_id, source_field, source_line, source_text)
+      );
+      CREATE INDEX IF NOT EXISTS location_registry_candidates_trip_status ON location_registry_candidates(trip_id, status, created_at);
 
       CREATE UNIQUE INDEX IF NOT EXISTS extraction_draft_source_revision ON extraction_drafts(source_id, revision);
 
@@ -443,7 +464,12 @@ export class TravelDatabase {
     this.connection.exec(`UPDATE trip_items SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.backfillTimezoneMetadata("proposals");
     this.backfillTimezoneMetadata("trip_items");
-    if (options.backfill !== false) {
+    this.ensureLocationNormalizationColumns("proposals");
+    this.ensureLocationNormalizationColumns("trip_items");
+    // Registry maintenance is intentionally explicit. Normal application
+    // startup may migrate schema for new imports, but must not rewrite
+    // historical Location Registry facts merely by opening the database.
+    if (options.backfill === true) {
       this.backfillLocationNormalization("proposals");
       this.backfillLocationNormalization("trip_items");
     }
@@ -468,9 +494,7 @@ export class TravelDatabase {
   }
 
   private backfillLocationNormalization(table: "proposals" | "trip_items"): void {
-    const columns = ["city", "region", "country", "macro_region", "location_source", "location_confidence", "location_canonical_id", "location_provenance", "location_inference_evidence", "location_resolver_version", "origin_city", "origin_region", "origin_country", "origin_macro_region", "origin_canonical_id", "destination_city", "destination_region", "destination_country", "destination_macro_region", "destination_canonical_id"];
-    const existing = this.connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-    for (const column of columns) if (!existing.some((entry) => entry.name === column)) this.connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+    this.ensureLocationNormalizationColumns(table);
     const rows = this.connection.prepare(`SELECT id, location, origin, destination FROM ${table}`).all() as Array<{ id: string; location: string | null; origin: string | null; destination: string | null }>;
     const update = this.connection.prepare(`UPDATE ${table} SET city = COALESCE(?, city), region = COALESCE(?, region), country = COALESCE(?, country), macro_region = COALESCE(?, macro_region), location_source = COALESCE(?, location_source), location_confidence = COALESCE(?, location_confidence), location_canonical_id = COALESCE(?, location_canonical_id), location_provenance = COALESCE(location_provenance, ?), location_inference_evidence = COALESCE(location_inference_evidence, ?), location_resolver_version = COALESCE(location_resolver_version, ?), origin_city = COALESCE(?, origin_city), origin_region = COALESCE(?, origin_region), origin_country = COALESCE(?, origin_country), origin_macro_region = COALESCE(?, origin_macro_region), origin_canonical_id = COALESCE(?, origin_canonical_id), destination_city = COALESCE(?, destination_city), destination_region = COALESCE(?, destination_region), destination_country = COALESCE(?, destination_country), destination_macro_region = COALESCE(?, destination_macro_region), destination_canonical_id = COALESCE(?, destination_canonical_id) WHERE id = ?`);
     for (const row of rows) {
@@ -478,6 +502,12 @@ export class TravelDatabase {
       const location = normalized.location; const origin = normalized.origin; const destination = normalized.destination;
       update.run(location?.city ?? null, location?.region ?? null, location?.country ?? null, location?.macroRegion ?? null, location?.source ?? null, location?.confidence ?? null, location?.canonicalId ?? null, location?.source === "registry" ? "registry" : null, null, location?.source === "registry" ? LOCATION_REGISTRY_VERSION : null, origin?.city ?? null, origin?.region ?? null, origin?.country ?? null, origin?.macroRegion ?? null, origin?.canonicalId ?? null, destination?.city ?? null, destination?.region ?? null, destination?.country ?? null, destination?.macroRegion ?? null, destination?.canonicalId ?? null, row.id);
     }
+  }
+
+  private ensureLocationNormalizationColumns(table: "proposals" | "trip_items"): void {
+    const columns = ["city", "region", "country", "macro_region", "location_source", "location_confidence", "location_canonical_id", "location_provenance", "location_inference_evidence", "location_resolver_version", "origin_city", "origin_region", "origin_country", "origin_macro_region", "origin_canonical_id", "destination_city", "destination_region", "destination_country", "destination_macro_region", "destination_canonical_id"];
+    const existing = this.connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    for (const column of columns) if (!existing.some((entry) => entry.name === column)) this.connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
   }
 }
 
