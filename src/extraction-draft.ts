@@ -164,12 +164,18 @@ export function validateExtractionDraftPayload(payload: unknown): ExtractionDraf
   if (!Array.isArray(items) || !Array.isArray(missing) || !Array.isArray(assumptions) || !Array.isArray(issues) || typeof sourceExcerpt !== "string") {
     throw new ExtractionDraftValidationError("Extraction Draft output must include items, missing, assumptions, issues, and sourceExcerpt.");
   }
+  const documentFormatVersion = payload.documentFormatVersion;
+  const documentConfirmationStatus = payload.documentConfirmationStatus;
+  if (documentFormatVersion !== undefined && typeof documentFormatVersion !== "string") throw new ExtractionDraftValidationError("documentFormatVersion must be a string.");
+  if (documentConfirmationStatus !== undefined && documentConfirmationStatus !== "draft" && documentConfirmationStatus !== "confirmed") throw new ExtractionDraftValidationError("documentConfirmationStatus must be draft or confirmed.");
   return {
     items: items.map((item, index) => validateItem(item, index)),
     missing: missing.map((value, index) => validateMissing(value, index)),
     assumptions: assumptions.map((value, index) => validateString(value, `assumptions[${index}]`)),
     issues: issues.map((value, index) => validateIssue(value, index)),
     sourceExcerpt,
+    ...(documentFormatVersion !== undefined ? { documentFormatVersion } : {}),
+    ...(documentConfirmationStatus !== undefined ? { documentConfirmationStatus } : {}),
   };
 }
 

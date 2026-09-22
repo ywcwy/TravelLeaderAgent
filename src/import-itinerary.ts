@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { TravelDatabase } from "./database.ts";
 import { OpenAiCompatibleLlmAdapter, TimeoutFallbackLlmAdapter, type LlmAdapter } from "./extraction-draft.ts";
+import { isHumanConfirmedTable } from "./human-confirmed-table.ts";
 import { InvalidSourceError, TravelService } from "./travel-service.ts";
 
 const [tripId, importBatchId, markdownPath] = process.argv.slice(2);
@@ -22,8 +23,10 @@ async function run(): Promise<void> {
     if (size > maxImportBytes) throw new InvalidSourceError(`Markdown file exceeds the ${maxImportBytes}-byte import limit.`);
     const markdown = readFileSync(markdownPath, "utf8");
     const travel = new TravelService(database, administratorId);
-    const result = isStructuredMarkdown(markdown)
-      ? travel.importMarkdownDraftBatch(tripId.trim(), markdown, importBatchId.trim(), administratorId)
+    const result = isHumanConfirmedTable(markdown)
+      ? travel.importHumanConfirmedTableDraft(tripId.trim(), markdown, importBatchId.trim(), administratorId)
+      : isStructuredMarkdown(markdown)
+        ? travel.importMarkdownDraftBatch(tripId.trim(), markdown, importBatchId.trim(), administratorId)
       : await importNaturalMarkdown(travel, database, tripId.trim(), markdown, importBatchId.trim());
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {

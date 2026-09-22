@@ -31,6 +31,8 @@ export const timeWindows = ["morning", "afternoon", "evening", "night"] as const
 export type TimeWindow = (typeof timeWindows)[number];
 
 export interface ExtractedTripItem {
+  /** Stable human-facing key used by the versioned itinerary table format. */
+  itemKey?: string;
   kind: TripItemKind;
   kinds: TripItemKind[];
   shape: ProposalShape;
@@ -125,6 +127,9 @@ export interface ExtractionDraftPayload {
   assumptions: string[];
   issues: ExtractionDraftIssue[];
   sourceExcerpt: string;
+  /** Present for versioned Human-confirmed Table drafts. */
+  documentFormatVersion?: string;
+  documentConfirmationStatus?: "draft" | "confirmed";
 }
 
 export interface ExtractionDraftMetadata {

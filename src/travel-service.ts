@@ -3,6 +3,7 @@ import { TravelDatabase } from "./database.ts";
 import { formatLocalDateTime, isDateOnly, localDate } from "./timezone.ts";
 import { locationValueMatchesQuery, normalizeItineraryQuery } from "./location-alias.ts";
 import { inferContextualLocations, isSemanticLocationRole, LOCATION_REGISTRY_VERSION, normalizeItemLocations, resolveLocationCandidates, type NormalizedLocation } from "./location-normalization.ts";
+import { parseHumanConfirmedTable } from "./human-confirmed-table.ts";
 import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter, type LlmDocumentContext, type LlmDocumentSection } from "./extraction-draft.ts";
 import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftMissing, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, LocationRegistryCandidate, LocationRegistryCandidateStatus, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
@@ -301,6 +302,57 @@ export class TravelService {
       this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, idempotency_key, content, source_time, provider, provider_message_id, provider_group_id, provider_user_id, created_at) VALUES (?, ?, 'markdown', ?, ?, ?, NULL, NULL, NULL, ?, ?)`).run(sourceId, tripId, batchId, markdown, timestamp, originatingUserId, timestamp);
       this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, '[]', 'deterministic-markdown', 'markdown-parser', 'markdown-draft-v1', NULL, NULL, NULL, ?, ?)`).run(
         draftId, tripId, sourceId, originatingUserId, status, JSON.stringify(payload), timestamp, timestamp,
+      );
+      this.persistImportChunks(tripId, sourceId, batchId, markdown, "completed", timestamp);
+      this.db.connection.exec("COMMIT");
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
+    return { sourceId, draftId, proposalIds: [], itemCount: payload.items.length, reviewIssueCount: payload.issues.length + payload.missing.length, dateRange: draftDateRange(payload), chunkCount: this.getImportChunks(tripId, sourceId).length, outcome: "created" };
+  }
+
+  /** Parse the versioned Human-confirmed Table without invoking an LLM or creating domain writes. */
+  importHumanConfirmedTableDraft(tripId: string, markdown: string, importBatchId: string, originatingUserId = this.systemAdministratorId): MarkdownDraftImportResult {
+    this.requireActiveTrip(tripId);
+    if (originatingUserId !== this.systemAdministratorId && !this.isTripMember(tripId, originatingUserId)) {
+      throw new PermissionError("Only an Active Trip member or System Administrator can submit a Human-confirmed Table Draft.");
+    }
+    const batchId = importBatchId.trim();
+    if (!batchId) throw new InvalidSourceError("An Import Batch ID is required.");
+    if (containsSensitiveTravelData(markdown)) throw new InvalidSourceError("Sensitive Travel Data must be removed before importing this Source.");
+    const existing = this.db.connection.prepare(`SELECT id, content FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, batchId) as { id: string; content: string } | undefined;
+    if (existing) {
+      if (existing.content !== markdown) throw new ConflictError(`Import Batch ${batchId} already contains different content.`);
+      const draft = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(existing.id) as ExtractionDraftRow | undefined;
+      if (!draft) throw new ConflictError(`Import Batch ${batchId} already exists without an Extraction Draft.`);
+      const parsed = toExtractionDraft(draft);
+      return { sourceId: existing.id, draftId: parsed.id, proposalIds: parsed.proposalIds, itemCount: parsed.items.length, reviewIssueCount: parsed.issues.length + parsed.missing.length, dateRange: draftDateRange(parsed), chunkCount: this.getImportChunks(tripId, existing.id).length, outcome: "reused" };
+    }
+
+    const table = parseHumanConfirmedTable(markdown);
+    const sourceId = randomUUID();
+    const payload: ExtractionDraftPayload = {
+      items: table.items.map(toDraftItem),
+      missing: [],
+      ...(table.formatVersion ? { documentFormatVersion: table.formatVersion } : {}),
+      ...(table.confirmationStatus ? { documentConfirmationStatus: table.confirmationStatus } : {}),
+      assumptions: [
+        `Human-confirmed Table format_version=${table.formatVersion ?? "unknown"}; confirmation_status=${table.confirmationStatus ?? "unknown"}.`,
+        "Table was parsed deterministically; no Proposal is created until Draft confirmation.",
+        ...table.notes.map((note) => `Table Note: ${note}`),
+      ],
+      issues: table.issues.map((issue) => ({ code: issue.code, message: `${issue.itemKey ? `［${issue.itemKey}］` : ""}${issue.message}` })),
+      sourceExcerpt: markdown.trim().slice(0, 500),
+    };
+    const status: ExtractionDraft["status"] = payload.items.length > 0 ? "pending_confirmation" : "failed";
+    const draftId = `X-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const timestamp = now();
+    this.db.connection.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, idempotency_key, content, source_time, provider, provider_message_id, provider_group_id, provider_user_id, created_at) VALUES (?, ?, 'markdown_table', ?, ?, ?, NULL, NULL, NULL, ?, ?)`).run(sourceId, tripId, batchId, markdown, timestamp, originatingUserId, timestamp);
+      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, '[]', 'deterministic-table', 'markdown-table-parser', ?, NULL, NULL, NULL, ?, ?)`).run(
+        draftId, tripId, sourceId, originatingUserId, status, JSON.stringify(payload), `human-table-v${table.formatVersion ?? "unknown"}`, timestamp, timestamp,
       );
       this.persistImportChunks(tripId, sourceId, batchId, markdown, "completed", timestamp);
       this.db.connection.exec("COMMIT");
