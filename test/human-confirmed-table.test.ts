@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { TravelDatabase } from "../src/database.ts";
 import { isHumanConfirmedTable, parseHumanConfirmedTable, validateHumanConfirmedTableItems } from "../src/human-confirmed-table.ts";
-import { PermissionError, TravelService } from "../src/travel-service.ts";
+import { ConflictError, PermissionError, TravelService } from "../src/travel-service.ts";
 
 const table = `<!-- itinerary-table -->
 format_version: 1
@@ -17,6 +17,7 @@ confirmation_status: draft
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | D1-01 | Page 午餐 | confirmed | meal | point | 2026-10-02 | 13:45 | 14:30 | America/Phoenix | Page | Page | Arizona | United States |  |  |  |  |  |  |  |  |  |  | BirdHouse \\| Big John's |
 | D1-02 | Page 到 Tusayan | provisional | transport | route | 2026-10-02 | 15:00 | 16:30 |  |  |  |  |  | Page | Page | Arizona | United States | America/Phoenix | Tusayan | Tusayan | Arizona | United States | America/Phoenix | 車程約 1.5 小時 |
+| D1-03 | Page 晚餐 | open_decision | meal | point | 2026-10-02 | 19:00 | 20:00 | America/Phoenix | Page | Page | Arizona | United States |  |  |  |  |  |  |  |  |  |  | BirdHouse 或 El Tapatio |
 
 ## Notes
 這段說明保留在 Draft，但不會建立第三個 item。
@@ -27,7 +28,7 @@ test("parses a versioned Human-confirmed Table with point, route, and escaped pi
   const parsed = parseHumanConfirmedTable(table);
   assert.equal(parsed.formatVersion, "1");
   assert.equal(parsed.confirmationStatus, "draft");
-  assert.equal(parsed.items.length, 2);
+  assert.equal(parsed.items.length, 3);
   assert.equal(parsed.items[0]?.itemKey, "D1-01");
   assert.equal(parsed.items[0]?.title, "Page 午餐");
   assert.equal(parsed.items[0]?.startsAt, "2026-10-02T13:45:00");
@@ -45,7 +46,7 @@ test("imports the Human-confirmed Table as a reviewable Draft through the servic
   const group = travel.createTravelGroup("system-admin", "C-human-table", "Human Table");
   const trip = travel.createActiveTrip("system-admin", group.id, "Table 旅程", "Asia/Taipei");
   const result = travel.importHumanConfirmedTableDraft(trip.id, table, "table-v1");
-  assert.equal(result.itemCount, 2);
+  assert.equal(result.itemCount, 3);
   assert.equal(result.proposalIds.length, 0);
   assert.equal(result.outcome, "created");
   const draft = travel.getExtractionDraft(trip.id, result.draftId);
@@ -69,7 +70,7 @@ test("allows a Trip member to submit a Draft but rejects an outsider", () => {
   travel.addMember("system-admin", trip.id, "U-member", "Member", "member");
   assert.throws(() => travel.importHumanConfirmedTableDraft(trip.id, table, "outsider-table", "U-outsider"), PermissionError);
   const result = travel.importHumanConfirmedTableDraft(trip.id, table, "member-table", "U-member");
-  assert.equal(result.itemCount, 2);
+  assert.equal(result.itemCount, 3);
   database.close();
 });
 
@@ -79,7 +80,46 @@ test("retains malformed row width and unsupported status as Draft review issues"
   const parsed = parseHumanConfirmedTable(malformed);
   assert.ok(parsed.issues.some((issue) => /status 不支援/.test(issue.message)));
   assert.ok(parsed.issues.some((issue) => /欄位數量錯誤/.test(issue.message)));
-  assert.equal(parsed.items.length, 2);
+  assert.equal(parsed.items.length, 3);
+});
+
+test("confirms a mixed-status Human-confirmed Table into Trip Items, Proposals, and Decisions", () => {
+  const database = new TravelDatabase();
+  const travel = new TravelService(database, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-human-table-confirm", "Human Table Confirm");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Table Confirm", "Asia/Taipei");
+  travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
+  travel.addMember("system-admin", trip.id, "U-member", "Member", "member");
+  const imported = travel.importHumanConfirmedTableDraft(trip.id, table, "table-confirm", "U-member");
+  assert.throws(() => travel.confirmHumanConfirmedTable(trip.id, "U-member", imported.draftId), PermissionError);
+  const confirmed = travel.confirmHumanConfirmedTable(trip.id, "U-owner", imported.draftId);
+  assert.equal(confirmed.tripItemIds.length, 1);
+  assert.equal(confirmed.proposalIds.length, 2);
+  assert.equal(confirmed.decisionIds.length, 1);
+  assert.equal(confirmed.draft.status, "confirmed");
+  const review = travel.reviewTrip(trip.id);
+  assert.equal(review.confirmed.some((item) => item.title === "Page 午餐"), true);
+  assert.equal(review.pending.some((proposal) => proposal.title === "Page 到 Tusayan" && proposal.itemStatus === "provisional"), true);
+  assert.equal(review.pending.some((proposal) => proposal.title === "Page 晚餐" && proposal.itemStatus === "open_decision"), true);
+  assert.equal(review.openDecisions.length, 1);
+  const replay = travel.confirmHumanConfirmedTable(trip.id, "U-owner", imported.draftId);
+  assert.deepEqual(replay.proposalIds, confirmed.proposalIds);
+  assert.equal(travel.reviewTrip(trip.id).confirmed.filter((item) => item.title === "Page 午餐").length, 1);
+  database.close();
+});
+
+test("blocks confirmation when a confirmed row still has table validation errors", () => {
+  const database = new TravelDatabase();
+  const travel = new TravelService(database, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-human-table-invalid-confirm", "Invalid Table Confirm");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Invalid Table Confirm", "Asia/Taipei");
+  travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
+  const invalid = table.replace("| Page | Page | Arizona | United States |", "| Page | Las Vegas | Nevada | United States |");
+  const imported = travel.importHumanConfirmedTableDraft(trip.id, invalid, "table-invalid-confirm", "U-owner");
+  assert.throws(() => travel.confirmHumanConfirmedTable(trip.id, "U-owner", imported.draftId), ConflictError);
+  assert.equal(travel.getExtractionDraft(trip.id, imported.draftId)?.status, "pending_confirmation");
+  assert.equal(travel.reviewTrip(trip.id).confirmed.length, 0);
+  database.close();
 });
 
 test("validates confirmed geography and time fields without removing valid rows", () => {
@@ -87,7 +127,7 @@ test("validates confirmed geography and time fields without removing valid rows"
   const point = { ...parsed.items[0]!, city: "Las Vegas", region: "Nevada" };
   const route = { ...parsed.items[1]!, status: "confirmed" as const, originCity: undefined, originRegion: undefined, originCountry: undefined, originTimezone: undefined };
   const issues = validateHumanConfirmedTableItems([point, route]);
-  assert.equal(parsed.items.length, 2);
+  assert.equal(parsed.items.length, 3);
   assert.ok(issues.some((issue) => /與 Registry 不一致/.test(issue.message)));
   assert.ok(issues.some((issue) => /origin_city/.test(issue.message)));
   assert.ok(issues.some((issue) => /origin_timezone/.test(issue.message)));
@@ -109,7 +149,7 @@ test("CLI detects Human-confirmed Table input without invoking an LLM", () => {
     encoding: "utf8",
   });
   const result = JSON.parse(output) as { itemCount: number; outcome: string };
-  assert.equal(result.itemCount, 2);
+  assert.equal(result.itemCount, 3);
   assert.equal(result.outcome, "created");
   rmSync(directory, { recursive: true, force: true });
 });

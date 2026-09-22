@@ -844,6 +844,99 @@ export class TravelService {
     }
   }
 
+  /** Confirm a Human-confirmed Table and project each row according to its row status. */
+  confirmHumanConfirmedTable(tripId: string, userId: string, draftId: string): { draft: ExtractionDraft; proposalIds: string[]; tripItemIds: string[]; decisionIds: string[] } {
+    this.requireActiveTrip(tripId);
+    if (userId !== this.systemAdministratorId && !this.isDecisionOwner(tripId, userId)) throw new PermissionError("Only a Trip owner or Decision Owner can confirm a Human-confirmed Table.");
+    const row = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND id = ?`).get(tripId, draftId) as ExtractionDraftRow | undefined;
+    if (!row) throw new NotFoundError(`Extraction Draft ${draftId} was not found.`);
+    const draft = toExtractionDraft(row);
+    if (draft.status === "confirmed") return { draft, proposalIds: draft.proposalIds, tripItemIds: [], decisionIds: [] };
+    if (draft.status !== "pending_confirmation") throw new ConflictError(`Extraction Draft ${draftId} is not pending confirmation.`);
+    const blockingIssues = draft.issues.filter((issue) => issue.code.startsWith("table_"));
+    if (blockingIssues.length > 0) throw new ConflictError(`Human-confirmed Table ${draftId} has validation errors: ${blockingIssues.map((issue) => issue.message).join("；")}`);
+    if (draft.items.length === 0) throw new ConflictError(`Human-confirmed Table ${draftId} contains no itinerary items.`);
+
+    this.db.connection.exec("BEGIN IMMEDIATE");
+    try {
+      const locked = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND id = ?`).get(tripId, draftId) as ExtractionDraftRow | undefined;
+      if (!locked) throw new NotFoundError(`Extraction Draft ${draftId} was not found.`);
+      const current = toExtractionDraft(locked);
+      if (current.status === "confirmed") {
+        this.db.connection.exec("COMMIT");
+        return { draft: current, proposalIds: current.proposalIds, tripItemIds: [], decisionIds: [] };
+      }
+      if (current.status !== "pending_confirmation") throw new ConflictError(`Extraction Draft ${draftId} is not pending confirmation.`);
+      const existingProposalKeys = new Set((this.db.connection.prepare(`SELECT title, source_line FROM proposals WHERE source_id = ?`).all(locked.source_id) as Array<{ title: string; source_line: number | null }>).map((proposal) => `${proposal.title}|${proposal.source_line ?? ""}`));
+      const proposalIds = [...current.proposalIds];
+      const tripItemIds: string[] = [];
+      const openDecisionProposalIds: string[] = [];
+      for (const item of current.items) {
+        if (item.status === "confirmed") {
+          const tripItem = this.insertConfirmedTripItem(tripId, locked.source_id, userId, item);
+          tripItemIds.push(tripItem.id);
+          continue;
+        }
+        const key = `${item.title}|${item.sourceLine ?? ""}`;
+        let proposalId = proposalIds.find((id) => {
+          const existing = this.db.connection.prepare(`SELECT id FROM proposals WHERE id = ? AND source_id = ? AND title = ? AND source_line IS ?`).get(id, locked.source_id, item.title, item.sourceLine ?? null) as { id: string } | undefined;
+          return Boolean(existing);
+        });
+        if (!proposalId && !existingProposalKeys.has(key)) {
+          proposalId = this.createProposal(tripId, locked.source_id, { ...item, assumptions: current.assumptions });
+          proposalIds.push(proposalId);
+          existingProposalKeys.add(key);
+        }
+        if (proposalId && item.status === "open_decision") openDecisionProposalIds.push(proposalId);
+      }
+      const decisionIds: string[] = [];
+      for (const proposalId of openDecisionProposalIds) {
+        const decision = this.insertTableDecision(tripId, userId, proposalId);
+        decisionIds.push(decision.id);
+      }
+      const confirmedAt = now();
+      const payload: ExtractionDraftPayload = { ...current, documentConfirmationStatus: "confirmed" };
+      this.db.connection.prepare(`UPDATE extraction_drafts SET status = 'confirmed', payload_json = ?, proposal_ids_json = ?, confirmed_at = ?, updated_at = ? WHERE id = ? AND status = 'pending_confirmation'`).run(JSON.stringify(payload), JSON.stringify(proposalIds), confirmedAt, confirmedAt, draftId);
+      this.db.connection.exec("COMMIT");
+      const confirmed = this.getExtractionDraft(tripId, draftId);
+      if (!confirmed) throw new InvalidSourceError(`Extraction Draft ${draftId} disappeared after confirmation.`);
+      return { draft: confirmed, proposalIds, tripItemIds, decisionIds };
+    } catch (error) {
+      this.db.connection.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private insertConfirmedTripItem(tripId: string, sourceId: string, confirmedBy: string, item: ExtractionDraftItem): TripItem {
+    const kinds = canonicalizeKinds(item.kind, item.kinds);
+    const trip = this.requireTrip(tripId);
+    const timezone = resolveItemTimezone(item, trip.timezone);
+    const endpointTimezones = resolveEndpointTimezones(item);
+    const createdAt = now();
+    const tripItem: TripItem = {
+      id: `T-${randomUUID().slice(0, 8).toUpperCase()}`, sourceId, replacementForItemId: null, ...item, kinds,
+      timezone: timezone.value ?? undefined, timezoneSource: timezone.source ?? undefined,
+      originTimezone: endpointTimezones.origin ?? item.originTimezone, destinationTimezone: endpointTimezones.destination ?? item.destinationTimezone,
+      confirmedBy,
+    };
+    this.db.connection.prepare(`INSERT INTO trip_items (id, trip_id, source_id, replacement_for_item_id, kind, shape, shape_source, origin, destination, origin_timezone, destination_timezone, title, status, local_date, starts_at, ends_at, start_time_flexibility, end_time_flexibility, time_window, assumptions_json, timezone, timezone_source, location, notes, confirmed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      tripItem.id, tripId, sourceId, null, tripItem.kind, tripItem.shape, tripItem.shapeSource, tripItem.origin ?? null, tripItem.destination ?? null, tripItem.originTimezone ?? null, tripItem.destinationTimezone ?? null, tripItem.title, tripItem.localDate ?? null, tripItem.startsAt ?? null, tripItem.endsAt ?? null, tripItem.startTimeFlexibility ?? null, tripItem.endTimeFlexibility ?? null, tripItem.timeWindow ?? null, JSON.stringify(tripItem.assumptions ?? []), tripItem.timezone ?? null, tripItem.timezoneSource ?? null, tripItem.location ?? null, tripItem.notes ?? null, confirmedBy, createdAt,
+    );
+    const insertKind = this.db.connection.prepare(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) VALUES (?, ?)`);
+    for (const kind of kinds) insertKind.run(tripItem.id, kind);
+    this.persistLocationNormalization("trip_items", tripItem.id, tripItem);
+    return tripItem;
+  }
+
+  private insertTableDecision(tripId: string, ownerId: string, proposalId: string): Decision {
+    const proposal = this.db.connection.prepare(`SELECT title FROM proposals WHERE id = ? AND trip_id = ? AND proposal_status = 'pending'`).get(proposalId, tripId) as { title: string } | undefined;
+    if (!proposal) throw new ConflictError(`Proposal ${proposalId} is not available for a Table Decision.`);
+    const decision: Decision = { id: `D-${randomUUID().slice(0, 8).toUpperCase()}`, tripId, title: `${proposal.title}（待決定）`, status: "open", selectedProposalId: null, resolvedBy: null, resolvedAt: null, cancelledBy: null, cancelledAt: null };
+    this.db.connection.prepare(`INSERT INTO decisions (id, trip_id, title, status, selected_proposal_id, created_at) VALUES (?, ?, ?, 'open', NULL, ?)`).run(decision.id, tripId, decision.title, now());
+    this.db.connection.prepare(`UPDATE proposals SET decision_id = ? WHERE id = ? AND trip_id = ? AND decision_id IS NULL`).run(decision.id, proposalId, tripId);
+    return decision;
+  }
+
   createProposal(tripId: string, sourceId: string, item: ExtractedTripItem): string {
     this.requireActiveTrip(tripId);
     const kinds = canonicalizeKinds(item.kind, item.kinds);
