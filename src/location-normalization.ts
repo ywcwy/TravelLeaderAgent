@@ -146,14 +146,18 @@ export function buildLocationInventory(items: ReadonlyArray<{ id: string; type: 
 }
 
 const CONTEXT_LOCATION_RESOLVER_VERSION = "context-location-v1";
-const CONTEXTUAL_PLACEHOLDER = /^(?:住宿|飯店|酒店|旅館|hotel|lodging|stay)$/iu;
+const SEMANTIC_LOCATION_ROLE = /^(?:住宿|飯店|酒店|旅館|hotel|lodging|stay|吃早餐|早餐|breakfast|途中休息|休息|rest(?:\s+stop)?|stop\s+for\s+a\s+break)$/iu;
+
+export function isSemanticLocationRole(value: string | null | undefined): boolean {
+  return Boolean(value?.trim() && SEMANTIC_LOCATION_ROLE.test(value.trim()));
+}
 
 /** Applies only unambiguous, coarse geography from nearby explicit itinerary anchors. */
 export function inferContextualLocations<T extends ExtractedTripItem>(items: readonly T[]): T[] {
   const anchors = items.map((item, index) => ({ item, index, location: normalizeLocation(item.location) }))
     .filter((entry): entry is { item: T; index: number; location: NormalizedLocation } => entry.location?.source === "registry" && Boolean(entry.location.city));
   return items.map((item, index) => {
-    const canInfer = !item.location || CONTEXTUAL_PLACEHOLDER.test(item.location.trim());
+    const canInfer = !item.location || /^(?:住宿|飯店|酒店|旅館|hotel|lodging|stay)$/iu.test(item.location.trim());
     if (item.shape === "route" || !canInfer) return { ...item };
     const nearby = anchors.filter((anchor) => {
       if (item.localDate && anchor.item.localDate) {

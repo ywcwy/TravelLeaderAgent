@@ -86,6 +86,7 @@ test("persists normalized location fields on new Proposals", () => {
   assert.equal(proposal?.city, "Page");
   assert.equal(proposal?.region, "Arizona");
   assert.equal(proposal?.macroRegion, "US-West");
+  assert.equal(proposal?.locationResolverVersion, LOCATION_REGISTRY_VERSION);
   db.close();
 });
 

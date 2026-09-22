@@ -2,9 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { TravelDatabase } from "./database.ts";
 import { formatLocalDateTime, isDateOnly, localDate } from "./timezone.ts";
 import { locationValueMatchesQuery, normalizeItineraryQuery } from "./location-alias.ts";
-import { inferContextualLocations, normalizeItemLocations } from "./location-normalization.ts";
+import { inferContextualLocations, isSemanticLocationRole, LOCATION_REGISTRY_VERSION, normalizeItemLocations, resolveLocationCandidates, type NormalizedLocation } from "./location-normalization.ts";
 import { EXTRACTION_PROMPT_VERSION, ExtractionDraftValidationError, LlmProviderError, guardExtractionDraftPayload, validateExtractionDraftPayload, type LlmAdapter, type LlmDocumentContext, type LlmDocumentSection } from "./extraction-draft.ts";
-import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftMissing, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
+import type { DateProvenance, Decision, DocumentContext, DocumentDateSection, ExtractedTripItem, ExtractionDraft, ExtractionDraftItem, ExtractionDraftMetadata, ExtractionDraftMissing, ExtractionDraftPayload, GuardRevision, ImportChunk, ImportChunkStatus, ItineraryQuery, ItineraryQueryResult, LocationRegistryCandidate, LocationRegistryCandidateStatus, MemberRole, Proposal, ProposalContext, ProposalShape, ProposalShapeSource, ReviewIssue, Source, SourceImportOptions, TimezoneSource, TravelGroup, Trip, TripAccessPolicy, TripAccessPolicyUpdate, TripItem, TripItemKind, TripItemStatus, TripReview } from "./domain.ts";
 
 const now = () => new Date().toISOString();
 const DOCUMENT_CONTEXT_VERSION = "document-context-v2";
@@ -355,6 +355,26 @@ export class TravelService {
     return rows.map((row) => ({ id: String(row.id), tripId: String(row.trip_id), sourceId: String(row.source_id), chunkId: (row.chunk_id as string | null) ?? null, draftId: (row.draft_id as string | null) ?? null, ruleVersion: String(row.rule_version), fieldPath: String(row.field_path), before: JSON.parse(String(row.before_json)), after: JSON.parse(String(row.after_json)), createdAt: String(row.created_at) }));
   }
 
+  /** LLM-extracted place suggestions remain review evidence, never Registry entries. */
+  listLocationRegistryCandidates(tripId: string, status?: LocationRegistryCandidateStatus): LocationRegistryCandidate[] {
+    this.requireTrip(tripId);
+    const query = `SELECT * FROM location_registry_candidates WHERE trip_id = ?${status ? " AND status = ?" : ""} ORDER BY created_at, id`;
+    const rows = this.db.connection.prepare(query).all(...(status ? [tripId, status] : [tripId])) as Array<Record<string, unknown>>;
+    return rows.map(toLocationRegistryCandidate);
+  }
+
+  /** Reviewing a Candidate never changes the curated Location Registry. */
+  reviewLocationRegistryCandidate(tripId: string, administratorId: string, candidateId: string, status: Exclude<LocationRegistryCandidateStatus, "pending_review">): LocationRegistryCandidate {
+    this.requireTrip(tripId);
+    this.requireSystemAdministrator(administratorId);
+    const reviewedAt = now();
+    const result = this.db.connection.prepare(`UPDATE location_registry_candidates SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ? AND trip_id = ?`).run(status, administratorId, reviewedAt, candidateId, tripId);
+    if (result.changes !== 1) throw new NotFoundError(`Location Registry Candidate ${candidateId} was not found.`);
+    const row = this.db.connection.prepare(`SELECT * FROM location_registry_candidates WHERE id = ? AND trip_id = ?`).get(candidateId, tripId) as Record<string, unknown> | undefined;
+    if (!row) throw new NotFoundError(`Location Registry Candidate ${candidateId} was not found.`);
+    return toLocationRegistryCandidate(row);
+  }
+
   async retryImportChunk(tripId: string, userId: string, chunkId: string, adapter: LlmAdapter): Promise<ImportChunk> {
     const trip = this.requireActiveTrip(tripId);
     const row = this.db.connection.prepare(`SELECT chunk.*, source.provider_user_id, source.type AS source_type FROM import_chunks chunk JOIN sources source ON source.id = chunk.source_id WHERE chunk.id = ? AND chunk.trip_id = ?`).get(chunkId, tripId) as (Record<string, unknown> & { provider_user_id: string | null }) | undefined;
@@ -404,6 +424,17 @@ export class TravelService {
     if (!draft) return;
     const composed = this.composePayloadFromChunks(tripId, sourceId);
     this.db.connection.prepare(`UPDATE extraction_drafts SET status = ?, payload_json = ?, updated_at = ? WHERE id = ? AND status IN ('pending_confirmation', 'failed')`).run(composed.status, JSON.stringify(composed.payload), timestamp, draft.id);
+    this.recordLocationRegistryCandidates(tripId, sourceId, draft.id, composed.payload.items);
+  }
+
+  private recordLocationRegistryCandidates(tripId: string, sourceId: string, extractionDraftId: string, items: readonly ExtractedTripItem[]): void {
+    const insert = this.db.connection.prepare(`INSERT OR IGNORE INTO location_registry_candidates (id, trip_id, source_id, extraction_draft_id, source_field, source_line, source_text, suggested_canonical_name, suggested_city, suggested_region, suggested_country, suggested_macro_region, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', ?)`);
+    for (const item of items) {
+      for (const [sourceField, sourceText] of [["location", item.location], ["origin", item.origin], ["destination", item.destination]] as const) {
+        if (!sourceText?.trim() || isSemanticLocationRole(sourceText) || resolveLocationCandidates(sourceText).status === "resolved") continue;
+        insert.run(`LC-${randomUUID().replaceAll("-", "").slice(0, 20).toUpperCase()}`, tripId, sourceId, extractionDraftId, sourceField, item.sourceLine ?? null, sourceText.trim(), sourceText.trim(), item.city ?? null, item.region ?? null, item.country ?? null, item.macroRegion ?? null, now());
+      }
+    }
   }
 
   private composePayloadFromChunks(tripId: string, sourceId: string): { payload: ExtractionDraftPayload; status: ExtractionDraft["status"] } {
@@ -612,6 +643,7 @@ export class TravelService {
     );
     const persisted = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(source.id) as ExtractionDraftRow | undefined;
     if (!persisted) throw new InvalidSourceError("The Extraction Draft could not be persisted.");
+    this.recordLocationRegistryCandidates(tripId, source.id, persisted.id, payload.items);
     this.persistImportChunks(tripId, source.id, idempotencyKey, content, status === "failed" ? "failed" : "completed", timestamp);
     return toExtractionDraft(persisted);
   }
@@ -1110,7 +1142,9 @@ export class TravelService {
         const candidate = inferred[index] ?? row;
         const normalized = normalizeItemLocations(candidate);
         const candidateFields = candidate as Partial<ExtractedTripItem>;
-        const next = { canonicalId: candidateFields.canonicalId ?? normalized.location?.canonicalId ?? null, city: candidateFields.city ?? normalized.location?.city ?? null, region: candidateFields.region ?? normalized.location?.region ?? null, country: candidateFields.country ?? normalized.location?.country ?? null, macroRegion: candidateFields.macroRegion ?? normalized.location?.macroRegion ?? null, provenance: candidateFields.locationProvenance ?? (normalized.location ? "registry" : null), evidence: JSON.stringify(candidateFields.locationInferenceEvidence ?? []), resolver: candidateFields.locationResolverVersion ?? null };
+        const registryMatched = normalized.location?.source === "registry" || normalized.origin?.source === "registry" || normalized.destination?.source === "registry";
+        const resolverVersion = candidateFields.locationResolverVersion ?? (registryMatched ? LOCATION_REGISTRY_VERSION : null);
+        const next = { canonicalId: candidateFields.canonicalId ?? normalized.location?.canonicalId ?? null, city: candidateFields.city ?? normalized.location?.city ?? null, region: candidateFields.region ?? normalized.location?.region ?? null, country: candidateFields.country ?? normalized.location?.country ?? null, macroRegion: candidateFields.macroRegion ?? normalized.location?.macroRegion ?? null, provenance: candidateFields.locationProvenance ?? (normalized.location?.source === "registry" ? "registry" : null), evidence: JSON.stringify(candidateFields.locationInferenceEvidence ?? []), resolver: resolverVersion };
         const previous = { canonicalId: row.location_canonical_id, city: row.city, region: row.region, country: row.country, macroRegion: row.macro_region, provenance: row.location_provenance ?? (row.location_canonical_id ? "registry" : null), evidence: row.location_inference_evidence ?? JSON.stringify([]), resolver: row.location_resolver_version };
         if (JSON.stringify(next) !== JSON.stringify(previous) || (candidateFields.originCanonicalId ?? normalized.origin?.canonicalId ?? null) !== row.origin_canonical_id || (candidateFields.destinationCanonicalId ?? normalized.destination?.canonicalId ?? null) !== row.destination_canonical_id) changed++;
         this.persistLocationNormalization(table, row.id, {
@@ -1124,7 +1158,7 @@ export class TravelService {
           macroRegion: candidateFields.macroRegion ?? undefined,
           locationProvenance: candidateFields.locationProvenance,
           locationInferenceEvidence: candidateFields.locationInferenceEvidence,
-          locationResolverVersion: candidateFields.locationResolverVersion,
+          locationResolverVersion: resolverVersion ?? undefined,
           originCanonicalId: candidateFields.originCanonicalId ?? undefined,
           originCity: candidateFields.originCity ?? undefined,
           originRegion: candidateFields.originRegion ?? undefined,
@@ -1230,9 +1264,11 @@ export class TravelService {
     const location = item.canonicalId ? { ...normalized.location, canonicalId: item.canonicalId, city: item.city, region: item.region, country: item.country, macroRegion: item.macroRegion, source: "registry" as const, confidence: item.locationConfidence ?? "high" as const } : normalized.location;
     const origin = item.originCanonicalId ? { ...normalized.origin, canonicalId: item.originCanonicalId, city: item.originCity, region: item.originRegion, country: item.originCountry, macroRegion: item.originMacroRegion, source: "registry" as const, confidence: "high" as const } : normalized.origin;
     const destination = item.destinationCanonicalId ? { ...normalized.destination, canonicalId: item.destinationCanonicalId, city: item.destinationCity, region: item.destinationRegion, country: item.destinationCountry, macroRegion: item.destinationMacroRegion, source: "registry" as const, confidence: "high" as const } : normalized.destination;
+    const registryMatched = location?.source === "registry" || origin?.source === "registry" || destination?.source === "registry";
+    const resolverVersion = item.locationResolverVersion ?? (registryMatched ? LOCATION_REGISTRY_VERSION : null);
     this.db.connection.prepare(`UPDATE ${table} SET city = ?, region = ?, country = ?, macro_region = ?, location_source = ?, location_confidence = ?, location_canonical_id = ?, location_provenance = ?, location_inference_evidence = ?, location_resolver_version = ?, origin_city = ?, origin_region = ?, origin_country = ?, origin_macro_region = ?, origin_canonical_id = ?, destination_city = ?, destination_region = ?, destination_country = ?, destination_macro_region = ?, destination_canonical_id = ? WHERE id = ?`).run(
       location?.city ?? null, location?.region ?? null, location?.country ?? null, location?.macroRegion ?? null, location?.source ?? null, location?.confidence ?? null,
-      location?.canonicalId ?? null, item.locationProvenance ?? (location?.source === "registry" ? "registry" : null), item.locationInferenceEvidence ? JSON.stringify(item.locationInferenceEvidence) : null, item.locationResolverVersion ?? null,
+      location?.canonicalId ?? null, item.locationProvenance ?? (location?.source === "registry" ? "registry" : null), item.locationInferenceEvidence ? JSON.stringify(item.locationInferenceEvidence) : null, resolverVersion,
       origin?.city ?? null, origin?.region ?? null, origin?.country ?? null, origin?.macroRegion ?? null, origin?.canonicalId ?? null,
       destination?.city ?? null, destination?.region ?? null, destination?.country ?? null, destination?.macroRegion ?? null, destination?.canonicalId ?? null, id,
     );
@@ -1454,6 +1490,27 @@ function toSource(row: SourceRow): Source {
     content: row.content,
     sourceTime: row.source_time,
     provenance: row.provider ? { provider: row.provider, messageId: row.provider_message_id ?? "", ...(row.provider_group_id ? { groupId: row.provider_group_id } : {}), ...(row.provider_user_id ? { userId: row.provider_user_id } : {}) } : null,
+  };
+}
+
+function toLocationRegistryCandidate(row: Record<string, unknown>): LocationRegistryCandidate {
+  return {
+    id: String(row.id),
+    tripId: String(row.trip_id),
+    sourceId: String(row.source_id),
+    extractionDraftId: (row.extraction_draft_id as string | null) ?? null,
+    sourceField: row.source_field as LocationRegistryCandidate["sourceField"],
+    sourceLine: (row.source_line as number | null) ?? null,
+    sourceText: String(row.source_text),
+    suggestedCanonicalName: String(row.suggested_canonical_name),
+    ...(typeof row.suggested_city === "string" ? { suggestedCity: row.suggested_city } : {}),
+    ...(typeof row.suggested_region === "string" ? { suggestedRegion: row.suggested_region } : {}),
+    ...(typeof row.suggested_country === "string" ? { suggestedCountry: row.suggested_country } : {}),
+    ...(typeof row.suggested_macro_region === "string" ? { suggestedMacroRegion: row.suggested_macro_region } : {}),
+    status: row.status as LocationRegistryCandidateStatus,
+    reviewedBy: (row.reviewed_by as string | null) ?? null,
+    reviewedAt: (row.reviewed_at as string | null) ?? null,
+    createdAt: String(row.created_at),
   };
 }
 
