@@ -13,6 +13,36 @@ The developer needs a repeatable, safe way to reset one Trip, import a complete
 itinerary, and inspect the resulting domain state before building later
 confirmation and recommendation behavior.
 
+## Reusing a LINE Group for a New Trip
+
+`setup:trip` is idempotent for a LINE group: when that group already has an
+Active Trip, it returns the existing Trip instead of creating a second Active
+Trip. To start a new Trip while keeping the same LINE `groupId`, explicitly
+reset the current Trip first:
+
+```sh
+npm run --silent reset:trip -- \
+  <current-trip-id> \
+  --confirm \
+  "New test trip" \
+  "Asia/Taipei"
+```
+
+Reset archives the current Trip and creates one fresh Active Trip for the same
+Travel Group. It does not delete the archived Sources, Proposals, Decisions, or
+Trip Items. Use the new `tripId` returned by the command for subsequent imports:
+
+```sh
+npm run --silent import:trip -- \
+  <new-trip-id> \
+  <import-batch-id> \
+  <markdown-file>
+```
+
+The trailing backslash must be the final character on its line; do not put a
+space after `\`. If the old Active Trip should remain untouched, use a different
+LINE group instead.
+
 ## Solution
 
 Add a development-oriented Trip lifecycle and review workflow:

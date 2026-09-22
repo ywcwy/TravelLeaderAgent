@@ -37,6 +37,21 @@ ngrok request inspector at `http://127.0.0.1:4040`, then run:
 npm run setup:trip -- Cxxxxxxxxxxxxxxxx "測試旅程" Asia/Taipei
 ```
 
+`setup:trip` reuses the group's existing Active Trip. To create a fresh Trip
+with the same LINE group, reset the current Trip first; the old Trip is archived
+and its history is preserved:
+
+```sh
+npm run --silent reset:trip -- \
+  <current-trip-id> \
+  --confirm \
+  "新的測試旅程" \
+  "Asia/Taipei"
+```
+
+Use the returned `tripId` for later imports. The backslash must be the final
+character on each continued shell line; do not add a trailing space.
+
 The implementation uses Node.js' built-in `node:sqlite` module. Node 22.5 or newer
 is required.
 
