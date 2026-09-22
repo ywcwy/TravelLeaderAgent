@@ -710,6 +710,11 @@ export class TravelService {
     return row ? toExtractionDraft(row) : null;
   }
 
+  getExtractionDraftSourceType(tripId: string, draftId: string): string | null {
+    const row = this.db.connection.prepare(`SELECT sources.type AS type FROM extraction_drafts JOIN sources ON sources.id = extraction_drafts.source_id WHERE extraction_drafts.trip_id = ? AND extraction_drafts.id = ?`).get(tripId, draftId) as { type: string } | undefined;
+    return row?.type ?? null;
+  }
+
   reviseExtractionDraft(tripId: string, userId: string, draftId: string, payload: ExtractionDraftPayload): ExtractionDraft {
     this.requireActiveTrip(tripId);
     const current = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE trip_id = ? AND id = ?`).get(tripId, draftId) as ExtractionDraftRow | undefined;
