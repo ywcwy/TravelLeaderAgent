@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inferContextualLocations, normalizeLocation, normalizeItemLocations, resolveLocationCandidates } from "../src/location-normalization.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildLocationInventory, inferContextualLocations, normalizeLocation, normalizeItemLocations, normalizeLocationQueryDimension, resolveLocationCandidates } from "../src/location-normalization.ts";
 import { TravelDatabase } from "../src/database.ts";
 import { TravelService } from "../src/travel-service.ts";
 import type { ExtractedTripItem } from "../src/domain.ts";
@@ -17,6 +20,29 @@ test("uses complete aliases and exposes ambiguity candidates", () => {
   assert.equal(normalizeLocation("Pageant venue")?.source, "unresolved");
   assert.equal(resolveLocationCandidates("Springfield").status, "ambiguous");
   assert.deepEqual(resolveLocationCandidates("Springfield").candidates?.map((candidate) => candidate.canonicalId), ["city:springfield-il-us", "city:springfield-mo-us"]);
+});
+
+test("normalizes Phase 18 cities, landmarks, and compound business locations", () => {
+  assert.equal(normalizeLocation("Kanab")?.canonicalId, "city:kanab-us");
+  assert.equal(normalizeLocation("St. George")?.canonicalId, "city:st-george-us");
+  assert.equal(normalizeLocation("Williams, AZ")?.city, "Williams");
+  assert.equal(normalizeLocation("Hopi Point")?.city, "Grand Canyon Village");
+  assert.equal(normalizeLocation("Grand Canyon Visitor Center")?.canonicalName, "Grand Canyon Visitor Center");
+  assert.equal(normalizeLocation("Grand Canyon Visitor Center")?.city, "Grand Canyon Village");
+  assert.equal(normalizeLocation("Grand Canyon National Park")?.city, "Grand Canyon Village");
+  assert.equal(normalizeLocation("Mr. D'z Route 66 Diner, Kingman")?.city, "Kingman");
+  assert.equal(normalizeLocation("Delgadillo’s Snow Cap, Seligman")?.city, "Seligman");
+  assert.deepEqual(normalizeLocationQueryDimension("Kanab"), { city: "Kanab" });
+});
+
+test("builds a read-only inventory of unresolved locations", () => {
+  assert.deepEqual(buildLocationInventory([
+    { id: "P-1", type: "proposal", location: "Visitor Center", origin: null, destination: null },
+    { id: "P-2", type: "proposal", location: "Visitor Center", origin: "Kanab", destination: "Unknown Stop" },
+  ]), [
+    { value: "Unknown Stop", occurrences: 1, references: [{ type: "proposal", id: "P-2", field: "destination" }], candidates: [] },
+    { value: "Visitor Center", occurrences: 2, references: [{ type: "proposal", id: "P-1", field: "location" }, { type: "proposal", id: "P-2", field: "location" }], candidates: [] },
+  ]);
 });
 
 test("does not leak a city anchor to unrelated distant items", () => {
@@ -84,4 +110,24 @@ test("context-aware re-normalization fills a placeholder from an explicit nearby
   assert.equal(after?.canonicalId, "city:page-us");
   assert.equal(after?.locationProvenance, "context_inferred");
   db.close();
+});
+
+test("preserves contextual normalization after reopening the database", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-location-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const firstDb = new TravelDatabase(databasePath);
+  const firstService = new TravelService(firstDb, "admin");
+  const group = firstService.createTravelGroup("admin", "reopen-group", "Reopen Group");
+  const trip = firstService.createActiveTrip("admin", group.id, "Reopen Trip", "UTC");
+  firstService.addMember("admin", trip.id, "owner", "Owner", "owner");
+  const imported = firstService.importMarkdown(trip.id, "- [provisional] Stay | 2026-10-01 | Page\n- [provisional] Breakfast | 2026-10-02 | 住宿", { idempotencyKey: "reopen-context-test" });
+  firstService.renormalizeTripLocations(trip.id, { contextual: true });
+  firstDb.close();
+  const secondDb = new TravelDatabase(databasePath);
+  const secondService = new TravelService(secondDb, "admin");
+  const breakfast = secondService.getProposal(trip.id, imported.proposalIds[1]!);
+  assert.equal(breakfast?.city, "Page");
+  assert.equal(breakfast?.locationProvenance, "context_inferred");
+  secondDb.close();
+  rmSync(directory, { recursive: true, force: true });
 });

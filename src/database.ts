@@ -6,7 +6,7 @@ export type SqlValue = string | number | null;
 export class TravelDatabase {
   readonly connection: DatabaseSync;
 
-  constructor(path = ":memory:") {
+  constructor(path = ":memory:", options: { backfill?: boolean } = {}) {
     this.connection = new DatabaseSync(path);
     this.connection.exec(`
       PRAGMA busy_timeout = 5000;
@@ -433,8 +433,10 @@ export class TravelDatabase {
     this.connection.exec(`UPDATE trip_items SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.backfillTimezoneMetadata("proposals");
     this.backfillTimezoneMetadata("trip_items");
-    this.backfillLocationNormalization("proposals");
-    this.backfillLocationNormalization("trip_items");
+    if (options.backfill !== false) {
+      this.backfillLocationNormalization("proposals");
+      this.backfillLocationNormalization("trip_items");
+    }
     this.connection.exec(`INSERT OR IGNORE INTO proposal_kinds (proposal_id, kind) SELECT id, kind FROM proposals WHERE kind IS NOT NULL`);
     this.connection.exec(`INSERT OR IGNORE INTO trip_item_kinds (trip_item_id, kind) SELECT id, kind FROM trip_items WHERE kind IS NOT NULL`);
     this.connection.exec(`INSERT OR IGNORE INTO trip_access_policies (trip_id) SELECT id FROM trips`);
@@ -460,7 +462,7 @@ export class TravelDatabase {
     const existing = this.connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     for (const column of columns) if (!existing.some((entry) => entry.name === column)) this.connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
     const rows = this.connection.prepare(`SELECT id, location, origin, destination FROM ${table}`).all() as Array<{ id: string; location: string | null; origin: string | null; destination: string | null }>;
-    const update = this.connection.prepare(`UPDATE ${table} SET city = ?, region = ?, country = ?, macro_region = ?, location_source = ?, location_confidence = ?, location_canonical_id = ?, location_provenance = COALESCE(location_provenance, ?), location_inference_evidence = COALESCE(location_inference_evidence, ?), location_resolver_version = COALESCE(location_resolver_version, ?), origin_city = ?, origin_region = ?, origin_country = ?, origin_macro_region = ?, origin_canonical_id = ?, destination_city = ?, destination_region = ?, destination_country = ?, destination_macro_region = ?, destination_canonical_id = ? WHERE id = ?`);
+    const update = this.connection.prepare(`UPDATE ${table} SET city = COALESCE(?, city), region = COALESCE(?, region), country = COALESCE(?, country), macro_region = COALESCE(?, macro_region), location_source = COALESCE(?, location_source), location_confidence = COALESCE(?, location_confidence), location_canonical_id = COALESCE(?, location_canonical_id), location_provenance = COALESCE(location_provenance, ?), location_inference_evidence = COALESCE(location_inference_evidence, ?), location_resolver_version = COALESCE(location_resolver_version, ?), origin_city = COALESCE(?, origin_city), origin_region = COALESCE(?, origin_region), origin_country = COALESCE(?, origin_country), origin_macro_region = COALESCE(?, origin_macro_region), origin_canonical_id = COALESCE(?, origin_canonical_id), destination_city = COALESCE(?, destination_city), destination_region = COALESCE(?, destination_region), destination_country = COALESCE(?, destination_country), destination_macro_region = COALESCE(?, destination_macro_region), destination_canonical_id = COALESCE(?, destination_canonical_id) WHERE id = ?`);
     for (const row of rows) {
       const normalized = normalizeItemLocations(row);
       const location = normalized.location; const origin = normalized.origin; const destination = normalized.destination;

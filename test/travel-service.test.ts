@@ -360,7 +360,7 @@ test("imports explicit Point and Route Proposal structure and infers legacy Poin
   assert.equal(route?.shapeSource, "explicit");
   assert.equal(route?.origin, "Las Vegas");
   assert.equal(route?.destination, "St. George");
-  assert.equal(service.reviewTrip(tripId).issues.filter((issue) => issue.code === "unresolved_location").length, 1);
+  assert.equal(service.reviewTrip(tripId).issues.filter((issue) => issue.code === "unresolved_location").length, 0);
   db.close();
 });
 
