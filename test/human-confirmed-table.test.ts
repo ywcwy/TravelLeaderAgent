@@ -122,6 +122,27 @@ test("blocks confirmation when a confirmed row still has table validation errors
   database.close();
 });
 
+test("reuses identical table checksums and creates linked revisions for changed content", () => {
+  const database = new TravelDatabase();
+  const travel = new TravelService(database, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-human-table-revisions", "Human Table Revisions");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Table Revisions", "Asia/Taipei");
+  travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
+  const first = travel.importHumanConfirmedTableDraft(trip.id, table, "table-revision", "U-owner");
+  const changedTable = table.replace("Page 午餐", "Page 早餐");
+  const revised = travel.importHumanConfirmedTableDraft(trip.id, changedTable, "table-revision", "U-owner");
+  assert.equal(revised.outcome, "revised");
+  assert.notEqual(revised.sourceId, first.sourceId);
+  const revisedDraft = travel.getExtractionDraft(trip.id, revised.draftId)!;
+  assert.equal(revisedDraft.revision, 2);
+  assert.equal(revisedDraft.previousDraftId, first.draftId);
+  const replay = travel.importHumanConfirmedTableDraft(trip.id, changedTable, "different-batch", "U-owner");
+  assert.equal(replay.outcome, "reused");
+  assert.equal(replay.sourceId, revised.sourceId);
+  assert.throws(() => travel.confirmHumanConfirmedTable(trip.id, "U-owner", first.draftId), ConflictError);
+  database.close();
+});
+
 test("validates confirmed geography and time fields without removing valid rows", () => {
   const parsed = parseHumanConfirmedTable(table);
   const point = { ...parsed.items[0]!, city: "Las Vegas", region: "Nevada" };

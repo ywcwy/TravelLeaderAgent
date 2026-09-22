@@ -31,7 +31,7 @@ export interface TripResetResult {
 export interface MarkdownImportResult {
   sourceId: string;
   proposalIds: string[];
-  outcome: "created" | "reused";
+  outcome: "created" | "reused" | "revised";
 }
 
 export interface MarkdownDraftImportResult extends MarkdownImportResult {
@@ -321,9 +321,12 @@ export class TravelService {
     const batchId = importBatchId.trim();
     if (!batchId) throw new InvalidSourceError("An Import Batch ID is required.");
     if (containsSensitiveTravelData(markdown)) throw new InvalidSourceError("Sensitive Travel Data must be removed before importing this Source.");
-    const existing = this.db.connection.prepare(`SELECT id, content FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, batchId) as { id: string; content: string } | undefined;
+    const checksum = createHash("sha256").update(markdown, "utf8").digest("hex");
+    const checksumKey = `human-table:${checksum}`;
+    const existingByChecksum = this.db.connection.prepare(`SELECT id, content FROM sources WHERE trip_id = ? AND idempotency_key = ?`).get(tripId, checksumKey) as { id: string; content: string } | undefined;
+    const existingByBatch = this.db.connection.prepare(`SELECT id, content FROM sources WHERE trip_id = ? AND (idempotency_key = ? OR provider_message_id = ?) ORDER BY created_at DESC LIMIT 1`).get(tripId, batchId, batchId) as { id: string; content: string } | undefined;
+    const existing = existingByChecksum ?? (existingByBatch?.content === markdown ? existingByBatch : undefined);
     if (existing) {
-      if (existing.content !== markdown) throw new ConflictError(`Import Batch ${batchId} already contains different content.`);
       const draft = this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(existing.id) as ExtractionDraftRow | undefined;
       if (!draft) throw new ConflictError(`Import Batch ${batchId} already exists without an Extraction Draft.`);
       const parsed = toExtractionDraft(draft);
@@ -331,6 +334,8 @@ export class TravelService {
     }
 
     const table = parseHumanConfirmedTable(markdown);
+    const previousSource = existingByBatch && existingByBatch.content !== markdown ? existingByBatch : undefined;
+    const previousDraft = previousSource ? this.db.connection.prepare(`SELECT * FROM extraction_drafts WHERE source_id = ? ORDER BY revision DESC LIMIT 1`).get(previousSource.id) as ExtractionDraftRow | undefined : undefined;
     const sourceId = randomUUID();
     const payload: ExtractionDraftPayload = {
       items: table.items.map(toDraftItem),
@@ -350,9 +355,9 @@ export class TravelService {
     const timestamp = now();
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
-      this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, idempotency_key, content, source_time, provider, provider_message_id, provider_group_id, provider_user_id, created_at) VALUES (?, ?, 'markdown_table', ?, ?, ?, NULL, NULL, NULL, ?, ?)`).run(sourceId, tripId, batchId, markdown, timestamp, originatingUserId, timestamp);
-      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, '[]', 'deterministic-table', 'markdown-table-parser', ?, NULL, NULL, NULL, ?, ?)`).run(
-        draftId, tripId, sourceId, originatingUserId, status, JSON.stringify(payload), `human-table-v${table.formatVersion ?? "unknown"}`, timestamp, timestamp,
+      this.db.connection.prepare(`INSERT INTO sources (id, trip_id, type, idempotency_key, content, source_time, provider, provider_message_id, provider_group_id, provider_user_id, created_at) VALUES (?, ?, 'markdown_table', ?, ?, ?, 'human-table', ?, NULL, ?, ?)`).run(sourceId, tripId, checksumKey, markdown, timestamp, batchId, originatingUserId, timestamp);
+      this.db.connection.prepare(`INSERT INTO extraction_drafts (id, trip_id, source_id, originating_user_id, revision, previous_draft_id, status, payload_json, proposal_ids_json, provider, model, prompt_version, confirmed_at, cancelled_at, cancelled_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', 'deterministic-table', 'markdown-table-parser', ?, NULL, NULL, NULL, ?, ?)`).run(
+        draftId, tripId, sourceId, originatingUserId, (previousDraft?.revision ?? 0) + 1, previousDraft?.id ?? null, status, JSON.stringify(payload), `human-table-v${table.formatVersion ?? "unknown"}`, timestamp, timestamp,
       );
       this.persistImportChunks(tripId, sourceId, batchId, markdown, "completed", timestamp);
       this.db.connection.exec("COMMIT");
@@ -360,7 +365,7 @@ export class TravelService {
       this.db.connection.exec("ROLLBACK");
       throw error;
     }
-    return { sourceId, draftId, proposalIds: [], itemCount: payload.items.length, reviewIssueCount: payload.issues.length + payload.missing.length, dateRange: draftDateRange(payload), chunkCount: this.getImportChunks(tripId, sourceId).length, outcome: "created" };
+    return { sourceId, draftId, proposalIds: [], itemCount: payload.items.length, reviewIssueCount: payload.issues.length + payload.missing.length, dateRange: draftDateRange(payload), chunkCount: this.getImportChunks(tripId, sourceId).length, outcome: previousDraft ? "revised" : "created" };
   }
 
   getImportChunks(tripId: string, sourceId: string): ImportChunk[] {
@@ -853,6 +858,8 @@ export class TravelService {
     const draft = toExtractionDraft(row);
     if (draft.status === "confirmed") return { draft, proposalIds: draft.proposalIds, tripItemIds: [], decisionIds: [] };
     if (draft.status !== "pending_confirmation") throw new ConflictError(`Extraction Draft ${draftId} is not pending confirmation.`);
+    const newerDraft = this.db.connection.prepare(`SELECT id FROM extraction_drafts WHERE previous_draft_id = ? LIMIT 1`).get(draftId) as { id: string } | undefined;
+    if (newerDraft) throw new ConflictError(`Extraction Draft ${draftId} is not the latest table revision.`);
     const blockingIssues = draft.issues.filter((issue) => issue.code.startsWith("table_"));
     if (blockingIssues.length > 0) throw new ConflictError(`Human-confirmed Table ${draftId} has validation errors: ${blockingIssues.map((issue) => issue.message).join("；")}`);
     if (draft.items.length === 0) throw new ConflictError(`Human-confirmed Table ${draftId} contains no itinerary items.`);
@@ -867,6 +874,8 @@ export class TravelService {
         return { draft: current, proposalIds: current.proposalIds, tripItemIds: [], decisionIds: [] };
       }
       if (current.status !== "pending_confirmation") throw new ConflictError(`Extraction Draft ${draftId} is not pending confirmation.`);
+      const newerLockedDraft = this.db.connection.prepare(`SELECT id FROM extraction_drafts WHERE previous_draft_id = ? LIMIT 1`).get(draftId) as { id: string } | undefined;
+      if (newerLockedDraft) throw new ConflictError(`Extraction Draft ${draftId} is not the latest table revision.`);
       const existingProposalKeys = new Set((this.db.connection.prepare(`SELECT title, source_line FROM proposals WHERE source_id = ?`).all(locked.source_id) as Array<{ title: string; source_line: number | null }>).map((proposal) => `${proposal.title}|${proposal.source_line ?? ""}`));
       const proposalIds = [...current.proposalIds];
       const tripItemIds: string[] = [];
