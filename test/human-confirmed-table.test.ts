@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { TravelDatabase } from "../src/database.ts";
 import { isHumanConfirmedTable, parseHumanConfirmedTable, validateHumanConfirmedTableItems } from "../src/human-confirmed-table.ts";
+import { renderItineraryQuery } from "../src/itinerary-query.ts";
 import { ConflictError, PermissionError, TravelService } from "../src/travel-service.ts";
 
 const table = `<!-- itinerary-table -->
@@ -23,6 +24,18 @@ confirmation_status: draft
 這段說明保留在 Draft，但不會建立第三個 item。
 `;
 
+const addressTable = `<!-- itinerary-table -->
+format_version: 1
+confirmation_status: confirmed
+
+## Itinerary Table
+| item_key | title | status | kind | shape | date | start_time | end_time | timezone | location | address | city | region | country | origin | origin_city | origin_region | origin_country | origin_timezone | destination | destination_city | destination_region | destination_country | destination_timezone | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| D1-A | Page 午餐 | confirmed | meal | point | 2026-10-02 | 13:45 | 14:30 | America/Phoenix | Page | 123 Main Street, Page, AZ 86040 | Page | Arizona | United States |  |  |  |  |  |  |  |  |  |  | BirdHouse |
+
+## Notes
+`;
+
 test("parses a versioned Human-confirmed Table with point, route, and escaped pipes", () => {
   assert.equal(isHumanConfirmedTable(table), true);
   const parsed = parseHumanConfirmedTable(table);
@@ -38,6 +51,33 @@ test("parses a versioned Human-confirmed Table with point, route, and escaped pi
   assert.equal(parsed.items[1]?.destination, "Tusayan");
   assert.deepEqual(parsed.notes, ["這段說明保留在 Draft，但不會建立第三個 item。"]);
   assert.deepEqual(parsed.issues, []);
+});
+
+test("preserves an optional point address without making it required", () => {
+  const parsed = parseHumanConfirmedTable(addressTable);
+  assert.deepEqual(parsed.issues, []);
+  assert.equal(parsed.items[0]?.address, "123 Main Street, Page, AZ 86040");
+  assert.equal(parseHumanConfirmedTable(table).issues.length, 0);
+});
+
+test("rejects an address on a route row because endpoint addresses are deferred", () => {
+  const point = parseHumanConfirmedTable(addressTable).items[0]!;
+  const issues = validateHumanConfirmedTableItems([{ ...point, shape: "route", address: point.address }]);
+  assert.ok(issues.some((issue) => issue.message.includes("route endpoint address")));
+});
+
+test("persists a Human-confirmed address through Draft confirmation and review", () => {
+  const database = new TravelDatabase();
+  const travel = new TravelService(database, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-human-address", "Human Address");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Address", "Asia/Taipei");
+  const imported = travel.importHumanConfirmedTableDraft(trip.id, addressTable, "address-table");
+  const confirmed = travel.confirmHumanConfirmedTable(trip.id, "system-admin", imported.draftId);
+  assert.equal(confirmed.tripItemIds.length, 1);
+  const review = travel.reviewTrip(trip.id);
+  assert.equal(review.confirmed[0]?.address, "123 Main Street, Page, AZ 86040");
+  assert.match(renderItineraryQuery(travel.queryTrip(trip.id, "system-admin", { location: "Page" })), /地址：123 Main Street, Page, AZ 86040/);
+  database.close();
 });
 
 test("imports the Human-confirmed Table as a reviewable Draft through the service boundary", () => {

@@ -28,6 +28,11 @@ function fixture(sourceExcerpt: string): ExtractionDraftPayload {
   };
 }
 
+test("does not retain model-provided addresses in generic Extraction Draft validation", () => {
+  const payload = validateExtractionDraftPayload({ ...fixture("model source"), items: [{ ...fixture("model source").items[0]!, address: "Invented Street 1" }] });
+  assert.equal(payload.items[0]?.address, undefined);
+});
+
 test("persists one pending Extraction Draft without creating a Proposal", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

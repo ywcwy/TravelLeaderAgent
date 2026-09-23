@@ -204,6 +204,7 @@ export class TravelDatabase {
         timezone TEXT,
         timezone_source TEXT,
         location TEXT,
+        address TEXT,
         city TEXT,
         region TEXT,
         country TEXT,
@@ -263,6 +264,7 @@ export class TravelDatabase {
         timezone TEXT,
         timezone_source TEXT,
         location TEXT,
+        address TEXT,
         city TEXT,
         region TEXT,
         country TEXT,
@@ -447,6 +449,7 @@ export class TravelDatabase {
     if (!proposalColumns.some((column) => column.name === "end_time_flexibility")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN end_time_flexibility TEXT`);
     if (!proposalColumns.some((column) => column.name === "time_window")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN time_window TEXT`);
     if (!proposalColumns.some((column) => column.name === "assumptions_json")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN assumptions_json TEXT NOT NULL DEFAULT '[]'`);
+    if (!proposalColumns.some((column) => column.name === "address")) this.connection.exec(`ALTER TABLE proposals ADD COLUMN address TEXT`);
     const tripItemColumnsAfterMigration = this.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string }>;
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "local_date")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN local_date TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "shape")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN shape TEXT`);
@@ -460,6 +463,7 @@ export class TravelDatabase {
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "end_time_flexibility")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN end_time_flexibility TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "time_window")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN time_window TEXT`);
     if (!tripItemColumnsAfterMigration.some((column) => column.name === "assumptions_json")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN assumptions_json TEXT NOT NULL DEFAULT '[]'`);
+    if (!tripItemColumnsAfterMigration.some((column) => column.name === "address")) this.connection.exec(`ALTER TABLE trip_items ADD COLUMN address TEXT`);
     this.connection.exec(`UPDATE proposals SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.connection.exec(`UPDATE trip_items SET shape = 'point', shape_source = 'inferred' WHERE shape IS NULL AND location IS NOT NULL`);
     this.backfillTimezoneMetadata("proposals");

@@ -20,6 +20,7 @@ export function validateHumanConfirmedTableItems(items: readonly ExtractedTripIt
     const prefix = item.itemKey ? `［${item.itemKey}］` : `「${item.title}」`;
     const add = (field: string, message: string): void => { issues.push({ code: "table_validation", message: `${prefix}${field}：${message}`, sourceLine: item.sourceLine, ...(item.itemKey ? { itemKey: item.itemKey } : {}) }); };
     const confirmed = item.status === "confirmed";
+    if (item.shape === "route" && item.address?.trim()) add("address", "MVP 僅支援 point 的 address；route endpoint address 尚未支援。");
     if (containsPlaceholder(item.location)) add("location", "不可使用 TBD、待確認 或其他 placeholder。");
     if (containsPlaceholder(item.origin)) add("origin", "不可使用 TBD、待確認 或其他 placeholder。");
     if (containsPlaceholder(item.destination)) add("destination", "不可使用 TBD、待確認 或其他 placeholder。");
@@ -180,6 +181,7 @@ export function parseHumanConfirmedTable(markdown: string): HumanConfirmedTableP
       endsAt: combineDateTime(date, endTime),
       timezone: values.timezone?.trim() || undefined,
       location: values.location?.trim() || undefined,
+      address: values.address?.trim() || undefined,
       city: values.city?.trim() || undefined,
       region: values.region?.trim() || undefined,
       country: values.country?.trim() || undefined,

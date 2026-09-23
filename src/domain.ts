@@ -47,6 +47,8 @@ export interface ExtractedTripItem {
   originTimezone?: string;
   destinationTimezone?: string;
   location?: string;
+  /** Optional human-confirmed street address for point items. */
+  address?: string;
   locationProvenance?: "explicit" | "registry" | "context_inferred" | "unresolved";
   locationInferenceEvidence?: string[];
   locationResolverVersion?: string;

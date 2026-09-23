@@ -1302,6 +1302,22 @@ test("an existing SQLite database gains date-only columns without changing legac
   rmSync(directory, { recursive: true, force: true });
 });
 
+test("an existing SQLite database gains nullable address columns", () => {
+  const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-address-migration-"));
+  const databasePath = join(directory, "travel.sqlite");
+  const initial = new TravelDatabase(databasePath);
+  initial.connection.exec(`ALTER TABLE proposals DROP COLUMN address; ALTER TABLE trip_items DROP COLUMN address;`);
+  initial.close();
+
+  const upgraded = new TravelDatabase(databasePath);
+  const proposalColumns = upgraded.connection.prepare(`PRAGMA table_info(proposals)`).all() as Array<{ name: string; notnull: number }>;
+  const tripItemColumns = upgraded.connection.prepare(`PRAGMA table_info(trip_items)`).all() as Array<{ name: string; notnull: number }>;
+  assert.equal(proposalColumns.some((column) => column.name === "address" && column.notnull === 0), true);
+  assert.equal(tripItemColumns.some((column) => column.name === "address" && column.notnull === 0), true);
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
 test("an existing SQLite database gains Extraction Draft provider metadata columns", () => {
   const directory = mkdtempSync(join(tmpdir(), "travel-leader-agent-draft-metadata-migration-"));
   const databasePath = join(directory, "travel.sqlite");

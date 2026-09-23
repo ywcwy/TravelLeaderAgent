@@ -76,7 +76,7 @@ function previewHumanConfirmedTable(tripIdValue: string, markdown: string): Tabl
     formatVersion: parsed.formatVersion,
     confirmationStatus: parsed.confirmationStatus,
     itemCount: parsed.items.length,
-    items: parsed.items.map((item) => ({ itemKey: item.itemKey ?? null, title: item.title, status: item.status, kind: item.kind, shape: item.shape, date: item.localDate ?? null, startsAt: item.startsAt ?? null, endsAt: item.endsAt ?? null, timezone: item.timezone ?? item.originTimezone ?? null, location: item.location ?? null, origin: item.origin ?? null, destination: item.destination ?? null })),
+    items: parsed.items.map((item) => ({ itemKey: item.itemKey ?? null, title: item.title, status: item.status, kind: item.kind, shape: item.shape, date: item.localDate ?? null, startsAt: item.startsAt ?? null, endsAt: item.endsAt ?? null, timezone: item.timezone ?? item.originTimezone ?? null, location: item.location ?? null, address: item.address ?? null, origin: item.origin ?? null, destination: item.destination ?? null })),
     validationIssues: [...parsed.issues, ...validationIssues].map((issue) => ({ code: issue.code, message: issue.message, sourceLine: issue.sourceLine ?? null, itemKey: issue.itemKey ?? null })),
     registryMatches,
     intendedWrites: {
@@ -90,7 +90,7 @@ function previewHumanConfirmedTable(tripIdValue: string, markdown: string): Tabl
 
 function renderHumanPreview(previewResult: TablePreview): string {
   const lines = [`Trip ${previewResult.tripId}`, `Human-confirmed Table v${previewResult.formatVersion ?? "?"}｜${previewResult.confirmationStatus ?? "unknown"}`, `Items: ${previewResult.itemCount}`, ""];
-  for (const item of previewResult.items) lines.push(`- [${item.status}] ${item.itemKey ?? "(no key)"} ${item.title}｜${item.date ?? "undated"}｜${item.location ?? item.origin ?? ""}${item.destination ? ` → ${item.destination}` : ""}`);
+  for (const item of previewResult.items) lines.push(`- [${item.status}] ${item.itemKey ?? "(no key)"} ${item.title}｜${item.date ?? "undated"}｜${item.location ?? item.origin ?? ""}${item.destination ? ` → ${item.destination}` : ""}${item.address ? `｜地址：${item.address}` : ""}`);
   lines.push("", `Validation Issues: ${previewResult.validationIssues.length}`);
   for (const issue of previewResult.validationIssues) lines.push(`- ${issue.itemKey ? `[${issue.itemKey}] ` : ""}${issue.message}`);
   lines.push("", "Registry Matches:");
