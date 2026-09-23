@@ -1,0 +1,2334 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>舊金山 × 那帕谷 × 拉斯維加斯 × 大峽谷 × 洛杉磯｜17日行程</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;700;900&family=Noto+Sans+TC:wght@400;500;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            box-sizing: border-box;
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+
+            --cream: #FBF6EC;
+            --cream-2: #F3ECDD;
+            --ink: #2B2420;
+            --ink-soft: #5C5148;
+            --navy: #1B3A5C;
+            --navy-deep: #132B44;
+            --orange: #C1440E;
+            --orange-soft: #E2703B;
+            --gold: #B4863A;
+            --teal: #2E6E6A;
+            --card-bg: #FFFFFF;
+            --card-border: #E7DCC4;
+            --tag-booked-bg: #E9F3EA;
+            --tag-booked-fg: #2F7A44;
+            --tag-free-bg: #EAF1FB;
+            --tag-free-fg: #2A5FA0;
+            --tag-opt-bg: #F5EEE0;
+            --tag-opt-fg: #8A6A2E;
+            --tag-choice-bg: #FBEAE3;
+            --tag-choice-fg: #B24B23;
+            --shadow: 0 10px 30px -12px rgba(43, 36, 32, 0.18);
+        }
+
+        html {
+            scroll-padding-top: calc(64px + env(safe-area-inset-top, 0px));
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: var(--cream);
+            color: var(--ink);
+            font-family: 'Noto Sans TC', system-ui, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            overflow-x: hidden;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --cream: #1C1712;
+                --cream-2: #241E17;
+                --ink: #F1E9DC;
+                --ink-soft: #C9BEAE;
+                --card-bg: #26201A;
+                --card-border: #3A3025;
+                --tag-booked-bg: #1C3322;
+                --tag-booked-fg: #7FD69A;
+                --tag-free-bg: #182B3F;
+                --tag-free-fg: #8FB8ED;
+                --tag-opt-bg: #332A18;
+                --tag-opt-fg: #E0C583;
+                --tag-choice-bg: #3A2119;
+                --tag-choice-fg: #F0A583;
+                --shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.5);
+            }
+        }
+
+        :root[data-theme="dark"] {
+            --cream: #1C1712;
+            --cream-2: #241E17;
+            --ink: #F1E9DC;
+            --ink-soft: #C9BEAE;
+            --card-bg: #26201A;
+            --card-border: #3A3025;
+            --tag-booked-bg: #1C3322;
+            --tag-booked-fg: #7FD69A;
+            --tag-free-bg: #182B3F;
+            --tag-free-fg: #8FB8ED;
+            --tag-opt-bg: #332A18;
+            --tag-opt-fg: #E0C583;
+            --tag-choice-bg: #3A2119;
+            --tag-choice-fg: #F0A583;
+        }
+
+        h1,
+        h2,
+        h3 {
+            font-family: 'Noto Serif TC', serif;
+            margin: 0;
+        }
+
+        /* ---------- top nav ---------- */
+        .topnav {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            padding-top: env(safe-area-inset-top, 0px);
+            background: rgba(251, 246, 236, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        :root[data-theme="dark"] .topnav {
+            background: rgba(28, 23, 18, 0.85);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) .topnav {
+                background: rgba(28, 23, 18, 0.85);
+            }
+        }
+
+        .topnav-inner {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 10px 18px;
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+
+        .topnav-inner::-webkit-scrollbar {
+            display: none;
+        }
+
+        .topnav a {
+            flex: 0 0 auto;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--ink-soft);
+            text-decoration: none;
+            padding: 6px 12px;
+            border-radius: 999px;
+            white-space: nowrap;
+            border: 1px solid transparent;
+        }
+
+        .topnav a:hover {
+            background: var(--cream-2);
+            border-color: var(--card-border);
+        }
+
+        /* ---------- hero ---------- */
+        .hero {
+            position: relative;
+            padding: 64px 20px 46px;
+            text-align: center;
+            background: linear-gradient(160deg, var(--navy) 0%, var(--navy-deep) 55%, #0E1F33 100%);
+            color: #F6EFE1;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background-image:
+                radial-gradient(circle at 15% 20%, rgba(255, 255, 255, 0.06) 0, transparent 40%),
+                radial-gradient(circle at 85% 75%, rgba(193, 68, 14, 0.25) 0, transparent 45%);
+        }
+
+        .hero-bridge {
+            position: relative;
+            z-index: 1;
+            width: min(92%, 560px);
+            margin: 0 auto 22px;
+            display: block;
+        }
+
+        .hero h1 {
+            position: relative;
+            z-index: 1;
+            font-size: clamp(28px, 5vw, 42px);
+            letter-spacing: 1px;
+        }
+
+        .hero p.sub {
+            position: relative;
+            z-index: 1;
+            margin-top: 10px;
+            font-size: 15px;
+            color: #CBDCEC;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        .hero p.dates {
+            position: relative;
+            z-index: 1;
+            margin-top: 16px;
+            font-size: 15px;
+            color: #F0DDBE;
+            font-weight: 500;
+        }
+
+        /* ---------- layout ---------- */
+        main {
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 36px 18px 80px;
+        }
+
+        .day-banner {
+            border-radius: 20px;
+            padding: 26px 26px 22px;
+            color: #fff;
+            margin: 56px 0 22px;
+            box-shadow: var(--shadow);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .day-banner:first-of-type {
+            margin-top: 0;
+        }
+
+        .day-banner .emoji {
+            font-size: 34px;
+            display: block;
+            margin-bottom: 6px;
+            filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.25));
+        }
+
+        .day-banner .datestr {
+            font-size: 12px;
+            opacity: 0.85;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .day-banner h2 {
+            font-size: 24px;
+            margin-top: 4px;
+            color: #fff;
+        }
+
+        .day-banner .tagline {
+            font-size: 13.5px;
+            margin-top: 6px;
+            opacity: 0.92;
+        }
+
+        .theme-arrive {
+            background: linear-gradient(135deg, #3A5A73, #1B3A5C);
+        }
+
+        .theme-city {
+            background: linear-gradient(135deg, #C1440E, #8C2E0B);
+        }
+
+        .theme-bridge {
+            background: linear-gradient(135deg, #1B3A5C, #2E6E6A);
+        }
+
+        .theme-napa {
+            background: linear-gradient(135deg, #8A5A2E, #B4863A);
+        }
+
+        .theme-leave {
+            background: linear-gradient(135deg, #5C5148, #2B2420);
+        }
+
+        .theme-road {
+            background: linear-gradient(135deg, #6B4226, #3E2814);
+        }
+
+        .theme-canyon {
+            background: linear-gradient(135deg, #A63A1F, #5C1F10);
+        }
+
+        .theme-rim {
+            background: linear-gradient(135deg, #3D6B63, #1F3A35);
+        }
+
+        .theme-route66 {
+            background: linear-gradient(135deg, #8B3A62, #4A1F35);
+        }
+
+        .theme-vegas1 {
+            background: linear-gradient(135deg, #3B1E6B, #160B33);
+        }
+
+        .theme-vegas2 {
+            background: linear-gradient(135deg, #1E3B6B, #0B1633);
+        }
+
+        .theme-vegas3 {
+            background: linear-gradient(135deg, #5C4A1E, #241C0B);
+        }
+
+        .theme-disney {
+            background: linear-gradient(135deg, #B23A6B, #5C1A38);
+        }
+
+        .theme-splitA {
+            background: linear-gradient(135deg, #3A5C6B, #1B2E38);
+        }
+
+        .theme-splitB {
+            background: linear-gradient(135deg, #B2571A, #3A1A0D);
+        }
+
+        .theme-ocean {
+            background: linear-gradient(135deg, #2E86AB, #123449);
+        }
+
+        .theme-pink {
+            background: linear-gradient(135deg, #8A2E6B, #3A123A);
+        }
+
+        /* timeline */
+        .timeline {
+            position: relative;
+            padding-left: 26px;
+        }
+
+        .timeline::before {
+            content: "";
+            position: absolute;
+            left: 7px;
+            top: 6px;
+            bottom: 6px;
+            width: 2px;
+            background: var(--card-border);
+        }
+
+        .item {
+            position: relative;
+            margin-bottom: 16px;
+        }
+
+        .item::before {
+            content: "";
+            position: absolute;
+            left: -26px;
+            top: 6px;
+            width: 11px;
+            height: 11px;
+            border-radius: 50%;
+            background: var(--orange);
+            border: 2px solid var(--cream);
+            box-shadow: 0 0 0 2px var(--card-border);
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 11px 14px;
+            box-shadow: var(--shadow);
+        }
+
+        .card .row1 {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            flex-wrap: wrap;
+            line-height: 1.35;
+        }
+
+        .card .time {
+            font-family: 'Noto Serif TC', serif;
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--orange);
+            white-space: nowrap;
+        }
+
+        .card .title {
+            font-weight: 700;
+            font-size: 15.5px;
+            flex: 1;
+            min-width: 120px;
+        }
+
+
+        .card .desc {
+            white-space: normal;
+            font-size: 13px;
+            margin-top: 8px;
+            line-height: 1.4;
+            color: var(--ink-soft);
+        }
+
+        .card .desc ul {
+            margin: 0;
+            padding-left: 18px;
+        }
+
+        .card .desc li {
+            margin-bottom: 2px;
+        }
+
+        .card .desc li:last-child {
+            margin-bottom: 0;
+        }
+
+        .tags {
+            margin-top: 9px;
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .tag {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 9px;
+            border-radius: 999px;
+            letter-spacing: 0.3px;
+        }
+
+        .tag.booked {
+            background: var(--tag-booked-bg);
+            color: var(--tag-booked-fg);
+        }
+
+        .tag.free {
+            background: var(--tag-free-bg);
+            color: var(--tag-free-fg);
+        }
+
+        .tag.opt {
+            background: var(--tag-opt-bg);
+            color: var(--tag-opt-fg);
+        }
+
+        .tag.choice {
+            background: var(--tag-choice-bg);
+            color: var(--tag-choice-fg);
+        }
+
+        .site-link {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 999px;
+            letter-spacing: 0.3px;
+            text-decoration: none;
+            background: transparent;
+            color: var(--orange);
+            border: 1px solid var(--orange-soft);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .site-link:hover {
+            background: var(--orange);
+            color: #fff;
+        }
+
+        /* tips box */
+        .tips {
+            margin-top: 54px;
+            background: var(--cream-2);
+            border: 1px solid var(--card-border);
+            border-radius: 18px;
+            padding: 24px 22px;
+        }
+
+        .tips h3 {
+            font-size: 19px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--orange);
+        }
+
+        .tips ul {
+            margin: 14px 0 0;
+            padding-left: 20px;
+        }
+
+        .tips li {
+            margin-bottom: 10px;
+            font-size: 13.5px;
+            line-height: 1.55;
+            color: var(--ink-soft);
+        }
+
+        .tips li b {
+            color: var(--ink);
+        }
+
+        footer {
+            text-align: center;
+            padding: 30px 20px calc(30px + env(safe-area-inset-bottom, 0px));
+            font-size: 12px;
+            color: var(--ink-soft);
+        }
+
+        @media (max-width:480px) {
+            .hero {
+                padding: 52px 16px 36px;
+            }
+
+            main {
+                padding: 28px 14px 70px;
+            }
+
+            .day-banner {
+                padding: 20px 20px 18px;
+            }
+        }
+
+        /* per-day tip callout */
+        .day-tip {
+            margin: 14px 0 40px;
+            background: var(--cream-2);
+            border: 1px solid var(--card-border);
+            border-left: 4px solid var(--orange);
+            border-radius: 12px;
+            padding: 14px 16px 14px 18px;
+        }
+
+        .day-tip .day-tip-label {
+            font-size: 12.5px;
+            font-weight: 700;
+            color: var(--orange);
+            margin-bottom: 6px;
+        }
+
+        .day-tip ul {
+            margin: 0;
+            padding-left: 18px;
+        }
+
+        .day-tip li {
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--ink-soft);
+            margin-bottom: 6px;
+        }
+
+        .day-tip li:last-child {
+            margin-bottom: 0;
+        }
+
+        .day-tip li b {
+            color: var(--ink);
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav class="topnav">
+        <div class="topnav-inner">
+            <a href="#d1">9/24 抵達</a>
+            <a href="#d2">9/25 北灘·棒球</a>
+            <a href="#d3">9/26 金門大橋·Sausalito</a>
+            <a href="#d4">9/27 Napa</a>
+            <a href="#d5">9/28 抵達Vegas</a>
+            <a href="#d6">9/29 Fremont·Caesars</a>
+            <a href="#d7">9/30 Bellagio·O Show</a>
+            <a href="#d8">10/1 租車→佩吉</a>
+            <a href="#d9">10/2 羚羊谷·大峽谷</a>
+            <a href="#d10">10/3 大峽谷南緣</a>
+            <a href="#d11">10/4 Route 66→LA</a>
+            <a href="#d12">10/5 迪士尼</a>
+            <a href="#d13">10/6 分組移動</a>
+            <a href="#d14">10/7 環球萬聖節</a>
+            <a href="#d15">10/8 好萊塢·聖莫尼卡</a>
+            <a href="#d16">10/9 Pink Wall·購物</a>
+            <a href="#d17">10/10 賦歸</a>
+        </div>
+    </nav>
+
+    <div class="hero">
+        <svg class="hero-bridge" viewBox="0 0 560 160" xmlns="http://www.w3.org/2000/svg">
+            <rect x="0" y="0" width="560" height="160" fill="none" />
+            <line x1="0" y1="128" x2="560" y2="128" stroke="#7C96A9" stroke-width="2" opacity="0.5" />
+            <g stroke="#E2703B" stroke-width="4" fill="none" stroke-linecap="round">
+                <path d="M60 128 C60 40 160 40 160 128" />
+                <path d="M400 128 C400 40 500 40 500 128" />
+                <line x1="60" y1="30" x2="60" y2="128" />
+                <line x1="500" y1="30" x2="500" y2="128" />
+            </g>
+            <g stroke="#B9CBD8" stroke-width="1.4" opacity="0.85">
+                <line x1="80" y1="55" x2="80" y2="128" />
+                <line x1="100" y1="45" x2="100" y2="128" />
+                <line x1="120" y1="40" x2="120" y2="128" />
+                <line x1="140" y1="45" x2="140" y2="128" />
+                <line x1="160" y1="55" x2="160" y2="128" />
+                <line x1="420" y1="55" x2="420" y2="128" />
+                <line x1="440" y1="45" x2="440" y2="128" />
+                <line x1="460" y1="40" x2="460" y2="128" />
+                <line x1="480" y1="45" x2="480" y2="128" />
+                <line x1="500" y1="55" x2="500" y2="128" />
+            </g>
+            <path d="M160 118 C230 95 330 95 400 118" stroke="#E2703B" stroke-width="5" fill="none"
+                stroke-linecap="round" />
+            <line x1="60" y1="128" x2="60" y2="150" stroke="#E2703B" stroke-width="6" />
+            <line x1="160" y1="128" x2="160" y2="150" stroke="#E2703B" stroke-width="6" />
+            <line x1="400" y1="128" x2="400" y2="150" stroke="#E2703B" stroke-width="6" />
+            <line x1="500" y1="128" x2="500" y2="150" stroke="#E2703B" stroke-width="6" />
+        </svg>
+        <h1>舊金山 × 那帕谷 × 拉斯維加斯 × 大峽谷 × 洛杉磯</h1>
+        <p class="sub">San Francisco · Napa · Las Vegas · Grand Canyon · Los Angeles</p>
+        <p class="dates">2026.09.24 (四) — 10.10 (六) · 17日行程</p>
+    </div>
+
+    <main>
+
+        <section id="d1" class="day-banner theme-arrive">
+            <span class="emoji">✈️</span>
+            <div class="datestr">Day 1 · 09/24（四）</div>
+            <h2>抵達舊金山</h2>
+            <div class="tagline">落地、check-in，好好休息迎接接下來精彩的四天</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">—</span><span class="title">抵達 SFO，飯店 Check-in</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>今天沒有安排其他行程，落地後直接前往飯店休息，調整時差、為明天的北灘 + 棒球夜補足體力</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d2" class="day-banner theme-city">
+            <span class="emoji">⚾️</span>
+            <div class="datestr">Day 2 · 09/25（五）</div>
+            <h2>North Beach + 棒球夜</h2>
+            <div class="tagline">悠閒北灘漫遊，晚上到 Oracle Park 感受主場氣氛</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">12:00</span><span class="title">睡飽自然醒，取車</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>早上不用趕，睡飽一點，12:00 去取車即可</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">12:30</span><span class="title">午餐 · Fog Harbor Fish House
+                            🦞</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>SF 必吃的海鮮餐廳，Pier 39 旁景觀也漂亮</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已預訂</span><a class="site-link"
+                            href="https://fogharbor.com/" target="_blank" rel="noopener">🔗 官網</a></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">14:00</span><span class="title">北灘 & 漁人碼頭漫遊</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Cable Car</li>
+                            <li>Ghirardelli 巧克力冰淇淋</li>
+                            <li>Irish Coffee（威士忌+咖啡）</li>
+                            <li>Lombard St</li>
+                            <li>Pier 39</li>
+                            <li>Ferry Building</li>
+                            <li>Coit Tower</li>
+                            <li>Painted Ladies 較遠，可自行斟酌是否前往</li>
+                            <li>Ferry Building 可以去晃一下（順道逛逛）</li>
+                            <li>Coit Tower 依體力決定要不要上去</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">景點較多 · 建議精選3-4個</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">16:30–18:30</span><span class="title">Orange Friday Tailgate
+                            🎧</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>China Basin Park · Presented by Airwallex，現場有 DJ 播歌、氣氛很好，走過去就能參加</li>
+                            <li>附近有一間新開的 Blue Bottle 可以順路買咖啡</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag free">免費 · Walk in</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">18:30</span><span class="title">⚾️ 棒球夜 @ Oracle Park</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>19:15 開打，建議 18:30 就先入場，預留時間上廁所、找座位</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已預訂</span><span class="tag choice">二選一 A</span><a
+                            class="site-link" href="https://www.mlb.com/giants/ballpark" target="_blank"
+                            rel="noopener">🔗 官網</a></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">18:45</span><span class="title">The Palm Court @ RH San
+                            Francisco 🌿</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>RH 集團旗下、非常美的網美打卡拍照餐廳，餐點OK</li>
+                            <li>給沒有要去看球的人的選項，可視情況取消</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已預訂</span><span class="tag choice">二選一 B</span><a
+                            class="site-link" href="https://www.opentable.com/r/the-palm-court-at-rh-san-francisco"
+                            target="_blank" rel="noopener">🔗 訂位頁</a></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="day-tip">
+            <div class="day-tip-label">💡 這天的小提醒</div>
+            <ul>
+                <li><b>14:00–16:30 景點偏多：</b> Cable Car、巧克力店、Lombard St、Pier 39、Ferry Building、Coit Tower 共 6 個點塞在 2.5
+                    小時內會很趕。建議優先排 <b>Lombard St → Cable Car → Ghirardelli</b> 這條精華路線，其餘視體力與時間彈性加減，不用全排。</li>
+                <li><b>18:30 棒球 vs 18:45 Palm Court 晚餐是「二選一」：</b> 想看球的人去 Oracle Park，不看球的人去 Palm Court
+                    拍照吃飯，建議提前跟大家確認分組，避免當天現場才決定。</li>
+                <li><b>移動預留 buffer：</b> 取車後要準時吃午餐，市區停車、找車位常比預期花時間，建議行程間多留 10–15 分鐘彈性時間。</li>
+            </ul>
+        </div>
+
+        <section id="d3" class="day-banner theme-bridge">
+            <span class="emoji">🌉</span>
+            <div class="datestr">Day 3 · 09/26（六）</div>
+            <h2>金門大橋 · 藝術宮 · Sausalito</h2>
+            <div class="tagline">拍出這輩子最美的金門大橋照片，午後轉往悠閒的 Sausalito</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">9:30–13:00</span><span class="title">藝術宮 + Presidio + 金門大橋
+                            📸</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>上午的拍照時段，光線最美</li>
+                            <li>記得一定要去 Battery Spencer，是拍金門大橋的經典機位</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">13:30</span><span class="title">簡單午餐 → 出發 Sausalito</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>路上隨便買買即可，把時間留給 Sausalito</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">14:00~</span><span class="title">Sausalito 漫遊 + 藝術港灣節</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>停好車後從 Viña del Mar Park 開始逛</li>
+                            <li>Sausalito Art & Harbor Days：Ferry Landing、Tracy Way、Gabrielson Park 一路都是藝術攤位與 local
+                                makers，沿 waterfront 慢慢走、聽現場音樂、拍 SF 天際線，記得吃 Lappert's Ice Cream 🍦</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">17:15</span><span class="title">The Spinnaker 🌅</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>已預訂的夕陽晚餐，view 超美，是這天的高潮壓軸</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已預訂</span><a class="site-link"
+                            href="https://www.opentable.com/the-spinnaker-sausalito" target="_blank" rel="noopener">🔗
+                            訂位頁</a></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">20:00</span><span class="title">返回 SF · Bar Hopping？🍸</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>回到 SF 後，視大家體力決定要不要續攤</li>
+                            <li>今天行程滿、加上開車，建議彈性看現場氣氛決定，不用勉強排</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">彈性安排</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="day-tip">
+            <div class="day-tip-label">💡 這天的小提醒</div>
+            <ul>
+                <li><b>晚上 Bar Hopping 建議保持彈性：</b> 這天從早排到晚（金門大橋 → Sausalito → Spinnaker 夕陽晚餐），回到 SF
+                    通常已經有點累，且還要考慮開車的人不能喝多，建議先不排死，回到 SF 看大家狀態再決定。</li>
+                <li><b>金門大橋周邊停車位有限：</b> 建議提早抵達，並在行程間多留 10–15 分鐘找車位的彈性時間。</li>
+            </ul>
+        </div>
+
+        <section id="d4" class="day-banner theme-napa">
+            <span class="emoji">🍷</span>
+            <div class="datestr">Day 4 · 09/27（日）</div>
+            <h2>Napa Valley 一日遊</h2>
+            <div class="tagline">酒莊、小鎮與美食，慢慢感受酒鄉的悠閒</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">8:00–8:30</span><span class="title">出發 Napa ☕️</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>路上可以順便買杯咖啡再上路</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">9:30–11:00</span><span class="title">Oxbow Market 🦪</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>抵達 Napa，逛 Oxbow Market，有生蠔和有名的 Gott's Sandwich，再到 Napa 小鎮晃晃</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">12:00</span><span class="title">Bouchon Bakery 🥐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>看看要不要買有名的可頌 + 馬卡龍吃吃</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">可選</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">13:15</span><span class="title">Pride Mountain Vineyards
+                            🍇</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>提前 20 分鐘抵達，預定的是地窖 Private Room Tasting</li>
+                            <li>這裡是接待外國元首的白宮國宴（State Dinner）指定用酒的酒莊，非常值得期待</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已預訂</span><a class="site-link"
+                            href="https://www.pridewines.com/" target="_blank" rel="noopener">🔗 官網</a></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">15:30</span><span class="title">St. Helena Downtown 小鎮漫步</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>品酒後悠閒逛逛這個精緻的小鎮</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">17:15</span><span class="title">Zuzu 晚餐 🥘</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>好吃的西班牙餐廳，小而美，為 Napa 一日遊完美收尾</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已預訂</span><a class="site-link"
+                            href="https://www.zuzunapa.com/" target="_blank" rel="noopener">🔗 官網</a></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="day-tip">
+            <div class="day-tip-label">💡 這天的小提醒</div>
+            <ul>
+                <li><b>記得安排代駕：</b> Pride Mountain Vineyards 是重點行程，建議先指定一位當天不喝酒的人負責開車，盡興品酒才安心。</li>
+            </ul>
+        </div>
+
+        <section id="d5" class="day-banner theme-vegas1">
+            <span class="emoji">🎰</span>
+            <div class="datestr">Day 5 · 09/28（一）</div>
+            <h2>抵達 Las Vegas</h2>
+            <div class="tagline">MGM Grand 入住、Bavette's 牛排晚餐、Marquee 夜店初體驗</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">14:02–15:46</span><span class="title">✈️ AS6776 SFO →
+                            LAS</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>抵達後於 T3 集合，預計領行李與集合 45–60 分鐘</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">16:45</span><span class="title">前往 MGM Grand</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Uber／Lyft XL × 3，預計 15–25 分鐘，US$20–35／車</li>
+                            <li>10 人加行李優先叫 3 台 XL／大型車，不要只叫 2 台</li>
+                            <li>先分好車長與搭車夥伴</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">17:10</span><span class="title">MGM Grand 辦理入住</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>3799 S Las Vegas Blvd, Las Vegas, NV 89109</li>
+                            <li>預計 30–40 分鐘</li>
+                            <li>視需要攜帶空箱採買，累的人可直接留飯店休息</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">17:50</span><span class="title">M&amp;M's World ＆ Coca-Cola
+                            Store</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>步行 5–10 分鐘，預計 60 分鐘</li>
+                            <li>M&amp;M's 可客製、選購 Vegas 限定圖樣與角色周邊</li>
+                            <li>Coca-Cola 推薦 Around the World 飲料體驗與限定服飾小物</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">18:55</span><span class="title">Target 採買</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Target at Showcase Mall，步行 2–5 分鐘，預計 35–45 分鐘，US$10–20／人</li>
+                            <li>建議採買瓶裝水、電解質飲料、早餐棒、耐放水果、車上零食、濕紙巾、防曬、常備 OTC 藥品等</li>
+                            <li>10 人分成水／早餐／零食三組採買</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">19:40</span><span class="title">返回 MGM Grand 放補給</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>預計 25 分鐘，US$0–18／車</li>
+                            <li>先把夜店衣服準備好——夜店官方要求 21+，國際旅客建議攜帶實體護照</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">20:30</span><span class="title">Bavette's Steakhouse &amp; Bar
+                            晚餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>位於 Park MGM</li>
+                            <li>5+4 訂位，20:30 準時入座，取消可能收費，預計 1.5 小時，含稅小費約 US$115–175／人</li>
+                            <li>暗色紅皮沙發、Old-school steakhouse 氛圍</li>
+                            <li>建議牛排配 Side 分食：Classic／Dry-Aged Ribeye 搭 Steak Frites、Truffle Mac &amp; Cheese、Brussels
+                                Sprouts</li>
+                            <li>不吃牛可選 Fried Chicken、Branzino 或 Salmon</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已訂位</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">21:50</span><span class="title">返回 MGM Grand</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>步行或短程 Taxi，預計 30–40 分鐘，US$0–15／車</li>
+                            <li>換裝與休息</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">22:35</span><span class="title">前往 Marquee Nightclub</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>Taxi／Uber，預計 10–15 分鐘，US$12–20／車，建議 23:00 前進場</li>
+                            <li>先約定散場集合點為 MGM Lobby</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">23:00</span><span class="title">Marquee Nightclub 夜店</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>9/28 為 Eric D-Lux（Marquee Mondays），預計 1.5–2 小時，GA 預算 US$30–80+，酒水另計</li>
+                            <li>入場前預留排隊與安檢時間</li>
+                            <li>攜帶實體 ID／護照，不要帶後背包或大型包</li>
+                            <li>男生建議有領襯衫／素面上衣＋長褲＋俐落鞋，避免運動服／球鞋／短褲／球帽</li>
+                            <li>女生以 Cocktail／upscale nightlife 穿搭最穩，避免 athleisure 或海灘拖鞋，最終以 venue discretion 為準</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d6" class="day-banner theme-vegas2">
+            <span class="emoji">🎡</span>
+            <div class="datestr">Day 6 · 09/29（二）</div>
+            <h2>Caesars · Downtown · Fremont East</h2>
+            <div class="tagline">Hell's Kitchen 午餐、Forum Shops 購物、Viva Vision 天幕燈光秀</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">10:40</span><span class="title">搭 Monorail 前往
+                            Flamingo／Caesars</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>預計 25–35 分鐘，Monorail 單程 eTicket US$5.50，至東側 LINQ／Harrah's 站</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">11:30</span><span class="title">Hell's Kitchen 午餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>10 人已訂位，Confirmation #1001016717，預計 1.5 小時，含稅小費約 US$135–145／人</li>
+                            <li>Gordon Ramsay 旗艦餐廳，紅／藍廚房、開放式廚房</li>
+                            <li>Lunch Prix Fixe 11:00–15:45，三道式 US$105.95／人</li>
+                            <li>必點 Beef Wellington、Pan-Seared Scallops、Sticky Toffee Pudding</li>
+                            <li>可加點 Lobster Risotto、Crispy Skin Salmon</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已訂位</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">13:10</span><span class="title">Caesars Palace ＆ Forum
+                            Shops</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>館內步行，預計 2 小時，可依現場地圖自由逛</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">15:15</span><span class="title">前往 Downtown Las Vegas</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>Uber／Lyft × 2–3，預計 20–30 分鐘，US$20–35／車</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">15:50</span><span class="title">Fremont East 自由逛街</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>全程步行，預計 1 小時 30 分鐘</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">17:20</span><span class="title">Downtown 晚餐選擇</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>預計 1–1.5 小時，US$15–60／人</li>
+                            <li>選項：Pizza Rock（必點 Cal Italia，適合分享）／Carson Kitchen（Fremont East 名店，共桌氣氛，推薦 Crispy Chicken
+                                Skins、Oxtail Risotto）／Evel Pie（NY-style Pizza，較輕食）／Le Thai（推薦 3 Color Curry、Short Rib
+                                Fried Rice）／8 East at Circa（Pan-Asian 分食）／Nacho Daddy Downtown（Tacos／Fajitas，營業晚）／Heart
+                                Attack Grill（美式漢堡，噱頭十足）</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">18:45</span><span class="title">Viva Vision 天幕 ＆ Old Vegas
+                            賭場</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>全程步行，預計 2.5 小時</li>
+                            <li>Viva Vision 為 Fremont Street Experience 巨大 LED 天幕，免費且晚上最有感</li>
+                            <li>建議走法：Fremont East 餐廳／酒吧 → Viva Vision → Golden Nugget → Binion's → Golden Gate →
+                                Circa，每間 10–20 分鐘即可，不必久留</li>
+                            <li>SlotZilla 高空滑索為可選項目，不是全團必做</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">21:30</span><span class="title">晚間自由分流：OMNIA 選項</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>有體力者才叫車前往，預計 1–2 小時，OMNIA GA 預算 US$40–100+</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">23:00</span><span class="title">返回 MGM Grand</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Uber／Lyft × 2–3，預計 15–25 分鐘，US$20–35／車，可分批回飯店</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d7" class="day-banner theme-vegas3">
+            <span class="emoji">⛲</span>
+            <div class="datestr">Day 7 · 09/30（三）</div>
+            <h2>Wynn · Venetian · Bellagio · O Show</h2>
+            <div class="tagline">Tableau 早午餐、Bellagio 噴泉與 LAGO 晚餐、Cirque du Soleil《O》</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">10:30</span><span class="title">前往 Wynn ＆ Encore</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Taxi／Uber，預計 15–20 分鐘，US$15–25／車，直接叫車省體力</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">11:00</span><span class="title">Tableau at Wynn 午餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>5+5 訂位，位於 Wynn Tower Suites，預計 1.5 小時，含稅小費 US$45–80／人</li>
+                            <li>精緻 American Brunch，安靜有花園感</li>
+                            <li>推薦 Lemon Ricotta Pancakes、French Omelette、Traditional／Lobster Benedict、Roasted
+                                Salmon、Wagyu Burger</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已訂位</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">13:30</span><span class="title">逛 Wynn ＆ Encore</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>館內步行，預計 1 小時 15 分鐘，可逛 Lobby、Casino 與 Wynn Plaza</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">13:50</span><span class="title">前往 The Venetian Resort</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>步行，累可搭短程車，預計 10–15 分鐘，US$0–15／車，沿 Strip 往南</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">14:10</span><span class="title">逛 The Venetian ＆ Grand Canal
+                            Shoppes</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>館內步行，預計 2 小時 30 分鐘，可逛 Grand Canal 與 St. Mark's Square</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">16:45</span><span class="title">前往 Bellagio</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Taxi／Uber × 2–3，預計 10–20 分鐘，US$15–25／車</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">17:00</span><span class="title">Bellagio Conservatory ＆ Via
+                            Bellagio</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>館內步行，預計 30 分鐘，先逛再吃晚餐</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">17:30</span><span class="title">LAGO by Julian Serrano
+                            晚餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>已訂位但尚未刷卡，備註 Fountain View，預計 1.5 小時，含稅小費約 US$75–130／人</li>
+                            <li>現代 Coastal Italian，最大優勢是 Bellagio 噴泉景觀</li>
+                            <li>建議以 Pizza、Pasta、Salad 分享，代表菜 Spicy Pepperoni Pizza、Pappardelle Bolognese、Bucatini
+                                Carbonara</li>
+                            <li>優先要求 Fountain View</li>
+                            <li>晚餐抓 17:45–19:15，留足 O Show 緩衝</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已訂位</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">19:15</span><span class="title">Bellagio 噴泉 ＆ Casino</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>館內步行，預計 1 小時，Casino 費用自訂，不要再跑其他飯店</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">20:20</span><span class="title">前往 O Theatre</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>館內移動與緩衝，預計 30–40 分鐘，先上洗手間並找入口</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">21:00</span><span class="title">《O》by Cirque du Soleil</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>已購票，約 90 分鐘無中場，以票面時間為準，進場前先上洗手間</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已購票</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">22:40</span><span class="title">O Show 後三組分流</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>選項 A：前往 Hakkasan at MGM（R&amp;Bae Wednesdays／DJ Franzen 22:30，Bellagio→MGM 車程 10–15
+                                分鐘，GA US$30–80+）</li>
+                            <li>選項 B：留在 Bellagio Casino，最彈性</li>
+                            <li>選項 C：前往 Nacho Daddy at Miracle Mile 後回 MGM（餐費約 US$20–30，順路、營業到深夜）</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d8" class="day-banner theme-road">
+            <span class="emoji">🚗</span>
+            <div class="datestr">Day 8 · 10/01（四）</div>
+            <h2>拉斯維加斯，租車 → 佩吉市</h2>
+            <div class="tagline">Bouchon 早午餐後取車，Las Vegas → St. George → Kanab → Page</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">—</span><span class="title">⏰ 時區提醒</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Utah 時區比 Las Vegas、Page 快一小時，以下時間已依所在州標註，出發前請再次確認換算是否正確</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">注意時區</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">07:15</span><span class="title">起床整理與退房</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>MGM Grand，3799 S Las Vegas Blvd</li>
+                            <li>預計 40–45 分鐘，所有大行李需完成整理，退房後直接帶行李前往 The Venetian Resort</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">08:00</span><span class="title">前往 The Venetian Resort</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>Taxi／Uber XL × 3，預計 15–20 分鐘，US$15–25／車，10 人加行李不要搭一般轎車</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">08:20</span><span class="title">暫放行李</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>向 Venetian Bell／Guest Services 暫放行李，預計 10 分鐘，吃完 Bouchon 直接叫車至租車中心</li>
+                            <li>官網未明確保證非住客一般行李寄放，建議出發前 48 小時向餐廳或飯店確認</li>
+                            <li>備援 Plan B：若 Venetian 不收行李，改為行李留 MGM Bell Desk → Bouchon → 回 MGM 拿行李 → Rent-A-Car
+                                Center，會多花 30–45 分鐘，出發時間將延後至約 12:00</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待確認</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">08:30</span><span class="title">Bouchon Brunch 早午餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>位於 South Tower 10F，預計 1.5 小時，含稅小費約 US$40–70／人</li>
+                            <li>Thomas Keller 的經典 French Bistro，推薦 Croque Madame、Crab Benedict、Poulet et
+                                Gaufres，及季節水果與麵包甜點</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">09:50</span><span class="title">取回行李與集合</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>館內移動，預計 15 分鐘，10:05 前上車</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">10:05</span><span class="title">前往機場租車中心</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Uber／Lyft XL × 3，預計 15–25 分鐘，US$20–35／車</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">10:30</span><span class="title">McCarran Rent-A-Car Center
+                            取車</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：7135 Gilespie St, Las Vegas, NV 89119</li>
+                            <li>預計 45–75 分鐘完成手續</li>
+                            <li>每台車至少一人先下載 Uber／Lyft 與 Google Maps 離線地圖——離開 Las Vegas 後部分路段訊號較弱</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">11:30</span><span class="title">從 Las Vegas 出發</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>路線：Las Vegas → St. George → Kanab → Page，沿途穿越紅岩沙漠地形，不再返回 Strip，油資另計</li>
+                            <li>若上午改採 MGM Bell Desk 備援行李方案，出發時間會延後至約 12:00</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">Utah 15:00–16:30</span><span class="title">St. George 補給</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>開車約 2 小時後抵達</li>
+                            <li>安排經過 Walmart（2610 Pioneer Rd），再到 In-N-Out（4643 S Pioneer Rd，可留意隱藏菜單）吃午餐、加油、上廁所、買咖啡</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">Utah 18:00–18:15</span><span class="title">Kanab 短暫休息</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：590 E 300 S, Kanab, UT 84741</li>
+                            <li>開車約 1.5 小時後視需要停靠——Maverik 可加油、上廁所、買飲料食物</li>
+                            <li>Kanab Visitor Center 有公廁與野餐桌，但只開到 16:00</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">Page 18:45</span><span class="title">抵達住宿 Check-in</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Holiday Inn Express &amp; Suites Page – Lake Powell Area By IHG</li>
+                            <li>643 S Lake Powell Blvd, Page, AZ 86040</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已預訂</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">19:00</span><span class="title">晚餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>選項：炸雞 BirdHouse／墨西哥菜 El Tapatio 或 Fiesta Mexicana Restaurant</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">21:00</span><span class="title">超市採買</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>選項：Safeway（650 Elm St）營業至 22:00</li>
+                            <li>或 Walmart（1017 W Haul Rd）營業至 23:00，但須留意打烊前僅約 5 分鐘可進場</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d9" class="day-banner theme-canyon">
+            <span class="emoji">🏞️</span>
+            <div class="datestr">Day 9 · 10/02（五）</div>
+            <h2>馬蹄灣 · 羚羊谷 · 大峽谷東側 Desert View</h2>
+            <div class="tagline">下羚羊谷的夢幻光影、馬蹄灣的壯闊河灣，一路開進大峽谷</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">—</span><span class="title">⚠️ 時區提醒</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>本日行程採用 Arizona 時間（等同 Page／大峽谷／Flagstaff 時間），請特別留意羚羊谷報到時段，避免因時區換算錯過集合</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">注意時區</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">8:00</span><span class="title">早餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>在住宿簡單吃早餐後出發</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">09:45</span><span class="title">下羚羊谷報到</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>地點：Indian Rte 222, Page, AZ 86040（Ken's Tours 建築物北側「Check In Here」窗口）</li>
+                            <li>10:30 這一團須於 10:00 前完成報到、10:20 前開始排隊，逾時視同放棄座位、恕不退款</li>
+                            <li>報到須出示訂位用信用卡／簽帳金融卡，以及政府核發身分證件（駕照、護照或軍人證）</li>
+                            <li>禁止攜帶包包、自拍棒、雨傘，建議穿包頭鞋，不可穿涼鞋或跟鞋</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已確認 · Ken's Tours</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">10:30–12:00</span><span class="title">Lower Antelope Canyon
+                            導覽</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>全程約 1.5 小時，峽谷內禁止錄影與攜帶包包／腰包／水袋包／雨傘／自拍棒／三腳架／GoPro 等攝影器材</li>
+                            <li>地形含多段固定鋼梯、狹窄通道，海拔逾 1,220 公尺</li>
+                            <li>孕婦及心肺、膝髖狀況不佳者不建議參加</li>
+                            <li>高溫可能超過 38°C，請補水並防曬</li>
+                            <li>出發前 72 小時取消才可退款</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已確認</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">12:30–13:30</span><span class="title">Horseshoe Bend 馬蹄灣</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：US-89, Mile Marker 545, Page, AZ 86040</li>
+                            <li>不用門票，停車費約 US$10</li>
+                            <li>停車走到觀景點約 15 分鐘，幾乎無遮蔽、氣溫可能超過 35°C，注意防曬與補水</li>
+                            <li>懸崖周邊幾乎沒有護欄，拍照務必小心</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">13:45–14:45</span><span class="title">Page 午餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>選項：BirdHouse（炸雞、雞肉三明治，速度快）／Big John's Texas BBQ（牛胸肉、肋排，8 人團體可能需等位）／El Tapatio（墨西哥菜）</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">15:00</span><span class="title">前往 Tusayan／大峽谷</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>沿途規劃停靠 Cameron Trading Post、Desert View Watchtower，視情況可加停 Moran Point</li>
+                            <li>（Desert View 是否需出示大峽谷門票，目前尚待確認</li>
+                            <li>）</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">16:30</span><span class="title">Cameron Trading Post 補給</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：466 US-89, Cameron, AZ 86020</li>
+                            <li>沿途休息約 10 分鐘，可加油、上廁所</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">17:10</span><span class="title">Desert View Watchtower</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：Desert Vw Rd, Grand Canyon Village, AZ 86023</li>
+                            <li>有商店、廁所、小吃部，休息約 30 分鐘</li>
+                            <li>上塔需現場免費領票，每次 20 分鐘，最後一批約 17:40 發放</li>
+                            <li>沒上到塔，地面觀景也很值得</li>
+                            <li>停車：Desert View parking lot and RV parking lot</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">18:50</span><span class="title">抵達 Tusayan，Check-in</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>住宿：Holiday Inn Resort The Squire</li>
+                            <li>74 AZ-64, Grand Canyon Village, AZ 86023</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag booked">已預訂</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">19:30</span><span class="title">晚餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>輕鬆省錢版：We Cook Pizza &amp; Pasta（不接受訂位，18:00–21:00 尖峰時段需候位）</li>
+                            <li>或飯店內 Desert Lounge + Grill（美式／西南風，約 17:30–21:30 營業）</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d10" class="day-banner theme-rim">
+            <span class="emoji">🌄</span>
+            <div class="datestr">Day 10 · 10/03（六）</div>
+            <h2>大峽谷南緣 Grand Canyon South Rim</h2>
+            <div class="tagline">Mather Point、Yavapai Point，沿 Rim Trail 漫步到日落 Hermits Route</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">早餐</span><span class="title">Tusayan 早餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>選項：飯店早餐或 McDonald's</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">上午</span><span class="title">Visitor Center 停車 + 接駁車</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>建議 10:00 前入園以避免入口壅塞</li>
+                            <li>於 Grand Canyon Visitor Center 停車後轉搭 Blue Line／Orange Line 接駁車</li>
+                            <li>未持 Annual 或 America the Beautiful Pass 的非美國居民，可能需支付標準門票（16 歲以上每人 US$100）及每車 US$35</li>
+                            <li>持年票者需分車入園</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">上午</span><span class="title">Mather Point</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>最經典、最容易抵達的觀景點，人潮也可能最多，適合看日落</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">上午–中午</span><span class="title">前往 Yavapai Point</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>選項：步行 Rim Trail 單程約 2.5 公里、約 45 分鐘，幾乎無爬坡、難度簡單</li>
+                            <li>或搭乘 Orange Line 接駁車</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">中午</span><span class="title">Yavapai Point &amp; Geology
+                            Museum</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>視野比 Mather Point 更舒適開闊</li>
+                            <li>可走 Rim Trail 或 Trail of Time（沿線有大峽谷歷史介紹看板），路線平緩、景色佳，也適合日落</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">下午</span><span class="title">Market Plaza · Grand Canyon
+                            Village 歷史街區</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>從 Yavapai Point 沿 Trail of Time 步行約 2.5 公里、45 分鐘回到 Village（無障礙步道）</li>
+                            <li>Market Plaza 有餐廳，也販售肉類、零食、甜點與紀念品</li>
+                            <li>可逛 Verkamp Visitor Center、Hopi House、Grand Canyon Railway Station，以及 Bright Angel Trail
+                                起點附近</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">傍晚</span><span class="title">Hermits Route 日落觀景</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>下午搭乘 Red Route 接駁車</li>
+                            <li>規劃停靠 Trail View Overlook（可俯瞰 Z 字形 Bright Angel Trail）、Powell
+                                Point（需走一段兩側有懸崖的小徑）、Hermit's Rest（有紀念品、小吃、飲料）</li>
+                            <li>官方推薦日落點為 Hopi Point，景觀與 Powell Point 相近</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">日落必看</span></div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d11" class="day-banner theme-route66">
+            <span class="emoji">🛣️</span>
+            <div class="datestr">Day 11 · 10/04（日）</div>
+            <h2>大峽谷 → 洛杉磯，Route 66 公路之旅</h2>
+            <div class="tagline">Williams → Seligman → Kingman → Barstow，沿著 66 號公路懷舊開回 LA</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">07:00–07:45</span><span class="title">早餐、退房</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Holiday Inn Resort The Squire，74 AZ-64, Grand Canyon Village, AZ 86023</li>
+                            <li>吃早餐、退房並準備出發</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">08:00</span><span class="title">Tusayan 出發前往 Los Angeles</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>沿途規劃停靠 Williams、Seligman、Kingman、Ludlow 與 Barstow</li>
+                            <li>接近 Los Angeles 時（特別是 I-210 或 I-10）可能嚴重塞車，請預留緩衝時間</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">09:00–09:25</span><span class="title">Williams 補給</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：637 W Route 66, Williams, AZ 86046</li>
+                            <li>在 Safeway 買水、零食與水果，上廁所並視需要補油</li>
+                            <li>Williams 有濃厚 Route 66 復古街景——霓虹招牌、古董車、老式加油站與禮品店</li>
+                            <li>Safeway 周邊停車場大，適合多台車停靠</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">10:05–10:35</span><span class="title">Seligman 拍照停留</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：Delgadillo's Snow Cap, 301 W Chino St, Seligman, AZ 86337</li>
+                            <li>拍復古招牌、老車合照，可視情況買冰淇淋</li>
+                            <li>Seligman 是電影《Cars》的靈感來源，附近空地適合多車團體拍照</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">11:40–12:50</span><span class="title">Kingman 午餐與補給</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：Mr. D'z Route 66 Diner, 105 E Andy Devine Ave, Kingman, AZ 86401</li>
+                            <li>1960 年代粉藍風格餐廳，供應奶昔、漢堡、薯條，後方有大型專屬停車場</li>
+                            <li>視需要至 Walmart 補給</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">12:50–13:10</span><span class="title">Kingman 加滿油</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：231 E Beale St, Kingman, AZ 86401</li>
+                            <li>穿越 Mojave Desert 前務必加滿油，沙漠地區油價可能較高</li>
+                            <li>備用停靠點：Yucca Travel Center（約 25–30 分）、Needles CA（約 1 小時）、Desert Oasis Rest
+                                Area（僅廁所，需視當天是否開放）</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">加滿油</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">15:30</span><span class="title">Ludlow 短暫休息</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：68480 Ludlow Rd, Ludlow, CA 92338（I-40 Exit 50）</li>
+                            <li>上廁所、伸展，有加油站與 mini mart，可視情況換駕駛</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">抵達後</span><span class="title">LA 晚餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>選項：In-N-Out Burger 或 The Habit Burger Grill，可於前往飯店路上購買</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">入住</span><span class="title">🏰 迪士尼組：Disneyland Hotel</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址與入住時間待確認</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag choice">分組 A</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">入住</span><span class="title">🎢 環球組：JW Marriott Anaheim
+                            Resort</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址與入住時間待確認</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag choice">分組 B</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="day-tip">
+            <div class="day-tip-label">💡 這天的小提醒</div>
+            <ul>
+                <li><b>從這天起分成兩組：</b> 迪士尼組入住 Disneyland Hotel，環球組入住 JW Marriott Anaheim Resort，10/6 起環球組會再移動到 West
+                    Hollywood Airbnb（853 N Las Palmas Ave），兩組會在 10/8 會合。</li>
+            </ul>
+        </div>
+
+        <section id="d12" class="day-banner theme-disney">
+            <span class="emoji">🏰</span>
+            <div class="datestr">Day 12 · 10/05（一）</div>
+            <h2>迪士尼組：Disneyland 全天遊玩</h2>
+            <div class="tagline">環球組於 Anaheim 自由活動</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">全天</span><span class="title">🏰 迪士尼組：Disneyland Resort</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>全天迪士尼行程</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag choice">分組 A</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">全天</span><span class="title">🎢 環球組：自由活動</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>原始資料未安排行程，可於 Anaheim 周邊自由活動或休息</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag choice">分組 B</span><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d13" class="day-banner theme-splitA">
+            <span class="emoji">🧳</span>
+            <div class="datestr">Day 13 · 10/06（二）</div>
+            <h2>迪士尼組續遊；環球組移動至 West Hollywood</h2>
+            <div class="tagline">環球組入住 Airbnb（10/6–10/10）、採買補給</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">當天</span><span class="title">🏰 迪士尼組：續遊 Disneyland</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>迪士尼組當日前往迪士尼</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag choice">分組 A</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">當天</span><span class="title">🎢 環球組：入住 West Hollywood
+                            Airbnb</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>地址：853 N Las Palmas Ave, Los Angeles</li>
+                            <li>拿行李後前往辦理入住，住宿期間 10/6–10/10</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag choice">分組 B</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">晚餐</span><span class="title">🎢 環球組：入住後晚餐選擇</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>選項：醬蟹、義式料理、The Boiling Crab、Sun Nong Dan 韓式料理</li>
+                            <li>也可超市採買後回 Airbnb 自煮</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag choice">分組 B</span><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">補給</span><span class="title">🎢 環球組：超市採買</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>採買麵包、蛋、水、飲料、酒等補給品，超市地點待確認</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag choice">分組 B</span></div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d14" class="day-banner theme-splitB">
+            <span class="emoji">🎃</span>
+            <div class="datestr">Day 14 · 10/07（三）</div>
+            <h2>環球萬聖節之夜；迪士尼組自由活動</h2>
+            <div class="tagline">Halloween Horror Nights，或 Republique／Nobu Malibu／Venice Beach</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">當天</span><span class="title">🎢 環球組：萬聖節環球影城</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>前往 Universal Studios Hollywood 參加萬聖節活動</li>
+                            <li>活動票券與入場安排待確認</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag choice">分組 B</span><span class="tag opt">待確認</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">當天</span><span class="title">🏰 迪士尼組：自由活動</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>選項：Republique 知名早午餐／Nobu Malibu 較高價日式晚餐／Venice Beach 與 Abbot Kinney 逛街、咖啡廳與海灘</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag choice">分組 A</span><span class="tag opt">待決定</span></div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d15" class="day-banner theme-ocean">
+            <span class="emoji">🌊</span>
+            <div class="datestr">Day 15 · 10/08（四）</div>
+            <h2>兩組會合：Hollywood → Santa Monica</h2>
+            <div class="tagline">Hollywood Sign、Griffith Observatory、Farmers Market、Santa Monica 夕陽</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">09:30</span><span class="title">Hollywood Sign 拍照</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>吃超市補給品當早餐後出發</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">10:30–11:30</span><span class="title">Griffith
+                            Observatory</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>天氣炎熱，看一看即可離開</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">12:00–13:00</span><span class="title">Hollywood Walk of Fame
+                            與蠟像館</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>包含好萊塢大道與蠟像館</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">13:30–15:00</span><span class="title">農夫市集午餐 ＆ The Grove
+                            購物</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>The Original Farmers Market and The Grove，有停車場</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">15:00–16:00</span><span class="title">前往 Santa Monica</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>視路況決定是否購買手搖飲</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">16:30–18:30</span><span class="title">Santa Monica
+                            Pier、海灘與夕陽</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>可逛 Third Street Promenade</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">19:00–21:00</span><span class="title">洛杉磯晚餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>原始行程標示義式料理，實際餐廳待確認（與 10/6 醬蟹選項提供同一連結，可能為誤植）</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">待確認</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">21:00</span><span class="title">返回 West Hollywood Airbnb</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">晚間</span><span class="title">酒吧或夜店選擇</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>視現場情況決定是否前往酒吧或夜店喝酒</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">彈性安排</span></div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d16" class="day-banner theme-pink">
+            <span class="emoji">💗</span>
+            <div class="datestr">Day 16 · 10/09（五）</div>
+            <h2>Pink Wall · Grand Central Market · 購物</h2>
+            <div class="tagline">Eggslut 早餐、Citadel Outlets 或 Pasadena 二選一</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">10:00</span><span class="title">Paul Smith Pink Wall 拍照</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>免費拍照景點</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">11:00–12:30</span><span class="title">Grand Central Market ＆
+                            Eggslut</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>逛市集吃早餐，包含 Eggslut</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">13:00–17:00</span><span class="title">Citadel Outlets 或
+                            Pasadena</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>選項：Citadel Outlets（營業至 21:00）</li>
+                            <li>不去 Outlet 的人可前往 Pasadena</li>
+                        </ul>
+                    </div>
+                    <div class="tags"><span class="tag opt">二選一</span></div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">17:30–18:00</span><span class="title">返回 Airbnb 放置物品</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>若當日選擇 Pasadena，原始資料未指定返回路線</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">19:00</span><span class="title">晚間自由活動</span></div>
+                </div>
+            </div>
+        </div>
+
+        <section id="d17" class="day-banner theme-leave">
+            <span class="emoji">✈️</span>
+            <div class="datestr">Day 17 · 10/10（六）</div>
+            <h2>Warner Bros · Little Tokyo · 賦歸</h2>
+            <div class="tagline">退房、片場之旅，還車後於 LAX 道別</div>
+        </section>
+        <div class="timeline">
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">11:00</span><span class="title">Airbnb 退房</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>853 N Las Palmas Ave, Los Angeles</li>
+                            <li>行李放車上，需安排人員看顧</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">12:00</span><span class="title">Chipotle 午餐</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>分店待確認</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">13:00–15:00</span><span class="title">Warner Bros. Studio
+                            Tour</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>Warner Bros. Studio Tour Hollywood，Burbank</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">16:00–19:00</span><span class="title">逛 Little Tokyo 並用餐</span>
+                    </div>
+                    <div class="desc">
+                        <ul>
+                            <li>逛街與吃飯</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">21:00</span><span class="title">機場還車</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>於 Los Angeles International Airport 還車，還車地點與航廈待確認</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="item">
+                <div class="card">
+                    <div class="row1"><span class="time">22:00</span><span class="title">旅程結束告別 ✈️</span></div>
+                    <div class="desc">
+                        <ul>
+                            <li>於 LAX 與大家道別，結束旅程</li>
+                            <li>航廈待確認</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <footer>
+        🌉 舊金山 × 那帕谷 × 拉斯維加斯 × 大峽谷 × 洛杉磯 17日行程 · 祝旅途愉快！
+    </footer>
+
+</body>
+
+</html>
