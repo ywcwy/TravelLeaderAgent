@@ -31,6 +31,8 @@ export const timeWindows = ["morning", "afternoon", "evening", "night"] as const
 export type TimeWindow = (typeof timeWindows)[number];
 
 export interface ExtractedTripItem {
+  /** Stable human-facing key used by the versioned itinerary table format. */
+  itemKey?: string;
   kind: TripItemKind;
   kinds: TripItemKind[];
   shape: ProposalShape;
@@ -45,6 +47,11 @@ export interface ExtractedTripItem {
   originTimezone?: string;
   destinationTimezone?: string;
   location?: string;
+  /** Optional human-confirmed street address for point items. */
+  address?: string;
+  locationProvenance?: "explicit" | "registry" | "context_inferred" | "unresolved";
+  locationInferenceEvidence?: string[];
+  locationResolverVersion?: string;
   canonicalId?: string;
   originCanonicalId?: string;
   destinationCanonicalId?: string;
@@ -74,6 +81,31 @@ export interface ExtractedTripItem {
   assumptions?: string[];
 }
 
+export type LocationRegistryCandidateStatus = "pending_review" | "approved" | "rejected";
+
+/**
+ * A suggestion emitted from LLM extraction. It is review evidence only and is
+ * deliberately separate from the curated, authoritative Location Registry.
+ */
+export interface LocationRegistryCandidate {
+  id: string;
+  tripId: string;
+  sourceId: string;
+  extractionDraftId: string | null;
+  sourceField: "location" | "origin" | "destination";
+  sourceLine: number | null;
+  sourceText: string;
+  suggestedCanonicalName: string;
+  suggestedCity?: string;
+  suggestedRegion?: string;
+  suggestedCountry?: string;
+  suggestedMacroRegion?: string;
+  status: LocationRegistryCandidateStatus;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+}
+
 export interface ExtractionDraftItem extends ExtractedTripItem {
   startTimeFlexibility: TimeFlexibility;
   endTimeFlexibility: TimeFlexibility;
@@ -97,6 +129,9 @@ export interface ExtractionDraftPayload {
   assumptions: string[];
   issues: ExtractionDraftIssue[];
   sourceExcerpt: string;
+  /** Present for versioned Human-confirmed Table drafts. */
+  documentFormatVersion?: string;
+  documentConfirmationStatus?: "draft" | "confirmed";
 }
 
 export interface ExtractionDraftMetadata {

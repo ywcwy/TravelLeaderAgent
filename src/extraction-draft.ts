@@ -154,7 +154,7 @@ function safeProviderToken(value: unknown): string | undefined {
 /** @deprecated Use OpenAiCompatibleLlmAdapter; retained for existing callers. */
 export const OpenAiLlmAdapter = OpenAiCompatibleLlmAdapter;
 
-export function validateExtractionDraftPayload(payload: unknown): ExtractionDraftPayload {
+export function validateExtractionDraftPayload(payload: unknown, options: { preserveHumanAddress?: boolean } = {}): ExtractionDraftPayload {
   if (!isRecord(payload)) throw new ExtractionDraftValidationError("Extraction Draft output must be a JSON object.");
   const items = payload.items;
   const missing = payload.missing;
@@ -164,12 +164,18 @@ export function validateExtractionDraftPayload(payload: unknown): ExtractionDraf
   if (!Array.isArray(items) || !Array.isArray(missing) || !Array.isArray(assumptions) || !Array.isArray(issues) || typeof sourceExcerpt !== "string") {
     throw new ExtractionDraftValidationError("Extraction Draft output must include items, missing, assumptions, issues, and sourceExcerpt.");
   }
+  const documentFormatVersion = payload.documentFormatVersion;
+  const documentConfirmationStatus = payload.documentConfirmationStatus;
+  if (documentFormatVersion !== undefined && typeof documentFormatVersion !== "string") throw new ExtractionDraftValidationError("documentFormatVersion must be a string.");
+  if (documentConfirmationStatus !== undefined && documentConfirmationStatus !== "draft" && documentConfirmationStatus !== "confirmed") throw new ExtractionDraftValidationError("documentConfirmationStatus must be draft or confirmed.");
   return {
-    items: items.map((item, index) => validateItem(item, index)),
+    items: items.map((item, index) => validateItem(item, index, options.preserveHumanAddress === true)),
     missing: missing.map((value, index) => validateMissing(value, index)),
     assumptions: assumptions.map((value, index) => validateString(value, `assumptions[${index}]`)),
     issues: issues.map((value, index) => validateIssue(value, index)),
     sourceExcerpt,
+    ...(documentFormatVersion !== undefined ? { documentFormatVersion } : {}),
+    ...(documentConfirmationStatus !== undefined ? { documentConfirmationStatus } : {}),
   };
 }
 
@@ -363,7 +369,7 @@ export function renderExtractionDraft(draft: Pick<ExtractionDraft, "id" | "statu
   const itemLines = draft.items.map((item) => {
     const time = item.startsAt ?? (item.localDate ? `${item.localDate}${item.timeWindow ? ` ${item.timeWindow}` : ""}` : item.timeWindow) ?? "未指定時間";
     const place = item.shape === "route" ? `${item.origin ?? "?"} → ${item.destination ?? "?"}` : (item.location ?? "未指定地點");
-    return `- ${item.title}｜${time}｜${place}｜時間 ${item.startTimeFlexibility}/${item.endTimeFlexibility}`;
+    return `- ${item.title}｜${time}｜${place}${item.address ? `｜地址：${item.address}` : ""}｜時間 ${item.startTimeFlexibility}/${item.endTimeFlexibility}`;
   });
   const totalPages = Math.max(1, Math.ceil(itemLines.length / pageSize));
   const lines = [`Extraction Draft ${draft.id}｜${draft.status}｜第 ${Math.min(page, totalPages)}/${totalPages} 頁`, ...(itemLines.length > 0 ? itemLines.slice((page - 1) * pageSize, page * pageSize) : ["- 尚未解析出行程項目"])] as string[];
@@ -412,7 +418,7 @@ function defaultFixture(input: LlmExtractionInput): ExtractionDraftPayload {
   };
 }
 
-function validateItem(value: unknown, index: number): ExtractionDraftItem {
+function validateItem(value: unknown, index: number, preserveHumanAddress: boolean): ExtractionDraftItem {
   if (!isRecord(value)) throw new ExtractionDraftValidationError(`items[${index}] must be an object.`);
   const startTimeFlexibility = validateEnum(value.startTimeFlexibility, timeFlexibilities, `items[${index}].startTimeFlexibility`);
   const endTimeFlexibility = validateEnum(value.endTimeFlexibility, timeFlexibilities, `items[${index}].endTimeFlexibility`);
@@ -434,7 +440,7 @@ function validateItem(value: unknown, index: number): ExtractionDraftItem {
   for (const field of ["startsAt", "endsAt", "title", "sourceExcerpt"] as const) {
     if (value[field] !== undefined && value[field] !== null && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
   }
-  for (const field of ["origin", "destination", "location", "notes", "deadlineAt"] as const) {
+      for (const field of ["origin", "destination", "location", "notes", "deadlineAt"] as const) {
     if (value[field] !== undefined && typeof value[field] !== "string") throw new ExtractionDraftValidationError(`items[${index}].${field} must be a string.`);
   }
   for (const field of ["timezone", "originTimezone", "destinationTimezone"] as const) {
@@ -448,7 +454,9 @@ function validateItem(value: unknown, index: number): ExtractionDraftItem {
     throw new ExtractionDraftValidationError(`items[${index}].assumptions must be an array of strings.`);
   }
   const timeWindow = value.timeWindow === undefined ? undefined : validateEnum(value.timeWindow, timeWindows, `items[${index}].timeWindow`);
-  return { ...base, startTimeFlexibility, endTimeFlexibility, ...(timeWindow ? { timeWindow } : {}) } as ExtractionDraftItem;
+  if (preserveHumanAddress) return { ...base, startTimeFlexibility, endTimeFlexibility, ...(timeWindow ? { timeWindow } : {}) } as ExtractionDraftItem;
+  const { address: _ignoredAddress, ...baseWithoutAddress } = base;
+  return { ...baseWithoutAddress, startTimeFlexibility, endTimeFlexibility, ...(timeWindow ? { timeWindow } : {}) } as ExtractionDraftItem;
 }
 
 function validateMissing(value: unknown, index: number) {

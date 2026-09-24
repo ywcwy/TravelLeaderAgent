@@ -1,15 +1,20 @@
 import { readFileSync, statSync } from "node:fs";
 import { TravelDatabase } from "./database.ts";
 import { OpenAiCompatibleLlmAdapter, TimeoutFallbackLlmAdapter, type LlmAdapter } from "./extraction-draft.ts";
+import { isHumanConfirmedTable, parseHumanConfirmedTable, validateHumanConfirmedTableItems } from "./human-confirmed-table.ts";
+import { resolveLocationCandidates } from "./location-normalization.ts";
 import { InvalidSourceError, TravelService } from "./travel-service.ts";
 
-const [tripId, importBatchId, markdownPath] = process.argv.slice(2);
+const cliArgs = process.argv.slice(2);
+const preview = cliArgs.includes("--preview");
+const jsonOutput = cliArgs.includes("--json");
+const [tripId, importBatchId, markdownPath] = cliArgs.filter((arg) => !arg.startsWith("--"));
 const administratorId = process.env.TRAVEL_SYSTEM_ADMINISTRATOR_ID?.trim() || "system-admin";
 const databasePath = process.env.TRAVEL_DATABASE_PATH?.trim() || "./data/travel.sqlite";
 const maxImportBytes = 1_048_576;
 
 if (!tripId?.trim() || !importBatchId?.trim() || !markdownPath?.trim()) {
-  process.stderr.write("Usage: npm run import:trip -- <trip-id> <import-batch-id> <markdown-file>\n");
+  process.stderr.write("Usage: npm run import:trip -- <trip-id> <import-batch-id> <markdown-file> [--preview] [--json]\n");
   process.exitCode = 1;
 } else {
   void run();
@@ -22,8 +27,18 @@ async function run(): Promise<void> {
     if (size > maxImportBytes) throw new InvalidSourceError(`Markdown file exceeds the ${maxImportBytes}-byte import limit.`);
     const markdown = readFileSync(markdownPath, "utf8");
     const travel = new TravelService(database, administratorId);
-    const result = isStructuredMarkdown(markdown)
-      ? travel.importMarkdownDraftBatch(tripId.trim(), markdown, importBatchId.trim(), administratorId)
+    if (preview) {
+      if (!isHumanConfirmedTable(markdown)) throw new InvalidSourceError("--preview currently supports only a Human-confirmed Table.");
+      const trip = travel.getTrip(tripId.trim());
+      if (!trip) throw new InvalidSourceError(`Trip ${tripId.trim()} was not found.`);
+      const result = previewHumanConfirmedTable(tripId.trim(), markdown);
+      process.stdout.write(jsonOutput ? `${JSON.stringify(result)}\n` : `${renderHumanPreview(result)}\n`);
+      return;
+    }
+    const result = isHumanConfirmedTable(markdown)
+      ? travel.importHumanConfirmedTableDraft(tripId.trim(), markdown, importBatchId.trim(), administratorId)
+      : isStructuredMarkdown(markdown)
+        ? travel.importMarkdownDraftBatch(tripId.trim(), markdown, importBatchId.trim(), administratorId)
       : await importNaturalMarkdown(travel, database, tripId.trim(), markdown, importBatchId.trim());
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
@@ -32,6 +47,57 @@ async function run(): Promise<void> {
   } finally {
     database.close();
   }
+}
+
+interface TablePreview {
+  tripId: string;
+  formatVersion: string | null;
+  confirmationStatus: string | null;
+  itemCount: number;
+  items: Array<Record<string, unknown>>;
+  validationIssues: Array<Record<string, unknown>>;
+  registryMatches: Array<Record<string, unknown>>;
+  intendedWrites: { confirmedTripItems: number; provisionalProposals: number; openDecisionProposals: number; decisions: number };
+}
+
+function previewHumanConfirmedTable(tripIdValue: string, markdown: string): TablePreview {
+  const parsed = parseHumanConfirmedTable(markdown);
+  const validationIssues = validateHumanConfirmedTableItems(parsed.items);
+  const registryMatches: Array<Record<string, unknown>> = [];
+  for (const item of parsed.items) {
+    for (const [field, value] of [["location", item.location], ["origin", item.origin], ["destination", item.destination]] as const) {
+      if (!value) continue;
+      const resolution = resolveLocationCandidates(value);
+      registryMatches.push({ itemKey: item.itemKey ?? null, field, value, status: resolution.status, ...(resolution.status === "resolved" ? { canonicalId: resolution.location.canonicalId, canonicalName: resolution.location.canonicalName, city: resolution.location.city, region: resolution.location.region, country: resolution.location.country } : { candidates: resolution.status === "ambiguous" ? resolution.candidates.map((candidate) => candidate.canonicalName) : [] }) });
+    }
+  }
+  return {
+    tripId: tripIdValue,
+    formatVersion: parsed.formatVersion,
+    confirmationStatus: parsed.confirmationStatus,
+    itemCount: parsed.items.length,
+    items: parsed.items.map((item) => ({ itemKey: item.itemKey ?? null, title: item.title, status: item.status, kind: item.kind, shape: item.shape, date: item.localDate ?? null, startsAt: item.startsAt ?? null, endsAt: item.endsAt ?? null, timezone: item.timezone ?? item.originTimezone ?? null, location: item.location ?? null, address: item.address ?? null, origin: item.origin ?? null, destination: item.destination ?? null })),
+    validationIssues: [...parsed.issues, ...validationIssues].map((issue) => ({ code: issue.code, message: issue.message, sourceLine: issue.sourceLine ?? null, itemKey: issue.itemKey ?? null })),
+    registryMatches,
+    intendedWrites: {
+      confirmedTripItems: parsed.items.filter((item) => item.status === "confirmed").length,
+      provisionalProposals: parsed.items.filter((item) => item.status === "provisional").length,
+      openDecisionProposals: parsed.items.filter((item) => item.status === "open_decision").length,
+      decisions: parsed.items.filter((item) => item.status === "open_decision").length,
+    },
+  };
+}
+
+function renderHumanPreview(previewResult: TablePreview): string {
+  const lines = [`Trip ${previewResult.tripId}`, `Human-confirmed Table v${previewResult.formatVersion ?? "?"}｜${previewResult.confirmationStatus ?? "unknown"}`, `Items: ${previewResult.itemCount}`, ""];
+  for (const item of previewResult.items) lines.push(`- [${item.status}] ${item.itemKey ?? "(no key)"} ${item.title}｜${item.date ?? "undated"}｜${item.location ?? item.origin ?? ""}${item.destination ? ` → ${item.destination}` : ""}${item.address ? `｜地址：${item.address}` : ""}`);
+  lines.push("", `Validation Issues: ${previewResult.validationIssues.length}`);
+  for (const issue of previewResult.validationIssues) lines.push(`- ${issue.itemKey ? `[${issue.itemKey}] ` : ""}${issue.message}`);
+  lines.push("", "Registry Matches:");
+  for (const match of previewResult.registryMatches) lines.push(`- ${match.itemKey ?? "(no key)"} ${match.field}=${match.value}｜${match.status}${match.canonicalName ? `｜${match.canonicalName}` : ""}`);
+  const writes = previewResult.intendedWrites;
+  lines.push("", `Intended Writes: ${writes.confirmedTripItems} confirmed Trip Item(s), ${writes.provisionalProposals} provisional Proposal(s), ${writes.openDecisionProposals} open-decision Proposal(s), ${writes.decisions} Decision(s).`, "Confirmation is not performed by preview; use confirm:trip-draft with an authorized owner/system administrator.");
+  return lines.join("\n");
 }
 
 async function importNaturalMarkdown(travel: TravelService, database: TravelDatabase, tripIdValue: string, markdown: string, batchId: string) {

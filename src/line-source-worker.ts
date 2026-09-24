@@ -238,7 +238,6 @@ export class LineSourceWorker {
   }
 
   private async draftReply(event: WebhookInboxEvent, command: Exclude<ReturnType<typeof parseDraftCommand>, null>): Promise<string> {
-    if (!this.extractionAdapter) return draftCommandHelp;
     try {
       if (command.type === "invalid_draft") return draftCommandHelp;
       if (command.type === "view_draft") {
@@ -247,6 +246,13 @@ export class LineSourceWorker {
         return renderExtractionDraft(draft, { page: command.page, chunks: this.travel.getImportChunks(event.tripId, draft.sourceId) });
       }
       if (command.type === "confirm_draft") {
+        const sourceType = this.sourceTypeForDraft(event.tripId, command.draftId);
+        if (sourceType === "markdown_table") {
+          if (command.itemIndexes) return "Human-confirmed Table 不支援 LINE 內選擇部分項目；請修改檔案後重新匯入。";
+          const result = this.travel.confirmHumanConfirmedTable(event.tripId, event.userId, command.draftId);
+          if (result.draft.status !== "confirmed") return `Table Draft ${command.draftId} 尚未完成確認。`;
+          return `已確認 Table Draft ${command.draftId}：建立 ${result.tripItemIds.length} 筆 confirmed Trip Item、${result.proposalIds.length} 筆 Proposal、${result.decisionIds.length} 筆 Decision。`;
+        }
         const result = this.travel.confirmExtractionDraft(event.tripId, event.userId, command.draftId, command.itemIndexes);
         if (result.draft.status !== "confirmed") return `Draft ${command.draftId} 已部分確認，建立 Proposal：${result.proposalIds.join("、")}；其餘項目仍待處理。`;
         return result.proposalIds.length > 0 ? `已確認 Draft ${command.draftId}，建立 Proposal：${result.proposalIds.join("、")}。` : `Draft ${command.draftId} 已確認。`;
@@ -256,16 +262,19 @@ export class LineSourceWorker {
         return `已取消 Draft ${command.draftId}。`;
       }
       if (command.type === "retry_draft") {
-        const draft = await this.travel.retryExtractionDraft(event.tripId, event.userId, command.draftId, this.extractionAdapter);
+        if (!this.extractionAdapter) return draftCommandHelp;
+        const draft = await this.travel.retryExtractionDraft(event.tripId, event.userId, command.draftId, this.extractionAdapter!);
         return renderExtractionDraft(draft, { chunks: this.travel.getImportChunks(event.tripId, draft.sourceId) });
       }
       if (command.type === "retry_chunk") {
-        const chunk = await this.travel.retryImportChunk(event.tripId, event.userId, command.chunkId, this.extractionAdapter);
+        if (!this.extractionAdapter) return draftCommandHelp;
+        const chunk = await this.travel.retryImportChunk(event.tripId, event.userId, command.chunkId, this.extractionAdapter!);
         const draft = this.travel.getLatestExtractionDrafts(event.tripId).find((entry) => entry.draft.sourceId === chunk.sourceId)?.draft;
         return draft
           ? renderExtractionDraft(draft, { chunks: this.travel.getImportChunks(event.tripId, chunk.sourceId) })
           : `Chunk ${chunk.id} 已重試：${chunk.status}。`;
       }
+      if (!this.extractionAdapter) return draftCommandHelp;
       const trip = this.travel.getTrip(event.tripId);
       if (!trip) throw new Error(`Trip ${event.tripId} was not found.`);
       const currentDraft = this.travel.getExtractionDraft(event.tripId, command.draftId);
@@ -283,6 +292,10 @@ export class LineSourceWorker {
     } catch (error) {
       return commandErrorReply(error);
     }
+  }
+
+  private sourceTypeForDraft(tripId: string, draftId: string): string | null {
+    return this.travel.getExtractionDraftSourceType(tripId, draftId);
   }
 
   private confirmReply(tripId: string, userId: string, proposalId: string): string {

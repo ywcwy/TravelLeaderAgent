@@ -28,6 +28,11 @@ function fixture(sourceExcerpt: string): ExtractionDraftPayload {
   };
 }
 
+test("does not retain model-provided addresses in generic Extraction Draft validation", () => {
+  const payload = validateExtractionDraftPayload({ ...fixture("model source"), items: [{ ...fixture("model source").items[0]!, address: "Invented Street 1" }] });
+  assert.equal(payload.items[0]?.address, undefined);
+});
+
 test("persists one pending Extraction Draft without creating a Proposal", async () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");
@@ -52,6 +57,36 @@ test("persists one pending Extraction Draft without creating a Proposal", async 
   assert.equal(service.reviewTrip(trip.id).pending.length, 0);
   assert.match(renderExtractionDraft(draft), new RegExp(`Extraction Draft ${draft.id}`));
   assert.match(renderExtractionDraft(draft), /請確認：確認 X-/);
+  db.close();
+});
+
+test("infers a missing breakfast city from nearby lodging context across a date boundary", async () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const group = service.createTravelGroup("system-admin", "C-context-location", "Context 群組");
+  const trip = service.createActiveTrip("system-admin", group.id, "Context 旅程", "Asia/Taipei");
+  service.addMember("system-admin", trip.id, "owner", "Owner", "owner");
+  const source = "10/1 晚上入住 Page\n10/2 早餐｜住宿\n10/2 上午逛 Page 市區";
+  const payload = fixture(source);
+  payload.items = [
+    { ...payload.items[0]!, title: "入住 Page 飯店", location: "Page", kind: "lodging", kinds: ["lodging"], endTimeFlexibility: "flexible", sourceExcerpt: source },
+    { ...payload.items[0]!, title: "早餐", location: "住宿", kind: "meal", kinds: ["meal"], endTimeFlexibility: "flexible", sourceExcerpt: source },
+    { ...payload.items[0]!, title: "逛 Page 市區", location: "Page", kind: "activity", kinds: ["activity"], endTimeFlexibility: "flexible", sourceExcerpt: source },
+  ];
+  const draft = await service.createExtractionDraft(trip.id, source, { idempotencyKey: "draft:context-location", type: "line_text", provenance: { provider: "line", messageId: "context-location", userId: "U-context" } }, new FakeLlmAdapter({ [source]: payload }));
+  const breakfast = draft.items.find((item) => item.title === "早餐");
+  assert.equal(breakfast?.location, "住宿");
+  assert.equal(breakfast?.city, "Page");
+  assert.equal(breakfast?.canonicalId, undefined);
+  assert.equal(breakfast?.locationProvenance, "context_inferred");
+  const confirmed = service.confirmExtractionDraft(trip.id, "U-context", draft.id);
+  const breakfastProposal = confirmed.proposalIds.map((id) => service.getProposal(trip.id, id)).find((proposal) => proposal?.title === "早餐");
+  assert.equal(breakfastProposal?.canonicalId, undefined);
+  assert.equal(breakfastProposal?.locationProvenance, "context_inferred");
+  const confirmedItem = service.confirmProposal(trip.id, "owner", breakfastProposal!.id);
+  assert.equal(confirmedItem.canonicalId, undefined);
+  assert.equal(confirmedItem.locationProvenance, "context_inferred");
+  assert.equal(service.queryTrip(trip.id, "owner", { location: "Page" }).confirmed.some((item) => item.id === confirmedItem.id), true);
   db.close();
 });
 

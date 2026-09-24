@@ -157,6 +157,45 @@ test("rejects Sensitive Travel Data before a LINE Draft edit reaches the adapter
   db.close();
 });
 
+test("renders and confirms a Human-confirmed Table Draft on LINE with bounded, idempotent writes", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-table-line", "Table LINE 群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "Table LINE 旅程", "Asia/Taipei");
+  travel.addMember("system-admin", trip.id, "U-owner", "Owner", "owner");
+  travel.addMember("system-admin", trip.id, "U-member", "Member", "member");
+  const table = `<!-- itinerary-table -->
+format_version: 1
+confirmation_status: draft
+
+## Itinerary Table
+| item_key | title | status | kind | shape | date | start_time | end_time | timezone | location | city | region | country | origin | origin_city | origin_region | origin_country | origin_timezone | destination | destination_city | destination_region | destination_country | destination_timezone | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| L1 | Page 午餐 | confirmed | meal | point | 2026-10-02 | 13:45 | 14:30 | America/Phoenix | Page | Page | Arizona | United States |  |  |  |  |  |  |  |  |  |  |  |
+| L2 | Page 晚餐 | open_decision | meal | point | 2026-10-02 | 19:00 | 20:00 | America/Phoenix | Page | Page | Arizona | United States |  |  |  |  |  |  |  |  |  |  | BirdHouse 或 El Tapatio |
+`;
+  const imported = travel.importHumanConfirmedTableDraft(trip.id, table, "line-table-v1", "U-owner");
+  const inbox = new WebhookInbox(db, { retryBackoffMs: 0 });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+  inbox.enqueue({ eventId: "01JLINETABLEVIEW000000000000", messageId: "table-view", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: `查看 Draft ${imported.draftId}`, receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-view" });
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", new RegExp(`Extraction Draft ${imported.draftId}`));
+  assert.match(replies[0] ?? "", /需要注意|請確認/);
+  inbox.enqueue({ eventId: "01JLINETABLEBAD0000000000000", messageId: "table-bad", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: `確認 ${imported.draftId}`, receivedAt: "2026-09-11T00:00:01.000Z", rawBody: "raw", replyToken: "reply-bad" });
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[1] ?? "", /Trip owner|Decision Owner/);
+  inbox.enqueue({ eventId: "01JLINETABLECONFIRM00000000", messageId: "table-confirm", groupId: group.lineGroupId, userId: "U-owner", tripId: trip.id, text: `確認 ${imported.draftId}`, receivedAt: "2026-09-11T00:00:02.000Z", rawBody: "raw", replyToken: "reply-confirm" });
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[2] ?? "", /已確認 Table Draft/);
+  const firstTripItems = (db.connection.prepare(`SELECT COUNT(*) AS count FROM trip_items WHERE trip_id = ?`).get(trip.id) as { count: number }).count;
+  inbox.enqueue({ eventId: "01JLINETABLEREDO00000000000", messageId: "table-redo", groupId: group.lineGroupId, userId: "U-owner", tripId: trip.id, text: `確認 ${imported.draftId}`, receivedAt: "2026-09-11T00:00:03.000Z", rawBody: "raw", replyToken: "reply-redo" });
+  assert.equal(await worker.processNext(), "processed");
+  const secondTripItems = (db.connection.prepare(`SELECT COUNT(*) AS count FROM trip_items WHERE trip_id = ?`).get(trip.id) as { count: number }).count;
+  assert.equal(secondTripItems, firstTripItems);
+  db.close();
+});
+
 test("handles a mentioned itinerary query without creating a Source", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
@@ -175,6 +214,24 @@ test("handles a mentioned itinerary query without creating a Source", async () =
   assert.match(replies[1] ?? "", /查無符合條件/);
   assert.equal(db.connection.prepare(`SELECT COUNT(*) AS count FROM sources WHERE trip_id = ?`).get(trip.id)?.count, 1);
   assert.equal(inbox.get("01JLINEQUERY0000000000000000")?.status, "completed");
+  db.close();
+});
+
+test("returns all Location Registry candidates for an ambiguous itinerary query", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-location-ambiguity", "歧義查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "歧義查詢旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-11T00:00:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINEQUERYAMBIGUITY00000", messageId: "message-query-ambiguity", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 Springfield", receivedAt: "2026-09-11T00:00:00.000Z", rawBody: "raw", replyToken: "reply-query-ambiguity" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /地點可能有多個候選/);
+  assert.match(replies[0] ?? "", /Illinois/);
+  assert.match(replies[0] ?? "", /Missouri/);
   db.close();
 });
 

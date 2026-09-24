@@ -96,12 +96,13 @@ export function renderItineraryQuery(result: ItineraryQueryResult, options: { no
 
 export const itineraryQueryHelp = "可用查詢：查詢行程、查詢 2026-10-01 下午 Page、查詢 confirmed、查詢 pending、查詢歷史 <Trip ID>、查詢繼續 Q-XXXXXXXX。";
 
-function formatItem(item: { id?: string; title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string; origin?: string; destination?: string; notes?: string }, status: "confirmed" | "pending", displayAlias?: string, proposalId?: string, tripTimezone?: string): string[] {
+function formatItem(item: { id?: string; title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string; address?: string; origin?: string; destination?: string; notes?: string }, status: "confirmed" | "pending", displayAlias?: string, proposalId?: string, tripTimezone?: string): string[] {
   const lines = [`- ${item.title}`];
   const time = formatDisplayTime(item);
   if (time) lines.push(`  時間：${time}`);
   if (item.origin && item.destination) lines.push(`  路線：${displayLocationAlias(item.origin, displayAlias)} → ${displayLocationAlias(item.destination, displayAlias)}`);
   else if (item.location) lines.push(`  地點：${displayLocationAlias(item.location, displayAlias)}`);
+  if (item.address) lines.push(`  地址：${item.address}`);
   if (item.originTimezone || item.destinationTimezone) {
     const originTimezone = item.originTimezone ?? item.timezone ?? "未知";
     const destinationTimezone = item.destinationTimezone ?? item.timezone ?? "未知";
