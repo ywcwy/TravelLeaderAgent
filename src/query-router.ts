@@ -165,6 +165,7 @@ function normalizeProviderResult(value: unknown, currentDate: string, inputText:
   if (filter && alias) filter.location = normalizeLocationQuery(alias.alias);
   const hasExplicitDate = /\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\b/u.test(inputText);
   const relativeDate = resolveRelativeDate(inputText, currentDate);
+  if (hasExplicitDate && relativeDate) return { intent: "clarification", question: "訊息同時包含相對日期與明確日期，請確認要查哪一天？" };
   if (filter && !hasExplicitDate && !relativeDate) delete filter.date;
   if (filter && relativeDate && !hasExplicitDate) filter.date = relativeDate;
   if (filter && typeof filter.date === "string") {
