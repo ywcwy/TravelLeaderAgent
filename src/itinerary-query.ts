@@ -124,7 +124,6 @@ function formatItem(item: { id?: string; title: string; localDate?: string; star
   if (item.origin && item.destination) lines.push(`  路線：${displayLocationAlias(item.origin, displayAlias)} → ${displayLocationAlias(item.destination, displayAlias)}`);
   else if (item.location) lines.push(`  地點：${displayLocationAlias(item.location, displayAlias)}`);
   if (item.notes) lines.push(`  備註：${item.notes}`);
-  if (proposalId) lines.push(`  Proposal：${proposalId}`);
   return lines;
 }
 
