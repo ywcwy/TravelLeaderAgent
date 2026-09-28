@@ -83,7 +83,7 @@ export function renderItineraryQuery(result: ItineraryQueryResult, options: { no
     for (const [index, entry] of entries.entries()) {
       if (index > 0) lines.push("");
       if (entry.status === "open_decision") {
-        lines.push(`- ${entry.decision.title}`, "  狀態：待選擇", `  Decision：${entry.decision.id}`);
+        lines.push(`- ${entry.decision.title}`, `  Decision：${entry.decision.id}`);
       } else {
         lines.push(...formatItem(entry.item, entry.status, options.displayAlias, entry.proposalId, result.trip.timezone));
       }
@@ -123,7 +123,6 @@ function formatItem(item: { id?: string; title: string; localDate?: string; star
   if (time) lines.push(`  時間：${time}${formatTimeZoneSuffix(item)}`);
   if (item.origin && item.destination) lines.push(`  路線：${displayLocationAlias(item.origin, displayAlias)} → ${displayLocationAlias(item.destination, displayAlias)}`);
   else if (item.location) lines.push(`  地點：${displayLocationAlias(item.location, displayAlias)}`);
-  lines.push(`  狀態：${status === "confirmed" ? "已確認" : "待確認"}`);
   if (item.notes) lines.push(`  備註：${item.notes}`);
   if (proposalId) lines.push(`  Proposal：${proposalId}`);
   return lines;

@@ -359,10 +359,9 @@ test("renders query results as readable item blocks with route details and Propo
   const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); });
 
   assert.equal(await worker.processNext(), "processed");
-  assert.match(replies[0] ?? "", /已確認/);
-  assert.match(replies[0] ?? "", /Las Vegas → Page[\s\S]*路線：Las Vegas → Page[\s\S]*狀態：已確認[\s\S]*備註：車程約 4 小時/);
-  assert.match(replies[0] ?? "", /待確認/);
-  assert.match(replies[0] ?? "", new RegExp(`Page 午餐[\\s\\S]*地點：Page[\\s\\S]*狀態：待確認[\\s\\S]*備註：訂位待確認[\\s\\S]*Proposal：${imported.proposalIds[1]}`));
+  assert.match(replies[0] ?? "", /Las Vegas → Page[\s\S]*路線：Las Vegas → Page[\s\S]*備註：車程約 4 小時/);
+  assert.match(replies[0] ?? "", new RegExp(`Page 午餐[\\s\\S]*地點：Page[\\s\\S]*備註：訂位待確認[\\s\\S]*Proposal：${imported.proposalIds[1]}`));
+  assert.doesNotMatch(replies[0] ?? "", /狀態：/);
   assert.doesNotMatch(replies[0] ?? "", /S-[A-Z0-9]/);
   db.close();
 });

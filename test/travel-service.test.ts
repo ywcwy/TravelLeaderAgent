@@ -248,7 +248,7 @@ test("renders confirmed, pending, and selectable entries in one timeline", () =>
   assert.match(rendered, /行程（5）/);
   assert.ok(rendered.indexOf("已確認早餐") < rendered.indexOf("待確認午餐"));
   assert.ok(rendered.indexOf("待確認午餐") < rendered.indexOf("待選擇晚餐"));
-  assert.match(rendered, /待選擇晚餐[\s\S]*狀態：待選擇/);
+  assert.doesNotMatch(rendered, /狀態：/);
   db.close();
 });
 
