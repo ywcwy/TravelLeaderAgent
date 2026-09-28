@@ -296,6 +296,13 @@ window, one location, one route endpoint, one Proposal Kind, and one visibility
 status. It describes what to read and never grants authority to change the Trip.
 _Avoid_: SQL query, search keyword
 
+**Relative Date Query**:
+An Itinerary Query that names a date relative to the current local date of the
+Trip Timezone, such as today, tomorrow, or the day after tomorrow. The relative
+phrase is resolved deterministically before it is used as a Query Filter; only
+conflicts or unresolved wording are escalated to the LLM router.
+_Avoid_: server date, user-local date, inferred itinerary date
+
 **Natural-language Itinerary Query**:
 An Itinerary Query expressed conversationally and interpreted into a Query Filter.
 It may clarify missing conditions but never invents itinerary facts or recommendations.

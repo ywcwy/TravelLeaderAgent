@@ -6,6 +6,7 @@ import { QueryFilterValidationError, type QueryFilterAdapter, validateQueryFilte
 import { QueryRouterValidationError, type QueryRouterAdapter, validateQueryRouterResult } from "./query-router.ts";
 import { formatLocationCandidates } from "./location-normalization.ts";
 import { LocationAmbiguityError } from "./location-alias.ts";
+import { localDate } from "./timezone.ts";
 
 export type LineReplySender = (replyToken: string, text: string) => void | Promise<void>;
 export interface QueryRouterWorkerOptions { now?: () => number; replyDeadlineMs?: number; maxRequestsPerMemberPerMinute?: number; }
@@ -143,12 +144,12 @@ export class LineSourceWorker {
       }
       const trip = this.travel.getTrip(event.tripId);
       if (!trip) throw new Error("Trip not found.");
-      const routed = validateQueryRouterResult(await this.queryRouter!.route({ text: event.text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
+      const routed = validateQueryRouterResult(await this.queryRouter!.route({ text: event.text, tripTimezone: trip.timezone, currentDate: queryCurrentDate(event, trip.timezone) }));
       if (routed.intent === "itinerary_query") {
         telemetry({ intent: routed.intent, selectedTool: "search_itinerary", outcome: "completed" });
         const query = routed.overview ? {} : routed.filter!;
         try {
-          return renderItineraryQuery(this.travel.queryTrip(event.tripId, event.userId, query), { notesRequested: routed.notesRequested, displayAlias: routed.overview ? undefined : routed.filter?.location });
+          return renderItineraryQuery(this.travel.queryTrip(event.tripId, event.userId, query), { notesRequested: routed.notesRequested, displayAlias: routed.overview ? undefined : routed.filter?.location, resolvedDate: query.date });
         } catch (error) {
           if (error instanceof LocationAmbiguityError) return `地點可能有多個候選，請補充州／地區或國家：\n${formatLocationCandidates(error.candidates)}`;
           throw error;
@@ -196,8 +197,8 @@ export class LineSourceWorker {
   private async renderAdapterQuery(event: WebhookInboxEvent, tripId: string, text: string): Promise<string> {
     const trip = this.travel.getTrip(tripId);
     if (!trip) throw new Error("Trip not found.");
-    const filter = validateQueryFilter(await this.queryFilterAdapter!.interpret({ text, tripTimezone: trip.timezone, currentDate: event.receivedAt.slice(0, 10) }));
-    return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, filter), { displayAlias: filter.location });
+    const filter = validateQueryFilter(await this.queryFilterAdapter!.interpret({ text, tripTimezone: trip.timezone, currentDate: queryCurrentDate(event, trip.timezone) }));
+    return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, filter), { displayAlias: filter.location, resolvedDate: filter.date });
   }
 
   private noDataReply(tripId: string): string {
@@ -225,6 +226,7 @@ export class LineSourceWorker {
         return await this.renderAdapterQuery(event, tripId, text);
       } catch (error) {
         if (error instanceof LocationAmbiguityError) return `地點可能有多個候選，請補充州／地區或國家：\n${formatLocationCandidates(error.candidates)}`;
+        if (error instanceof QueryFilterValidationError && this.queryRouter) return (await this.routerReply(event)) ?? this.noDataReply(event.tripId);
         if (error instanceof QueryFilterValidationError) return `無法解析查詢條件，請使用固定格式，例如：${itineraryQueryHelp}`;
         return `目前無法解析自然語言查詢，請使用固定格式，例如：${itineraryQueryHelp}`;
       }
@@ -358,6 +360,10 @@ export class LineSourceWorker {
     return `已收到 Proposal ${candidates}\n${contextLines.join("\n")}\n狀態：${proposals.map((proposal) => `${proposal.itemStatus} / ${proposal.status}`).join("、")}。\nDecision Owner 後續可確認此 Proposal。`;
   }
 
+}
+
+function queryCurrentDate(event: WebhookInboxEvent, tripTimezone: string): string {
+  return localDate(event.receivedAt, tripTimezone) ?? event.receivedAt.slice(0, 10);
 }
 
 function looksLikeNaturalQuery(text: string): boolean {

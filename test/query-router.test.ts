@@ -38,6 +38,16 @@ test("normalizes a model that mixes explicit date extraction with clarification"
   assert.deepEqual(await router.route({ text: "10/2 那天有什麼", tripTimezone: "America/Phoenix", currentDate: "2026-09-21" }), { intent: "itinerary_query", filter: { date: "2026-10-02" } });
 });
 
+test("normalizes a model date for a relative-date query", async () => {
+  const router = new OpenAiCompatibleQueryRouter({ apiKey: "test-key", model: "router-test", fetchImpl: async () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: JSON.stringify({ intent: "itinerary_query", filter: { date: "2026-09-29" }, overview: null, question: null, message: null }) }] }] })) });
+  assert.deepEqual(await router.route({ text: "明天的行程？", tripTimezone: "Asia/Taipei", currentDate: "2026-09-28" }), { intent: "itinerary_query", filter: { date: "2026-09-29" } });
+});
+
+test("forces clarification when explicit and relative dates conflict", async () => {
+  const router = new OpenAiCompatibleQueryRouter({ apiKey: "test-key", model: "router-test", fetchImpl: async () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: JSON.stringify({ intent: "itinerary_query", filter: { date: "2026-10-02" } }) }] }] })) });
+  assert.deepEqual(await router.route({ text: "明天 2026-10-02 的行程", tripTimezone: "Asia/Taipei", currentDate: "2026-09-28" }), { intent: "clarification", question: "訊息同時包含相對日期與明確日期，請確認要查哪一天？" });
+});
+
 test("accepts a read-only notes request", () => {
   assert.deepEqual(validateQueryRouterResult({ intent: "itinerary_query", filter: { location: "Lower Antelope Canyon" }, notesRequested: true }), { intent: "itinerary_query", filter: { location: "Lower Antelope Canyon" }, notesRequested: true });
 });

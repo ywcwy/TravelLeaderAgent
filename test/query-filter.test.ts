@@ -13,6 +13,15 @@ test("normalizes shopping wording into the existing shopping kind", () => {
   assert.deepEqual(adapter.interpret({ text: "買東西", tripTimezone: "Asia/Taipei", currentDate: "2026-09-21" }), { kind: "shopping" });
 });
 
+test("resolves relative dates without treating the phrase as a location", () => {
+  const adapter = new DeterministicQueryFilterAdapter();
+  assert.deepEqual(adapter.interpret({ text: "明天的行程？", tripTimezone: "Asia/Taipei", currentDate: "2026-09-28" }), { date: "2026-09-29" });
+  assert.deepEqual(adapter.interpret({ text: "明天下午在 Page 有什麼", tripTimezone: "Asia/Phoenix", currentDate: "2026-09-28" }), { date: "2026-09-29", timeWindow: "afternoon", city: "Page" });
+  assert.deepEqual(adapter.interpret({ text: "tomorrow itinerary", tripTimezone: "America/Los_Angeles", currentDate: "2026-12-31" }), { date: "2027-01-01" });
+  assert.deepEqual(adapter.interpret({ text: "後日行程", tripTimezone: "Asia/Taipei", currentDate: "2026-09-28" }), { date: "2026-09-30" });
+  assert.throws(() => adapter.interpret({ text: "明天 2026-10-02 的行程", tripTimezone: "Asia/Taipei", currentDate: "2026-09-28" }), /conflicting explicit and relative dates/);
+});
+
 test("parses normalized geography filters without treating them as raw locations", () => {
   const adapter = new DeterministicQueryFilterAdapter();
   assert.deepEqual(adapter.interpret({ text: "Arizona 行程", tripTimezone: "Asia/Taipei", currentDate: "2026-09-21" }), { region: "Arizona" });

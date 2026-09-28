@@ -411,6 +411,41 @@ test("answers natural Page questions without treating their question words as a 
   db.close();
 });
 
+test("answers a bare relative-date query using the Trip Timezone", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-relative-date", "相對日期查詢群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "相對日期查詢旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  travel.importMarkdown(trip.id, "- [confirmed] 台北晚餐 | 2026-09-30 | 台北", { idempotencyKey: "query:relative-date" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-28T23:30:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINERELATIVEDATE00000000", messageId: "message-relative-date", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "明天的行程？", receivedAt: "2026-09-28T23:30:00.000Z", rawBody: "raw", replyToken: "reply-relative-date" });
+  const replies: string[] = [];
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.match(replies[0] ?? "", /台北晚餐/);
+  assert.doesNotMatch(replies[0] ?? "", /明天 ？/);
+  db.close();
+});
+
+test("escalates a conflicting date query to the router for clarification", async () => {
+  const db = new TravelDatabase();
+  const travel = new TravelService(db, "system-admin");
+  const group = travel.createTravelGroup("system-admin", "C-query-relative-conflict", "相對日期衝突群組");
+  const trip = travel.createActiveTrip("system-admin", group.id, "相對日期衝突旅程", "Asia/Taipei");
+  travel.ensureGroupMember(trip.id, "U-member", "Member");
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-28T23:30:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINECONFLICTDATE00000000", messageId: "message-conflict-date", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "查詢 明天 2026-10-02 的行程", receivedAt: "2026-09-28T23:30:00.000Z", rawBody: "raw", replyToken: "reply-conflict-date" });
+  const replies: string[] = [];
+  const router: QueryRouterAdapter = { metadata: { provider: "test", model: "clarifier", promptVersion: "test" }, route: () => ({ intent: "clarification", question: "你是指明天，還是 2026-10-02？" }) };
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter(), router, { now: () => Date.parse("2026-09-28T23:30:01.000Z") });
+
+  assert.equal(await worker.processNext(), "processed");
+  assert.equal(replies[0], "你是指明天，還是 2026-10-02？");
+  db.close();
+});
+
 test("falls back to deterministic geography parsing when the provider router fails", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
@@ -480,6 +515,7 @@ test("keeps a natural query with no matching itinerary as a no-data reply", asyn
 
   assert.equal(await worker.processNext(), "processed");
   assert.match(replies[0] ?? "", /查無符合條件的行程資料/);
+  assert.match(replies[0] ?? "", /查詢日期：2026-10-03/);
   db.close();
 });
 
