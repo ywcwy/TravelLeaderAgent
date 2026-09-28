@@ -13,7 +13,12 @@ const required = {
 
 test("loads required runtime configuration without exposing secrets", () => {
   const config = loadRuntimeConfig({ ...required, TRAVEL_DATABASE_PATH: "./data/test.sqlite", PORT: "3100", WEBHOOK_BODY_LIMIT_BYTES: "128" });
-  assert.deepEqual(config, { channelSecret: "secret", channelAccessToken: "access", officialAccountUserId: "U-bot", systemAdministratorId: "system-admin", databasePath: "./data/test.sqlite", port: 3100, bodyLimitBytes: 128, requestTimeoutMs: 10_000, workerPollMs: 1_000, extractionAdapter: "fake", queryRouterAdapter: "disabled", queryRouterModel: "gpt-4o-mini", queryRouterTimeoutMs: 8_000, openAiApiKey: null, openAiModel: "gpt-4o-mini", openAiTimeoutMs: 20_000, xAiApiKey: null, xAiModel: "grok-4.6", xAiTimeoutMs: 20_000 });
+  assert.deepEqual(config, { channelSecret: "secret", channelAccessToken: "access", officialAccountUserId: "U-bot", systemAdministratorId: "system-admin", databasePath: "./data/test.sqlite", port: 3100, bodyLimitBytes: 128, requestTimeoutMs: 10_000, workerPollMs: 1_000, queryTimezone: null, extractionAdapter: "fake", queryRouterAdapter: "disabled", queryRouterModel: "gpt-4o-mini", queryRouterTimeoutMs: 8_000, openAiApiKey: null, openAiModel: "gpt-4o-mini", openAiTimeoutMs: 20_000, xAiApiKey: null, xAiModel: "grok-4.6", xAiTimeoutMs: 20_000 });
+});
+
+test("configures a separate timezone for relative-date queries", () => {
+  assert.equal(loadRuntimeConfig({ ...required, TRAVEL_QUERY_TIMEZONE: "America/Los_Angeles" }).queryTimezone, "America/Los_Angeles");
+  assert.throws(() => loadRuntimeConfig({ ...required, TRAVEL_QUERY_TIMEZONE: "not/a-timezone" }), /TRAVEL_QUERY_TIMEZONE/);
 });
 
 test("configures the query router independently from extraction", () => {

@@ -35,7 +35,7 @@ export class TravelLeaderRuntime {
     const ingress = new LineWebhookIngress(handler, this.inbox);
     const replyClient = new LineReplyApiClient(config.channelAccessToken);
     const extractionAdapter = createExtractionAdapter(config, environment);
-    this.worker = new LineSourceWorker(this.inbox, this.service, (replyToken, text) => replyClient.reply(replyToken, text), extractionAdapter, new DeterministicQueryFilterAdapter(), createQueryRouter(config));
+    this.worker = new LineSourceWorker(this.inbox, this.service, (replyToken, text) => replyClient.reply(replyToken, text), extractionAdapter, new DeterministicQueryFilterAdapter(), createQueryRouter(config), { queryTimezone: config.queryTimezone });
     this.poller = poller ?? { start: () => this.worker.start(config.workerPollMs), stop: () => this.worker.stop() };
     this.server = new LineWebhookHttpServer({ ingress, bodyLimitBytes: config.bodyLimitBytes, requestTimeoutMs: config.requestTimeoutMs, health: () => this.database.connection.prepare("SELECT 1").get() !== undefined });
   }

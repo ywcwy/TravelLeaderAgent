@@ -411,17 +411,17 @@ test("answers natural Page questions without treating their question words as a 
   db.close();
 });
 
-test("answers a bare relative-date query using the Trip Timezone", async () => {
+test("answers a bare relative-date query using the configured user timezone", async () => {
   const db = new TravelDatabase();
   const travel = new TravelService(db, "system-admin");
   const group = travel.createTravelGroup("system-admin", "C-query-relative-date", "相對日期查詢群組");
   const trip = travel.createActiveTrip("system-admin", group.id, "相對日期查詢旅程", "Asia/Taipei");
   travel.ensureGroupMember(trip.id, "U-member", "Member");
-  travel.importMarkdown(trip.id, "- [confirmed] 台北晚餐 | 2026-09-30 | 台北", { idempotencyKey: "query:relative-date" });
-  const inbox = new WebhookInbox(db, { clock: () => "2026-09-28T23:30:01.000Z", retryBackoffMs: 0 });
-  inbox.enqueue({ eventId: "01JLINERELATIVEDATE00000000", messageId: "message-relative-date", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "明天的行程？", receivedAt: "2026-09-28T23:30:00.000Z", rawBody: "raw", replyToken: "reply-relative-date" });
+  travel.importMarkdown(trip.id, "- [confirmed] 台北晚餐 | 2026-09-28 | 台北", { idempotencyKey: "query:relative-date" });
+  const inbox = new WebhookInbox(db, { clock: () => "2026-09-28T06:30:01.000Z", retryBackoffMs: 0 });
+  inbox.enqueue({ eventId: "01JLINERELATIVEDATE00000000", messageId: "message-relative-date", groupId: group.lineGroupId, userId: "U-member", tripId: trip.id, text: "明天的行程？", receivedAt: "2026-09-28T06:30:00.000Z", rawBody: "raw", replyToken: "reply-relative-date" });
   const replies: string[] = [];
-  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter());
+  const worker = new LineSourceWorker(inbox, travel, async (_token, text) => { replies.push(text); }, null, new DeterministicQueryFilterAdapter(), null, { queryTimezone: "America/Los_Angeles" });
 
   assert.equal(await worker.processNext(), "processed");
   assert.match(replies[0] ?? "", /台北晚餐/);

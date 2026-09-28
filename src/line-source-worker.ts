@@ -9,7 +9,7 @@ import { LocationAmbiguityError } from "./location-alias.ts";
 import { localDate } from "./timezone.ts";
 
 export type LineReplySender = (replyToken: string, text: string) => void | Promise<void>;
-export interface QueryRouterWorkerOptions { now?: () => number; replyDeadlineMs?: number; maxRequestsPerMemberPerMinute?: number; }
+export interface QueryRouterWorkerOptions { now?: () => number; replyDeadlineMs?: number; maxRequestsPerMemberPerMinute?: number; queryTimezone?: string | null; }
 
 function needsNaturalLanguageFallback(text: string): boolean {
   const normalized = text.trim().replace(/^@[^\s]+\s*/, "");
@@ -27,12 +27,13 @@ export class LineSourceWorker {
   private readonly routerNow: () => number;
   private readonly replyDeadlineMs: number;
   private readonly maxRequestsPerMemberPerMinute: number;
+  private readonly queryTimezone: string | null;
   private readonly routerRequests = new Map<string, number[]>();
   private readonly routerInFlight = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private active: Promise<"processed" | "failed" | "idle"> | null = null;
   private processing = false;
-  constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender, extractionAdapter: LlmAdapter | null = null, queryFilterAdapter: QueryFilterAdapter | null = null, queryRouter: QueryRouterAdapter | null = null, routerOptions: QueryRouterWorkerOptions = {}) { this.inbox = inbox; this.travel = travel; this.reply = reply; this.extractionAdapter = extractionAdapter; this.queryFilterAdapter = queryFilterAdapter; this.queryRouter = queryRouter; this.routerNow = routerOptions.now ?? Date.now; this.replyDeadlineMs = routerOptions.replyDeadlineMs ?? 20_000; this.maxRequestsPerMemberPerMinute = routerOptions.maxRequestsPerMemberPerMinute ?? 6; }
+  constructor(inbox: WebhookInbox, travel: TravelService, reply: LineReplySender, extractionAdapter: LlmAdapter | null = null, queryFilterAdapter: QueryFilterAdapter | null = null, queryRouter: QueryRouterAdapter | null = null, routerOptions: QueryRouterWorkerOptions = {}) { this.inbox = inbox; this.travel = travel; this.reply = reply; this.extractionAdapter = extractionAdapter; this.queryFilterAdapter = queryFilterAdapter; this.queryRouter = queryRouter; this.routerNow = routerOptions.now ?? Date.now; this.replyDeadlineMs = routerOptions.replyDeadlineMs ?? 20_000; this.maxRequestsPerMemberPerMinute = routerOptions.maxRequestsPerMemberPerMinute ?? 6; this.queryTimezone = routerOptions.queryTimezone ?? null; }
 
   start(intervalMs = 1_000): void {
     if (this.timer) return;
@@ -144,7 +145,7 @@ export class LineSourceWorker {
       }
       const trip = this.travel.getTrip(event.tripId);
       if (!trip) throw new Error("Trip not found.");
-      const routed = validateQueryRouterResult(await this.queryRouter!.route({ text: event.text, tripTimezone: trip.timezone, currentDate: queryCurrentDate(event, trip.timezone) }));
+      const routed = validateQueryRouterResult(await this.queryRouter!.route({ text: event.text, tripTimezone: trip.timezone, currentDate: queryCurrentDate(event, trip.timezone, this.queryTimezone) }));
       if (routed.intent === "itinerary_query") {
         telemetry({ intent: routed.intent, selectedTool: "search_itinerary", outcome: "completed" });
         const query = routed.overview ? {} : routed.filter!;
@@ -197,7 +198,7 @@ export class LineSourceWorker {
   private async renderAdapterQuery(event: WebhookInboxEvent, tripId: string, text: string): Promise<string> {
     const trip = this.travel.getTrip(tripId);
     if (!trip) throw new Error("Trip not found.");
-    const filter = validateQueryFilter(await this.queryFilterAdapter!.interpret({ text, tripTimezone: trip.timezone, currentDate: queryCurrentDate(event, trip.timezone) }));
+    const filter = validateQueryFilter(await this.queryFilterAdapter!.interpret({ text, tripTimezone: trip.timezone, currentDate: queryCurrentDate(event, trip.timezone, this.queryTimezone) }));
     return renderItineraryQuery(this.travel.queryTrip(tripId, event.userId, filter), { displayAlias: filter.location, resolvedDate: filter.date });
   }
 
@@ -362,8 +363,8 @@ export class LineSourceWorker {
 
 }
 
-function queryCurrentDate(event: WebhookInboxEvent, tripTimezone: string): string {
-  return localDate(event.receivedAt, tripTimezone) ?? event.receivedAt.slice(0, 10);
+function queryCurrentDate(event: WebhookInboxEvent, tripTimezone: string, queryTimezone: string | null): string {
+  return localDate(event.receivedAt, queryTimezone ?? tripTimezone) ?? event.receivedAt.slice(0, 10);
 }
 
 function looksLikeNaturalQuery(text: string): boolean {

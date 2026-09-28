@@ -8,6 +8,7 @@ export interface RuntimeConfig {
   bodyLimitBytes: number;
   requestTimeoutMs: number;
   workerPollMs: number;
+  queryTimezone: string | null;
   extractionAdapter: "fake" | "grok" | "openai";
   queryRouterAdapter: "disabled" | "fake" | "grok" | "openai";
   queryRouterModel: string;
@@ -38,11 +39,18 @@ export function loadRuntimeConfig(environment: Record<string, string | undefined
     channelSecret: environment.LINE_CHANNEL_SECRET!, channelAccessToken: environment.LINE_CHANNEL_ACCESS_TOKEN!, officialAccountUserId: environment.LINE_OFFICIAL_ACCOUNT_USER_ID!, systemAdministratorId: environment.TRAVEL_SYSTEM_ADMINISTRATOR_ID!,
     databasePath: environment.TRAVEL_DATABASE_PATH?.trim() || "./data/travel.sqlite",
     port: integer(environment.PORT, 3000, "PORT", 0), bodyLimitBytes: positiveInteger(environment.WEBHOOK_BODY_LIMIT_BYTES, 256 * 1024, "WEBHOOK_BODY_LIMIT_BYTES"),
-    requestTimeoutMs: positiveInteger(environment.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000, "WEBHOOK_REQUEST_TIMEOUT_MS"), workerPollMs: positiveInteger(environment.TRAVEL_WORKER_POLL_MS, 1_000, "TRAVEL_WORKER_POLL_MS"), extractionAdapter: selectedAdapter,
+    requestTimeoutMs: positiveInteger(environment.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000, "WEBHOOK_REQUEST_TIMEOUT_MS"), workerPollMs: positiveInteger(environment.TRAVEL_WORKER_POLL_MS, 1_000, "TRAVEL_WORKER_POLL_MS"), queryTimezone: optionalTimezone(environment.TRAVEL_QUERY_TIMEZONE), extractionAdapter: selectedAdapter,
     queryRouterAdapter: selectedQueryRouter, queryRouterModel: environment.TRAVEL_QUERY_ROUTER_MODEL?.trim() || "gpt-4o-mini", queryRouterTimeoutMs: positiveInteger(environment.TRAVEL_QUERY_ROUTER_TIMEOUT_MS, 8_000, "TRAVEL_QUERY_ROUTER_TIMEOUT_MS"),
     openAiApiKey, openAiModel: environment.OPENAI_MODEL?.trim() || "gpt-4o-mini", openAiTimeoutMs: positiveInteger(environment.OPENAI_TIMEOUT_MS, 20_000, "OPENAI_TIMEOUT_MS"),
     xAiApiKey, xAiModel: environment.XAI_MODEL?.trim() || "grok-4.6", xAiTimeoutMs: positiveInteger(environment.XAI_TIMEOUT_MS, 20_000, "XAI_TIMEOUT_MS"),
   };
+}
+
+function optionalTimezone(value: string | undefined): string | null {
+  const timezone = value?.trim() || null;
+  if (!timezone) return null;
+  try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(); } catch { throw new RuntimeConfigError("TRAVEL_QUERY_TIMEZONE must be a valid IANA timezone."); }
+  return timezone;
 }
 
 function queryRouterAdapter(value: string | undefined): "disabled" | "fake" | "grok" | "openai" {
