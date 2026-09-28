@@ -23,7 +23,7 @@ export class DeterministicQueryFilterAdapter implements QueryFilterAdapter {
     const status = /(?:待確認|待确认|pending)/i.test(text) ? "pending" : /(?:已確認|已确认|confirmed)/i.test(text) ? "confirmed" : undefined;
     const kind = parseKind(text);
     const dimension = parseLocationDimension(text);
-    const location = route || dimension ? undefined : text.replace(/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}|今天|今日|明天|明日|翌日|後天|後日|today|tomorrow|day after tomorrow|上午|早上|中午|下午|傍晚|晚上|深夜|夜晚|什麼時候(?:會有)?|有什麼(?:安排)?[？?]?|(?:待確認|待确认|pending|已確認|已确认|confirmed)(?:行程)?|逛街|購物|购物|買東西|买东西|shopping|行程|itinerary|安排|在|的/g, " ").replace(/[？?]/g, " ").trim().replace(/\s+/g, " ");
+    const location = route || dimension ? undefined : text.replace(/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}|今天|今日|明天|明日|翌日|後天|後日|today|tomorrow|day after tomorrow|上午|早上|中午|下午|傍晚|晚上|深夜|夜晚|什麼時候(?:會有)?|有什麼(?:安排)?[？?]?|(?:是)?幾點|what time|(?:待確認|待确认|pending|已確認|已确认|confirmed)(?:行程)?|逛街|購物|购物|買東西|买东西|shopping|flight|航班|飛機|機票|行程|itinerary|安排|在|的/g, " ").replace(/[？?]/g, " ").trim().replace(/\s+/g, " ");
     return { ...(date ? { date } : {}), ...(timeWindow ? { timeWindow } : {}), ...(status ? { status } : {}), ...(route ? { origin: route[1].trim(), destination: route[2].trim() } : {}), ...(kind ? { kind } : {}), ...(dimension ?? {}), ...(location ? { location } : {}) };
   }
 }

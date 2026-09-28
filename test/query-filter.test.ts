@@ -22,6 +22,11 @@ test("resolves relative dates without treating the phrase as a location", () => 
   assert.throws(() => adapter.interpret({ text: "明天 2026-10-02 的行程", tripTimezone: "Asia/Taipei", currentDate: "2026-09-28" }), /conflicting explicit and relative dates/);
 });
 
+test("parses flight wording as a kind filter without treating it as a location", () => {
+  const adapter = new DeterministicQueryFilterAdapter();
+  assert.deepEqual(adapter.interpret({ text: "9/28 的飛機是幾點", tripTimezone: "Asia/Taipei", currentDate: "2026-09-27" }), { date: "2026-09-28", kind: "flight" });
+});
+
 test("parses normalized geography filters without treating them as raw locations", () => {
   const adapter = new DeterministicQueryFilterAdapter();
   assert.deepEqual(adapter.interpret({ text: "Arizona 行程", tripTimezone: "Asia/Taipei", currentDate: "2026-09-21" }), { region: "Arizona" });
