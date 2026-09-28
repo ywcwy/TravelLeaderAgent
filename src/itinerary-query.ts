@@ -80,7 +80,8 @@ export function renderItineraryQuery(result: ItineraryQueryResult, options: { no
   ].sort(compareDisplayEntries);
   if (entries.length) {
     lines.push("", `行程（${entries.length}）`);
-    for (const entry of entries) {
+    for (const [index, entry] of entries.entries()) {
+      if (index > 0) lines.push("");
       if (entry.status === "open_decision") {
         lines.push(`- ${entry.decision.title}`, "  狀態：待選擇", `  Decision：${entry.decision.id}`);
       } else {
@@ -119,19 +120,23 @@ export const itineraryQueryHelp = "可用查詢：查詢行程、查詢 2026-10-
 function formatItem(item: { id?: string; title: string; localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string; originTimezone?: string; destinationTimezone?: string; location?: string; address?: string; origin?: string; destination?: string; notes?: string }, status: "confirmed" | "pending", displayAlias?: string, proposalId?: string, tripTimezone?: string): string[] {
   const lines = [`- ${item.title}`];
   const time = formatDisplayTime(item);
-  if (time) lines.push(`  時間：${time}`);
+  if (time) lines.push(`  時間：${time}${formatTimeZoneSuffix(item)}`);
   if (item.origin && item.destination) lines.push(`  路線：${displayLocationAlias(item.origin, displayAlias)} → ${displayLocationAlias(item.destination, displayAlias)}`);
   else if (item.location) lines.push(`  地點：${displayLocationAlias(item.location, displayAlias)}`);
-  if (item.address) lines.push(`  地址：${item.address}`);
-  if (item.originTimezone || item.destinationTimezone) {
-    const originTimezone = item.originTimezone ?? item.timezone ?? "未知";
-    const destinationTimezone = item.destinationTimezone ?? item.timezone ?? "未知";
-    if (originTimezone !== destinationTimezone) lines.push(`  時區：${originTimezone} → ${destinationTimezone}`);
-  } else if (item.timezone && item.timezone !== tripTimezone) lines.push(`  時區：${item.timezone}`);
   lines.push(`  狀態：${status === "confirmed" ? "已確認" : "待確認"}`);
   if (item.notes) lines.push(`  備註：${item.notes}`);
   if (proposalId) lines.push(`  Proposal：${proposalId}`);
   return lines;
+}
+
+function formatTimeZoneSuffix(item: { timezone?: string; originTimezone?: string; destinationTimezone?: string }): string {
+  if (item.originTimezone || item.destinationTimezone) {
+    const originTimezone = item.originTimezone ?? item.timezone;
+    const destinationTimezone = item.destinationTimezone ?? item.timezone;
+    if (originTimezone && destinationTimezone && originTimezone !== destinationTimezone) return `（${originTimezone} → ${destinationTimezone}）`;
+    if (originTimezone) return `（${originTimezone}）`;
+  }
+  return item.timezone ? `（${item.timezone}）` : "";
 }
 
 function formatDisplayTime(item: { localDate?: string; startsAt?: string; timeWindow?: string; timezone?: string; timezoneSource?: string }): string {

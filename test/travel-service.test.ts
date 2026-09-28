@@ -331,7 +331,7 @@ test("queries Route Proposals across local dates and endpoint timezones", () => 
   assert.equal(oct4.pending.length, 1);
   assert.equal(oct1.pending[0]?.originTimezone, "America/Los_Angeles");
   assert.equal(oct1.pending[0]?.destinationTimezone, "America/Denver");
-  assert.match(renderItineraryQuery(oct2), /America\/Los_Angeles.*America\/Denver/);
+  assert.match(renderItineraryQuery(oct2), /時間：.*（America\/Los_Angeles → America\/Denver）/);
   assert.equal(service.queryActiveTrip(tripId, "U-member", { date: "2026-10-05" }).pending.length, 0);
   db.close();
 });

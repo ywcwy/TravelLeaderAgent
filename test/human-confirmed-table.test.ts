@@ -76,7 +76,7 @@ test("persists a Human-confirmed address through Draft confirmation and review",
   assert.equal(confirmed.tripItemIds.length, 1);
   const review = travel.reviewTrip(trip.id);
   assert.equal(review.confirmed[0]?.address, "123 Main Street, Page, AZ 86040");
-  assert.match(renderItineraryQuery(travel.queryTrip(trip.id, "system-admin", { location: "Page" })), /地址：123 Main Street, Page, AZ 86040/);
+  assert.doesNotMatch(renderItineraryQuery(travel.queryTrip(trip.id, "system-admin", { location: "Page" })), /地址：123 Main Street, Page, AZ 86040/);
   database.close();
 });
 
