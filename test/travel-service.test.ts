@@ -226,6 +226,32 @@ test("renders a clear no-recorded-notes result for a notes query", () => {
   db.close();
 });
 
+test("renders confirmed, pending, and selectable entries in one timeline", () => {
+  const db = new TravelDatabase();
+  const service = new TravelService(db, "system-admin");
+  const tripId = bootstrapActiveTrip(service, "C-query-mixed-statuses");
+  service.ensureGroupMember(tripId, "U-member", "Member");
+  service.addMember("system-admin", tripId, "U-owner", "Owner", "owner");
+  service.importMarkdown(tripId, [
+    "- [provisional] 待確認午餐 | 2026-10-02T12:00:00-07:00 | Page | | timezone=America/Phoenix",
+    "- [provisional] 已確認早餐 | 2026-10-02T08:00:00-07:00 | Page | | timezone=America/Phoenix",
+    "- [open_decision] 待選擇晚餐 | 2026-10-02T19:00:00-07:00 | Page | | timezone=America/Phoenix",
+    "- [open_decision] 待選擇晚餐備選 | 2026-10-02T19:00:00-07:00 | Page | | timezone=America/Phoenix",
+  ].join("\n"), { idempotencyKey: "query:mixed-statuses" });
+  const proposals = service.reviewTrip(tripId).pending;
+  const breakfast = proposals.find((proposal) => proposal.title === "已確認早餐")!;
+  const dinner = proposals.filter((proposal) => proposal.title.startsWith("待選擇晚餐"));
+  service.confirmProposal(tripId, "U-owner", breakfast.id);
+  service.createDecision(tripId, "U-owner", "晚餐選擇", dinner.map((proposal) => proposal.id));
+  const rendered = renderItineraryQuery(service.queryActiveTrip(tripId, "U-member", { date: "2026-10-02" }));
+  assert.doesNotMatch(rendered, /已確認（|待確認（|待選擇（/);
+  assert.match(rendered, /行程（5）/);
+  assert.ok(rendered.indexOf("已確認早餐") < rendered.indexOf("待確認午餐"));
+  assert.ok(rendered.indexOf("待確認午餐") < rendered.indexOf("待選擇晚餐"));
+  assert.match(rendered, /待選擇晚餐[\s\S]*狀態：待選擇/);
+  db.close();
+});
+
 test("filters confirmed and pending itinerary entries by Time Window", () => {
   const db = new TravelDatabase();
   const service = new TravelService(db, "system-admin");

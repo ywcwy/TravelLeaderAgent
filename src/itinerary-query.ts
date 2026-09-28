@@ -73,17 +73,20 @@ export function parseItineraryMessage(text: string): ParsedItineraryMessage {
 
 export function renderItineraryQuery(result: ItineraryQueryResult, options: { notesRequested?: boolean; displayAlias?: string; resolvedDate?: string } = {}): string {
   const lines = [`${result.trip.title}｜${result.trip.status === "active" ? "Active" : "Archived"} Trip`];
-  if (result.confirmed.length) {
-    lines.push("", `已確認（${result.confirmed.length}）`);
-    for (const item of result.confirmed) lines.push(...formatItem(item, "confirmed", options.displayAlias, undefined, result.trip.timezone));
-  }
-  if (result.pending.length) {
-    lines.push("", `待確認（${result.pending.length}）`);
-    for (const item of result.pending) lines.push(...formatItem(item, "pending", options.displayAlias, item.id, result.trip.timezone));
-  }
-  if (result.openDecisions.length) {
-    lines.push("", `待選擇（${result.openDecisions.length}）`);
-    for (const decision of result.openDecisions) lines.push(`- ${decision.title}`, `  Decision：${decision.id}`);
+  const entries = [
+    ...result.confirmed.map((item) => ({ item, status: "confirmed" as const, proposalId: undefined })),
+    ...result.pending.map((item) => ({ item, status: "pending" as const, proposalId: item.id })),
+    ...result.openDecisions.map((decision) => ({ decision, status: "open_decision" as const })),
+  ].sort(compareDisplayEntries);
+  if (entries.length) {
+    lines.push("", `行程（${entries.length}）`);
+    for (const entry of entries) {
+      if (entry.status === "open_decision") {
+        lines.push(`- ${entry.decision.title}`, "  狀態：待選擇", `  Decision：${entry.decision.id}`);
+      } else {
+        lines.push(...formatItem(entry.item, entry.status, options.displayAlias, entry.proposalId, result.trip.timezone));
+      }
+    }
   }
   if (result.issues.length) lines.push("", `⚠️ Review Issues：${result.issues.length} 筆`);
   const matchedItems = [...result.confirmed, ...result.pending];
@@ -92,6 +95,23 @@ export function renderItineraryQuery(result: ItineraryQueryResult, options: { no
   if (result.nextPageToken) lines.push("", `下一頁：查詢繼續 ${result.nextPageToken}`);
   if (lines.length === 1) return `${lines[0]}\n${options.resolvedDate ? `查詢日期：${options.resolvedDate}\n` : ""}查無符合條件的行程資料。`;
   return lines.join("\n");
+}
+
+function compareDisplayEntries(left: DisplayEntry, right: DisplayEntry): number {
+  const leftKey = "item" in left ? scheduledDisplayKey(left.item) : "9999-99-99T99:99:99";
+  const rightKey = "item" in right ? scheduledDisplayKey(right.item) : "9999-99-99T99:99:99";
+  return leftKey.localeCompare(rightKey) || ("item" in left ? left.item.title : left.decision.title).localeCompare("item" in right ? right.item.title : right.decision.title);
+}
+
+type DisplayEntry =
+  | { item: ItineraryQueryResult["confirmed"][number]; status: "confirmed"; proposalId: undefined }
+  | { item: ItineraryQueryResult["pending"][number]; status: "pending"; proposalId: string }
+  | { decision: ItineraryQueryResult["openDecisions"][number]; status: "open_decision" };
+
+function scheduledDisplayKey(item: { startsAt?: string; localDate?: string }): string {
+  if (item.startsAt) return item.startsAt;
+  if (item.localDate) return `${item.localDate}T99:99:99`;
+  return "9999-99-99T99:99:99";
 }
 
 export const itineraryQueryHelp = "可用查詢：查詢行程、查詢 2026-10-01 下午 Page、查詢 confirmed、查詢 pending、查詢歷史 <Trip ID>、查詢繼續 Q-XXXXXXXX。";
