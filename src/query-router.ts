@@ -1,5 +1,5 @@
 import type { ItineraryQuery } from "./domain.ts";
-import { validateQueryFilter } from "./query-filter.ts";
+import { resolveRelativeDate, validateQueryFilter } from "./query-filter.ts";
 import { LOCATION_ALIASES, normalizeLocationQuery } from "./location-alias.ts";
 
 export const QUERY_ROUTER_PROMPT_VERSION = "query-router-v1";
@@ -127,7 +127,7 @@ const routerInstructions = [
   "Return exactly one intent. Do not write, modify, delete, confirm, reject, or call any tool.",
   "Use itinerary_query only for a request to read the itinerary. Use overview true only when the user explicitly requests the entire/current itinerary; otherwise provide a Query Filter. If the user asks what to pay attention to, set notesRequested true and return only recorded itinerary notes.",
   "A named place with arrangement wording is a query: for example, 'Page 有什麼安排' must be itinerary_query with filter.location='Page'. Do not use clarification for a named place.",
-  "Do not add a date filter unless the user explicitly states a date; currentDate is only for resolving an explicitly stated short date. For the exact text 'Page 有什麼安排', return filter {location:'Page'} with date null.",
+  "Resolve 今天／明天／後天 (and today／tomorrow／day after tomorrow) relative to currentDate in the Trip Timezone. For the exact text 'Page 有什麼安排', return filter {location:'Page'} with date null.",
   "An explicit date always makes this a query, including '10/2 那天有什麼': return itinerary_query with filter.date='2026-10-02' (using the currentDate year), not clarification.",
   "Ordinary LINE natural-language messages are read-only itinerary queries. Never use itinerary_input for conversational text; that intent is retained only for backward-compatible validation and will be safely reclassified by the worker.",
   "Use clarification only when a read query has an unresolved reference such as '那天有什麼' with no date or location. Use unsupported_action for any unrecognized destructive or modifying action.",
@@ -164,7 +164,9 @@ function normalizeProviderResult(value: unknown, currentDate: string, inputText:
   const alias = LOCATION_ALIASES.find((entry) => inputText.toLocaleLowerCase().includes(entry.alias.toLocaleLowerCase()));
   if (filter && alias) filter.location = normalizeLocationQuery(alias.alias);
   const hasExplicitDate = /\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\b/u.test(inputText);
-  if (filter && !hasExplicitDate) delete filter.date;
+  const relativeDate = resolveRelativeDate(inputText, currentDate);
+  if (filter && !hasExplicitDate && !relativeDate) delete filter.date;
+  if (filter && relativeDate && !hasExplicitDate) filter.date = relativeDate;
   if (filter && typeof filter.date === "string") {
     const shortDate = filter.date.match(/^(\d{1,2})\/(\d{1,2})$/u);
     if (shortDate) filter.date = `${currentDate.slice(0, 4)}-${shortDate[1].padStart(2, "0")}-${shortDate[2].padStart(2, "0")}`;

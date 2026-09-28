@@ -71,7 +71,7 @@ export function parseItineraryMessage(text: string): ParsedItineraryMessage {
   return { type: "query", query: { location: rest } };
 }
 
-export function renderItineraryQuery(result: ItineraryQueryResult, options: { notesRequested?: boolean; displayAlias?: string } = {}): string {
+export function renderItineraryQuery(result: ItineraryQueryResult, options: { notesRequested?: boolean; displayAlias?: string; resolvedDate?: string } = {}): string {
   const lines = [`${result.trip.title}｜${result.trip.status === "active" ? "Active" : "Archived"} Trip`];
   if (result.confirmed.length) {
     lines.push("", `已確認（${result.confirmed.length}）`);
@@ -90,7 +90,7 @@ export function renderItineraryQuery(result: ItineraryQueryResult, options: { no
   if (options.notesRequested && matchedItems.length > 0 && matchedItems.every((item) => !item.notes)) lines.push("", "注意事項：行程未記錄注意事項");
   if (result.sources.length) lines.push("", "來源原文：", ...result.sources.map((source) => `${source.id}｜${source.content}`));
   if (result.nextPageToken) lines.push("", `下一頁：查詢繼續 ${result.nextPageToken}`);
-  if (lines.length === 1) return `${lines[0]}\n查無符合條件的行程資料。`;
+  if (lines.length === 1) return `${lines[0]}\n${options.resolvedDate ? `查詢日期：${options.resolvedDate}\n` : ""}查無符合條件的行程資料。`;
   return lines.join("\n");
 }
 

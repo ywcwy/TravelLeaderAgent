@@ -11,7 +11,10 @@ export class DeterministicQueryFilterAdapter implements QueryFilterAdapter {
   interpret(input: { text: string; tripTimezone: string; currentDate: string }): unknown {
     const text = input.text.trim().replace(/^@[^\s]+\s*/, "").replace(/^(?:查詢|查询|query)\s*/i, "").trim();
     if (/[;；]/u.test(text)) throw new QueryFilterValidationError("Query Filter cannot contain command separators.");
-    const date = parseShortDate(text, input.currentDate);
+    const explicitDate = parseShortDate(text, input.currentDate);
+    const relativeDate = resolveRelativeDate(text, input.currentDate);
+    if (explicitDate && relativeDate) throw new QueryFilterValidationError("Query Filter contains conflicting explicit and relative dates.");
+    const date = explicitDate ?? relativeDate;
     const route = text.match(/(?:從|from)\s+(.+?)\s+(?:到|to)\s+(.+?)(?:的)?行程?$/i);
     const timeWindow = [
       ["morning", /上午|早上|morning/i], ["afternoon", /中午|下午|afternoon/i],
@@ -20,7 +23,7 @@ export class DeterministicQueryFilterAdapter implements QueryFilterAdapter {
     const status = /(?:待確認|待确认|pending)/i.test(text) ? "pending" : /(?:已確認|已确认|confirmed)/i.test(text) ? "confirmed" : undefined;
     const kind = parseKind(text);
     const dimension = parseLocationDimension(text);
-    const location = route || dimension ? undefined : text.replace(/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}|上午|早上|中午|下午|傍晚|晚上|深夜|夜晚|什麼時候(?:會有)?|有什麼(?:安排)?[？?]?|(?:待確認|待确认|pending|已確認|已确认|confirmed)(?:行程)?|逛街|購物|购物|買東西|买东西|shopping|行程|安排|在|的/g, " ").trim().replace(/\s+/g, " ");
+    const location = route || dimension ? undefined : text.replace(/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}|今天|今日|明天|明日|翌日|後天|後日|today|tomorrow|day after tomorrow|上午|早上|中午|下午|傍晚|晚上|深夜|夜晚|什麼時候(?:會有)?|有什麼(?:安排)?[？?]?|(?:待確認|待确认|pending|已確認|已确认|confirmed)(?:行程)?|逛街|購物|购物|買東西|买东西|shopping|行程|itinerary|安排|在|的/g, " ").replace(/[？?]/g, " ").trim().replace(/\s+/g, " ");
     return { ...(date ? { date } : {}), ...(timeWindow ? { timeWindow } : {}), ...(status ? { status } : {}), ...(route ? { origin: route[1].trim(), destination: route[2].trim() } : {}), ...(kind ? { kind } : {}), ...(dimension ?? {}), ...(location ? { location } : {}) };
   }
 }
@@ -31,6 +34,16 @@ function parseShortDate(text: string, currentDate: string): string | undefined {
   const match = text.match(/\b(\d{1,2})\/(\d{1,2})\b/);
   if (!match) return undefined;
   return `${currentDate.slice(0, 4)}-${match[1].padStart(2, "0")}-${match[2].padStart(2, "0")}`;
+}
+
+export function resolveRelativeDate(text: string, currentDate: string): string | undefined {
+  const match = text.match(/(後天|後日|day after tomorrow|今天|今日|明天|明日|翌日|today|tomorrow)/iu);
+  if (!match) return undefined;
+  const offset = /後天|後日|day after tomorrow/i.test(match[1]!) ? 2 : /明天|明日|翌日|tomorrow/i.test(match[1]!) ? 1 : 0;
+  const base = new Date(`${currentDate}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return undefined;
+  base.setUTCDate(base.getUTCDate() + offset);
+  return base.toISOString().slice(0, 10);
 }
 
 export class QueryFilterValidationError extends Error {}
